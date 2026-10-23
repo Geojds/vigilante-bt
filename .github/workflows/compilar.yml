@@ -24,10 +24,119 @@ jobs:
         with:
           gradle-version: '8.4'
 
-      - name: Armar estructura Android automaticamente
+      - name: Recortar Logo en Circulo Blanco y Armar APK
         run: |
+          pip install pillow
           mkdir -p app/src/main/java/com/vigilantebt/app
+          mkdir -p app/src/main/res/drawable
+          mkdir -p app/src/main/res/mipmap-mdpi
+          mkdir -p app/src/main/res/mipmap-hdpi
+          mkdir -p app/src/main/res/mipmap-xhdpi
+          mkdir -p app/src/main/res/mipmap-xxhdpi
+          mkdir -p app/src/main/res/mipmap-xxxhdpi
           cp MainActivity.java app/src/main/java/com/vigilantebt/app/MainActivity.java
+
+          python3 - << 'PYEOF'
+          import glob
+          from PIL import Image, ImageDraw
+
+          imagenes = [
+              f for f in (glob.glob("*.png") + glob.glob("*.jpg") + glob.glob("*.jpeg"))
+              if "ic_launcher" not in f
+          ]
+
+          icono_final = None
+
+          if imagenes:
+              img = Image.open(imagenes[0]).convert("RGBA")
+              w, h = img.size
+              pix = img.load()
+
+              # Si es la captura vertical del telefono, detecta las coordenadas exactas del circulo blanco
+              if h > w * 1.2:
+                  y_top_band = int(h * 0.13)
+                  y_bot_band = int(h * 0.62)
+                  cx_scan = w // 2
+
+                  min_y = y_top_band
+                  for y in range(y_top_band, y_bot_band):
+                      r, g, b, _ = pix[cx_scan, y]
+                      if r > 200 and g > 200 and b > 200:
+                          min_y = y
+                          break
+
+                  max_y = y_bot_band
+                  for y in range(y_bot_band, y_top_band, -1):
+                      r, g, b, _ = pix[cx_scan, y]
+                      if r > 200 and g > 200 and b > 200:
+                          max_y = y
+                          break
+
+                  cy_scan = (min_y + max_y) // 2
+                  min_x = 0
+                  for x in range(0, w):
+                      r, g, b, _ = pix[x, cy_scan]
+                      if r > 200 and g > 200 and b > 200:
+                          min_x = x
+                          break
+
+                  max_x = w - 1
+                  for x in range(w - 1, 0, -1):
+                      r, g, b, _ = pix[x, cy_scan]
+                      if r > 200 and g > 200 and b > 200:
+                          max_x = x
+                          break
+
+                  diametro = max(max_x - min_x, max_y - min_y)
+                  cx = (min_x + max_x) // 2
+                  cy = (min_y + max_y) // 2
+                  r_half = diametro // 2
+
+                  crop_box = (
+                      max(0, cx - r_half),
+                      max(0, cy - r_half),
+                      min(w, cx + r_half),
+                      min(h, cy + r_half)
+                  )
+                  recorte = img.crop(crop_box).resize((512, 512), Image.LANCZOS)
+              else:
+                  lado = min(w, h)
+                  left = (w - lado) // 2
+                  top = (h - lado) // 2
+                  recorte = img.crop((left, top, left + lado, top + lado)).resize((512, 512), Image.LANCZOS)
+
+              # Aplica recorte circular limpio con borde blanco perfecto
+              mascara = Image.new("L", (512, 512), 0)
+              draw_mask = ImageDraw.Draw(mascara)
+              draw_mask.ellipse((8, 8, 504, 504), fill=255)
+
+              icono_final = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
+              fondo_blanco = Image.new("RGBA", (512, 512), (255, 255, 255, 255))
+              icono_final.paste(fondo_blanco, (0, 0), mascara)
+              icono_final.paste(recorte, (0, 0), mascara)
+
+          else:
+              # Respaldo automatico en alta resolucion si no subio imagen
+              icono_final = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
+              d = ImageDraw.Draw(icono_final)
+              d.ellipse((8, 8, 504, 504), fill=(255, 255, 255, 255))
+              d.rounded_rectangle((190, 115, 440, 255), radius=65, fill=(245, 179, 22, 255))
+              d.rounded_rectangle((45, 145, 320, 290), radius=65, fill=(26, 136, 201, 255))
+              d.rounded_rectangle((165, 145, 320, 445), radius=70, fill=(26, 136, 201, 255))
+              d.rounded_rectangle((190, 145, 320, 255), radius=45, fill=(227, 30, 36, 255))
+
+          # Guardar en todas las resoluciones oficiales de Android
+          tamanos = {
+              "app/src/main/res/drawable/ic_launcher.png": 256,
+              "app/src/main/res/mipmap-mdpi/ic_launcher.png": 48,
+              "app/src/main/res/mipmap-hdpi/ic_launcher.png": 72,
+              "app/src/main/res/mipmap-xhdpi/ic_launcher.png": 96,
+              "app/src/main/res/mipmap-xxhdpi/ic_launcher.png": 144,
+              "app/src/main/res/mipmap-xxxhdpi/ic_launcher.png": 192,
+          }
+          for ruta, tam in tamanos.items():
+              icono_final.resize((tam, tam), Image.LANCZOS).save(ruta, "PNG")
+          PYEOF
 
           cat << 'EOF' > settings.gradle
           pluginManagement {
@@ -65,8 +174,8 @@ jobs:
                   applicationId "com.vigilantebt.app"
                   minSdk 24
                   targetSdk 34
-                  versionCode 1
-                  versionName "1.0"
+                  versionCode 3
+                  versionName "1.2"
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_1_8
@@ -83,6 +192,8 @@ jobs:
               <uses-permission android:name="android.permission.INTERNET" />
               <application
                   android:allowBackup="true"
+                  android:icon="@mipmap/ic_launcher"
+                  android:roundIcon="@mipmap/ic_launcher"
                   android:label="Vigilante BT"
                   android:supportsRtl="true"
                   android:usesCleartextTraffic="true"
