@@ -24,11 +24,13 @@ jobs:
         with:
           gradle-version: '8.4'
 
-      - name: Generar Icono Circular + PNG Transparente y Armar APK
+      - name: Generar Iconos + Tema Sin Cuadrado Blanco Inicial y Armar APK
         run: |
           pip install pillow
           mkdir -p app/src/main/java/com/vigilantebt/app
           mkdir -p app/src/main/res/drawable
+          mkdir -p app/src/main/res/values
+          mkdir -p app/src/main/res/values-v31
           mkdir -p app/src/main/res/mipmap-mdpi
           mkdir -p app/src/main/res/mipmap-hdpi
           mkdir -p app/src/main/res/mipmap-xhdpi
@@ -36,16 +38,47 @@ jobs:
           mkdir -p app/src/main/res/mipmap-xxxhdpi
           cp MainActivity.java app/src/main/java/com/vigilantebt/app/MainActivity.java
 
+          # 1. Crear imagen 100% transparente para anular el cuadrado blanco de arranque de Android 12+
+          cat << 'EOF' > app/src/main/res/drawable/empty_splash.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android"
+              android:shape="rectangle">
+              <solid android:color="@android:color/transparent" />
+              <size android:width="1dp" android:height="1dp" />
+          </shape>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/values/styles.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="AppTheme" parent="@android:style/Theme.DeviceDefault.NoActionBar">
+                  <item name="android:windowBackground">#18181B</item>
+                  <item name="android:colorBackground">#18181B</item>
+              </style>
+          </resources>
+          EOF
+
+          cat << 'EOF' > app/src/main/res/values-v31/styles.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="AppTheme" parent="@android:style/Theme.DeviceDefault.NoActionBar">
+                  <item name="android:windowBackground">#18181B</item>
+                  <item name="android:colorBackground">#18181B</item>
+                  <item name="android:windowSplashScreenBackground">#18181B</item>
+                  <item name="android:windowSplashScreenAnimatedIcon">@drawable/empty_splash</item>
+                  <item name="android:windowSplashScreenIconBackgroundColor">@android:color/transparent</item>
+              </style>
+          </resources>
+          EOF
+
           python3 - << 'PYEOF'
           import os, glob
           from PIL import Image, ImageDraw
 
-          # 1. Generar el PNG transparente para poner al lado de "Vigilante BT"
           if os.path.exists("favicon.ico"):
               ico_img = Image.open("favicon.ico").convert("RGBA").resize((256, 256), Image.LANCZOS)
               ico_img.save("app/src/main/res/drawable/ic_header_logo.png", "PNG")
 
-          # 2. Generar el icono circular blanco para el instalador del APK
           imagenes = [
               f for f in (glob.glob("*.png") + glob.glob("*.jpg") + glob.glob("*.jpeg"))
               if "ic_launcher" not in f and "ic_header_logo" not in f
@@ -176,8 +209,8 @@ jobs:
                   applicationId "com.vigilantebt.app"
                   minSdk 24
                   targetSdk 34
-                  versionCode 4
-                  versionName "1.3"
+                  versionCode 5
+                  versionName "1.4"
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_1_8
@@ -199,7 +232,7 @@ jobs:
                   android:label="Vigilante BT"
                   android:supportsRtl="true"
                   android:usesCleartextTraffic="true"
-                  android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+                  android:theme="@style/AppTheme">
                   <activity
                       android:name="com.vigilantebt.app.MainActivity"
                       android:configChanges="orientation|screenSize|keyboardHidden"
