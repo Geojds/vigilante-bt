@@ -76,7 +76,7 @@ public class MainActivity extends Activity {
     private String contrasena = "";
     private boolean usuarioOculto = false;
     private boolean consolaVisible = true;
-    private int modoVistaActual = 0; // 0 = Dividido, 1 = Solo Panel, 2 = Solo Banco
+    private int modoVistaActual = 0;
 
     private int intervaloRefresco = 3;
     private int minutosRelogin = 10;
@@ -121,6 +121,8 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        getWindow().setStatusBarColor(Color.parseColor("#18181B"));
+        getWindow().setNavigationBarColor(Color.parseColor("#18181B"));
         prefs = getSharedPreferences("VigilanteBTPrefs", Context.MODE_PRIVATE);
 
         construirInterfazCompleta();
@@ -142,10 +144,6 @@ public class MainActivity extends Activity {
         return gd;
     }
 
-    /**
-     * Genera el logo del Banco del Tesoro en PNG transparente (igual a favicon.ico)
-     * como respaldo si no existe ic_header_logo en drawable.
-     */
     private Bitmap crearLogoTransparenteBT() {
         int s = 256;
         Bitmap bmp = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888);
@@ -153,7 +151,6 @@ public class MainActivity extends Activity {
         Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
         p.setStyle(Paint.Style.FILL);
 
-        // 1. Tallo vertical azul + brazo izquierdo azul (ligeramente inclinado como el original)
         Path pathAzul = new Path();
         c.save();
         c.rotate(-4f, 105f, 110f);
@@ -161,7 +158,6 @@ public class MainActivity extends Activity {
         c.restore();
         pathAzul.addRoundRect(new RectF(82f, 64f, 176f, 236f), 45f, 45f, Path.Direction.CW);
 
-        // 2. Brazo derecho amarillo
         Path pathAmarillo = new Path();
         c.save();
         Path tempAm = new Path();
@@ -171,14 +167,12 @@ public class MainActivity extends Activity {
         tempAm.transform(mRot, pathAmarillo);
         c.restore();
 
-        // Pintar amarillo y azul
         p.setColor(Color.parseColor("#F9B218"));
         c.drawPath(pathAmarillo, p);
 
         p.setColor(Color.parseColor("#008FD5"));
         c.drawPath(pathAzul, p);
 
-        // 3. Intersección central en rojo exacto
         c.save();
         c.clipPath(pathAzul);
         p.setColor(Color.parseColor("#E41E25"));
@@ -191,6 +185,7 @@ public class MainActivity extends Activity {
     @SuppressLint("SetJavaScriptEnabled")
     private void construirInterfazCompleta() {
         FrameLayout frameRoot = new FrameLayout(this);
+        frameRoot.setBackgroundColor(Color.parseColor("#18181B"));
         frameRoot.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
@@ -356,7 +351,7 @@ public class MainActivity extends Activity {
         filaBotones.addView(btnDetener, lpBtnMando);
         panelControlContainer.addView(filaBotones);
 
-        // Cabecera Consola (Siempre visible incluso al ocultar la caja de consola)
+        // Cabecera Consola
         LinearLayout headerConsola = new LinearLayout(this);
         headerConsola.setGravity(Gravity.CENTER_VERTICAL);
         headerConsola.setPadding(0, dp(6), 0, dp(4));
@@ -410,38 +405,81 @@ public class MainActivity extends Activity {
 
         frameRoot.addView(root);
 
-        // 4. PANTALLA DE CARGA INICIAL CON EL GIF OFICIAL DEL BANCO DEL TESORO
+        // 4. PANTALLA DE ENTRADA EN GRIS OSCURO (#18181B) CON EL GIF TRANSPARENTE (SIN FONDO BLANCO)
         LinearLayout splashOverlay = new LinearLayout(this);
         splashOverlay.setOrientation(LinearLayout.VERTICAL);
         splashOverlay.setGravity(Gravity.CENTER);
-        splashOverlay.setBackgroundColor(Color.WHITE);
+        splashOverlay.setBackgroundColor(Color.parseColor("#18181B"));
         splashOverlay.setClickable(true);
         splashOverlay.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         WebView splashWebView = new WebView(this);
+        splashWebView.setBackgroundColor(Color.parseColor("#18181B"));
         splashWebView.setVerticalScrollBarEnabled(false);
         splashWebView.setHorizontalScrollBarEnabled(false);
         splashWebView.getSettings().setJavaScriptEnabled(true);
         splashWebView.getSettings().setLoadsImagesAutomatically(true);
 
+        // El script de Canvas lee el GIF oficial en vivo y borra todos los pixeles blancos (r>230, g>230, b>230)
+        // dejando únicamente el logo girando sobre el fondo gris oscuro (#18181B).
         String htmlSplash = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1.0'>" +
                 "<style>" +
-                "body{margin:0;padding:0;display:flex;flex-direction:column;justify-content:center;align-items:center;height:100vh;background:#ffffff;overflow:hidden;}" +
-                "img{width:170px;height:auto;}" +
-                ".fallback{display:none;width:150px;height:150px;}" +
-                "@keyframes draw{0%{stroke-dashoffset:400;}50%{stroke-dashoffset:0;}100%{stroke-dashoffset:-400;}}" +
-                ".p1{fill:none;stroke:#008FD5;stroke-width:5;stroke-linecap:round;stroke-dasharray:400;animation:draw 2.2s infinite ease-in-out;}" +
-                ".p2{fill:none;stroke:#F9B218;stroke-width:5;stroke-linecap:round;stroke-dasharray:400;animation:draw 2.2s infinite ease-in-out 0.25s;}" +
-                ".p3{fill:none;stroke:#E41E25;stroke-width:5;stroke-linecap:round;stroke-dasharray:400;animation:draw 2.2s infinite ease-in-out 0.5s;}" +
+                "html,body{margin:0;padding:0;width:100%;height:100%;display:flex;justify-content:center;align-items:center;background:#18181B;overflow:hidden;}" +
+                "#wrap{position:relative;width:170px;height:170px;display:flex;justify-content:center;align-items:center;}" +
+                "canvas{width:170px;height:170px;display:none;}" +
+                "svg{width:145px;height:145px;}" +
+                "@keyframes draw{0%{stroke-dashoffset:360;}50%{stroke-dashoffset:0;}100%{stroke-dashoffset:-360;}}" +
+                ".p1{fill:none;stroke:#0095DB;stroke-width:4.5;stroke-linecap:round;stroke-dasharray:360;animation:draw 2.1s infinite ease-in-out;}" +
+                ".p2{fill:none;stroke:#F9B218;stroke-width:4.5;stroke-linecap:round;stroke-dasharray:360;animation:draw 2.1s infinite ease-in-out 0.2s;}" +
+                ".p3{fill:none;stroke:#E41E25;stroke-width:4.5;stroke-linecap:round;stroke-dasharray:360;animation:draw 2.1s infinite ease-in-out 0.4s;}" +
                 "</style></head><body>" +
-                "<img id='gif' src='" + URL_GIF_LOADER + "' onerror=\"this.style.display='none';document.getElementById('fb').style.display='block';\" />" +
-                "<svg id='fb' class='fallback' viewBox='0 0 256 256'>" +
+                "<div id='wrap'>" +
+                "<img id='rawGif' crossorigin='anonymous' src='" + URL_GIF_LOADER + "' style='position:absolute;opacity:0.001;pointer-events:none;width:1px;height:1px;' />" +
+                "<canvas id='cv' width='220' height='220'></canvas>" +
+                "<svg id='fb' viewBox='0 0 256 256'>" +
                 "<rect class='p2' x='98' y='42' width='140' height='86' rx='43' transform='rotate(-6 168 85)'/>" +
                 "<path class='p1' d='M58,68 L134,64 A42,42 0 0,1 176,106 L176,192 A44,44 0 0,1 88,192 L88,150 L58,152 A42,42 0 0,1 16,110 A42,42 0 0,1 58,68 Z'/>" +
                 "<rect class='p3' x='98' y='64' width='78' height='64' rx='30'/>" +
                 "</svg>" +
-                "</body></html>";
+                "</div>" +
+                "<script>" +
+                "var img = document.getElementById('rawGif');" +
+                "var cv = document.getElementById('cv');" +
+                "var fb = document.getElementById('fb');" +
+                "var ctx = cv.getContext('2d', {willReadFrequently: true});" +
+                "var active = false;" +
+                "function renderFrame(){" +
+                "  if(!active) return;" +
+                "  try {" +
+                "    ctx.clearRect(0,0,220,220);" +
+                "    ctx.drawImage(img,0,0,220,220);" +
+                "    var frame = ctx.getImageData(0,0,220,220);" +
+                "    var d = frame.data;" +
+                "    for(var i=0; i<d.length; i+=4){" +
+                "      var r=d[i], g=d[i+1], b=d[i+2];" +
+                "      var maxC = Math.max(r,g,b), minC = Math.min(r,g,b);" +
+                "      if(r > 215 && g > 215 && b > 215 && (maxC - minC) < 28){" +
+                "        d[i+3] = 0;" +
+                "      } else if(r > 185 && g > 185 && b > 185 && (maxC - minC) < 20){" +
+                "        d[i+3] = Math.max(0, 255 - ((r+g+b)/3));" +
+                "      }" +
+                "    }" +
+                "    ctx.putImageData(frame,0,0);" +
+                "    requestAnimationFrame(renderFrame);" +
+                "  } catch(e) {" +
+                "    cv.style.display='none'; fb.style.display='block'; active=false;" +
+                "  }" +
+                "}" +
+                "img.onload = function(){" +
+                "  try {" +
+                "    ctx.drawImage(img,0,0,220,220);" +
+                "    ctx.getImageData(0,0,1,1);" +
+                "    fb.style.display='none'; cv.style.display='block'; active=true;" +
+                "    requestAnimationFrame(renderFrame);" +
+                "  } catch(e) {}" +
+                "};" +
+                "</script></body></html>";
 
         splashWebView.loadDataWithBaseURL("https://tesoroenlinea.bt.com.ve/", htmlSplash, "text/html", "UTF-8", null);
         splashOverlay.addView(splashWebView, new LinearLayout.LayoutParams(
@@ -450,7 +488,6 @@ public class MainActivity extends Activity {
         frameRoot.addView(splashOverlay);
         setContentView(frameRoot);
 
-        // Ocultar suavemente el GIF después de 2.8 segundos al abrir la app
         handler.postDelayed(() -> {
             splashOverlay.animate()
                     .alpha(0f)
@@ -460,16 +497,11 @@ public class MainActivity extends Activity {
                         splashWebView.destroy();
                     })
                     .start();
-        }, 2800);
+        }, 3000);
     }
 
-    /**
-     * Ajusta las alturas dinámicamente:
-     * Si la consola se oculta, el panel se encoge (WRAP_CONTENT) sin dejar fondo gris vacío,
-     * haciendo que la página del banco suba y se vea mucho más grande.
-     */
     private void actualizarDistribucionAlturas() {
-        if (modoVistaActual == 0) { // Modo Dividido
+        if (modoVistaActual == 0) {
             panelControlContainer.setVisibility(View.VISIBLE);
             webViewContainer.setVisibility(View.VISIBLE);
 
@@ -492,7 +524,7 @@ public class MainActivity extends Activity {
             lpWeb.setMargins(dp(8), dp(2), dp(8), dp(8));
             webViewContainer.setLayoutParams(lpWeb);
 
-        } else if (modoVistaActual == 1) { // Solo Panel
+        } else if (modoVistaActual == 1) {
             panelControlContainer.setVisibility(View.VISIBLE);
             webViewContainer.setVisibility(View.GONE);
             scrollConsola.setVisibility(consolaVisible ? View.VISIBLE : View.GONE);
@@ -504,7 +536,7 @@ public class MainActivity extends Activity {
             lpPanel.setMargins(dp(8), dp(2), dp(8), dp(8));
             panelControlContainer.setLayoutParams(lpPanel);
 
-        } else { // Solo Banco
+        } else {
             panelControlContainer.setVisibility(View.GONE);
             webViewContainer.setVisibility(View.VISIBLE);
 
