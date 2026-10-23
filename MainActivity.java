@@ -7,7 +7,12 @@ import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.Path;
+import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.media.AudioManager;
@@ -30,6 +35,7 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
@@ -49,6 +55,7 @@ import java.util.Locale;
 public class MainActivity extends Activity {
 
     private static final String URL_LOGIN = "https://tesoroenlinea.bt.com.ve/";
+    private static final String URL_GIF_LOADER = "https://tesoroenlinea.bt.com.ve/img/loader.gif?1792770684";
     private static final String MONTO_COMPRA = "300,00";
     private static final String ORIGEN_FONDOS = "Sueldos y Salarios";
     private static final String DESTINO_FONDOS = "Ahorro";
@@ -69,6 +76,7 @@ public class MainActivity extends Activity {
     private String contrasena = "";
     private boolean usuarioOculto = false;
     private boolean consolaVisible = true;
+    private int modoVistaActual = 0; // 0 = Dividido, 1 = Solo Panel, 2 = Solo Banco
 
     private int intervaloRefresco = 3;
     private int minutosRelogin = 10;
@@ -78,7 +86,6 @@ public class MainActivity extends Activity {
     private int progresoWeb = 0;
     private long tiempoInicioSesionMs = 0;
     private long tiempoEstadoMs = 0;
-    private long momentoCargaDetectadaMs = 0;
     private boolean accionEnCurso = false;
     private int vueltaActual = 0;
 
@@ -135,27 +142,81 @@ public class MainActivity extends Activity {
         return gd;
     }
 
+    /**
+     * Genera el logo del Banco del Tesoro en PNG transparente (igual a favicon.ico)
+     * como respaldo si no existe ic_header_logo en drawable.
+     */
+    private Bitmap crearLogoTransparenteBT() {
+        int s = 256;
+        Bitmap bmp = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(bmp);
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setStyle(Paint.Style.FILL);
+
+        // 1. Tallo vertical azul + brazo izquierdo azul (ligeramente inclinado como el original)
+        Path pathAzul = new Path();
+        c.save();
+        c.rotate(-4f, 105f, 110f);
+        pathAzul.addRoundRect(new RectF(16f, 64f, 176f, 148f), 42f, 42f, Path.Direction.CW);
+        c.restore();
+        pathAzul.addRoundRect(new RectF(82f, 64f, 176f, 236f), 45f, 45f, Path.Direction.CW);
+
+        // 2. Brazo derecho amarillo
+        Path pathAmarillo = new Path();
+        c.save();
+        Path tempAm = new Path();
+        tempAm.addRoundRect(new RectF(98f, 38f, 244f, 128f), 44f, 44f, Path.Direction.CW);
+        android.graphics.Matrix mRot = new android.graphics.Matrix();
+        mRot.postRotate(-6f, 170f, 83f);
+        tempAm.transform(mRot, pathAmarillo);
+        c.restore();
+
+        // Pintar amarillo y azul
+        p.setColor(Color.parseColor("#F9B218"));
+        c.drawPath(pathAmarillo, p);
+
+        p.setColor(Color.parseColor("#008FD5"));
+        c.drawPath(pathAzul, p);
+
+        // 3. Intersección central en rojo exacto
+        c.save();
+        c.clipPath(pathAzul);
+        p.setColor(Color.parseColor("#E41E25"));
+        c.drawPath(pathAmarillo, p);
+        c.restore();
+
+        return bmp;
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
     private void construirInterfazCompleta() {
+        FrameLayout frameRoot = new FrameLayout(this);
+        frameRoot.setLayoutParams(new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Color.parseColor("#0F1115"));
-        root.setLayoutParams(new LinearLayout.LayoutParams(
+        root.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        // 1. BARRA SUPERIOR (Con ícono integrado al lado del título, sin espacio vacío)
+        // 1. BARRA SUPERIOR (Con el icono PNG transparente al lado de "Vigilante BT")
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
         topBar.setPadding(dp(12), dp(10), dp(12), dp(6));
 
         ImageView iconTop = new ImageView(this);
-        int resId = getResources().getIdentifier("ic_launcher", "drawable", getPackageName());
-        if (resId != 0) {
-            iconTop.setImageResource(resId);
-            LinearLayout.LayoutParams lpIcon = new LinearLayout.LayoutParams(dp(26), dp(26));
-            lpIcon.setMargins(0, 0, dp(8), 0);
-            topBar.addView(iconTop, lpIcon);
+        int resIdHeader = getResources().getIdentifier("ic_header_logo", "drawable", getPackageName());
+        if (resIdHeader != 0) {
+            iconTop.setImageResource(resIdHeader);
+        } else {
+            iconTop.setImageBitmap(crearLogoTransparenteBT());
         }
+        iconTop.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        LinearLayout.LayoutParams lpIcon = new LinearLayout.LayoutParams(dp(26), dp(26));
+        lpIcon.setMargins(0, 0, dp(8), 0);
+        topBar.addView(iconTop, lpIcon);
 
         TextView lblTitulo = new TextView(this);
         lblTitulo.setText("Vigilante BT");
@@ -191,14 +252,11 @@ public class MainActivity extends Activity {
         viewBar.addView(btnVistaWeb, lpViewBtn);
         root.addView(viewBar);
 
-        // 2. PANEL DE CONTROL (Sin espacio en blanco arriba)
+        // 2. PANEL DE CONTROL
         panelControlContainer = new LinearLayout(this);
         panelControlContainer.setOrientation(LinearLayout.VERTICAL);
         panelControlContainer.setPadding(dp(12), dp(10), dp(12), dp(8));
         panelControlContainer.setBackground(fondoRedondeado("#18181B", 14));
-        LinearLayout.LayoutParams lpPanel = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.15f);
-        lpPanel.setMargins(dp(8), dp(2), dp(8), dp(4));
 
         // Botón Usuario + Ojo
         LinearLayout filaCuenta = new LinearLayout(this);
@@ -298,7 +356,7 @@ public class MainActivity extends Activity {
         filaBotones.addView(btnDetener, lpBtnMando);
         panelControlContainer.addView(filaBotones);
 
-        // Cabecera Consola
+        // Cabecera Consola (Siempre visible incluso al ocultar la caja de consola)
         LinearLayout headerConsola = new LinearLayout(this);
         headerConsola.setGravity(Gravity.CENTER_VERTICAL);
         headerConsola.setPadding(0, dp(6), 0, dp(4));
@@ -335,29 +393,140 @@ public class MainActivity extends Activity {
         panelControlContainer.addView(scrollConsola, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        root.addView(panelControlContainer, lpPanel);
+        root.addView(panelControlContainer);
 
         // 3. NAVEGADOR INTEGRADO (WEBVIEW)
         webViewContainer = new LinearLayout(this);
         webViewContainer.setOrientation(LinearLayout.VERTICAL);
         webViewContainer.setBackground(fondoRedondeado("#18181B", 14));
         webViewContainer.setPadding(dp(4), dp(4), dp(4), dp(4));
-        LinearLayout.LayoutParams lpWeb = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
-        lpWeb.setMargins(dp(8), dp(2), dp(8), dp(8));
 
         webView = new WebView(this);
         webViewContainer.addView(webView, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        root.addView(webViewContainer, lpWeb);
-        setContentView(root);
+        root.addView(webViewContainer);
+        actualizarDistribucionAlturas();
+
+        frameRoot.addView(root);
+
+        // 4. PANTALLA DE CARGA INICIAL CON EL GIF OFICIAL DEL BANCO DEL TESORO
+        LinearLayout splashOverlay = new LinearLayout(this);
+        splashOverlay.setOrientation(LinearLayout.VERTICAL);
+        splashOverlay.setGravity(Gravity.CENTER);
+        splashOverlay.setBackgroundColor(Color.WHITE);
+        splashOverlay.setClickable(true);
+        splashOverlay.setLayoutParams(new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        WebView splashWebView = new WebView(this);
+        splashWebView.setVerticalScrollBarEnabled(false);
+        splashWebView.setHorizontalScrollBarEnabled(false);
+        splashWebView.getSettings().setJavaScriptEnabled(true);
+        splashWebView.getSettings().setLoadsImagesAutomatically(true);
+
+        String htmlSplash = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1.0'>" +
+                "<style>" +
+                "body{margin:0;padding:0;display:flex;flex-direction:column;justify-content:center;align-items:center;height:100vh;background:#ffffff;overflow:hidden;}" +
+                "img{width:170px;height:auto;}" +
+                ".fallback{display:none;width:150px;height:150px;}" +
+                "@keyframes draw{0%{stroke-dashoffset:400;}50%{stroke-dashoffset:0;}100%{stroke-dashoffset:-400;}}" +
+                ".p1{fill:none;stroke:#008FD5;stroke-width:5;stroke-linecap:round;stroke-dasharray:400;animation:draw 2.2s infinite ease-in-out;}" +
+                ".p2{fill:none;stroke:#F9B218;stroke-width:5;stroke-linecap:round;stroke-dasharray:400;animation:draw 2.2s infinite ease-in-out 0.25s;}" +
+                ".p3{fill:none;stroke:#E41E25;stroke-width:5;stroke-linecap:round;stroke-dasharray:400;animation:draw 2.2s infinite ease-in-out 0.5s;}" +
+                "</style></head><body>" +
+                "<img id='gif' src='" + URL_GIF_LOADER + "' onerror=\"this.style.display='none';document.getElementById('fb').style.display='block';\" />" +
+                "<svg id='fb' class='fallback' viewBox='0 0 256 256'>" +
+                "<rect class='p2' x='98' y='42' width='140' height='86' rx='43' transform='rotate(-6 168 85)'/>" +
+                "<path class='p1' d='M58,68 L134,64 A42,42 0 0,1 176,106 L176,192 A44,44 0 0,1 88,192 L88,150 L58,152 A42,42 0 0,1 16,110 A42,42 0 0,1 58,68 Z'/>" +
+                "<rect class='p3' x='98' y='64' width='78' height='64' rx='30'/>" +
+                "</svg>" +
+                "</body></html>";
+
+        splashWebView.loadDataWithBaseURL("https://tesoroenlinea.bt.com.ve/", htmlSplash, "text/html", "UTF-8", null);
+        splashOverlay.addView(splashWebView, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        frameRoot.addView(splashOverlay);
+        setContentView(frameRoot);
+
+        // Ocultar suavemente el GIF después de 2.8 segundos al abrir la app
+        handler.postDelayed(() -> {
+            splashOverlay.animate()
+                    .alpha(0f)
+                    .setDuration(400)
+                    .withEndAction(() -> {
+                        splashOverlay.setVisibility(View.GONE);
+                        splashWebView.destroy();
+                    })
+                    .start();
+        }, 2800);
+    }
+
+    /**
+     * Ajusta las alturas dinámicamente:
+     * Si la consola se oculta, el panel se encoge (WRAP_CONTENT) sin dejar fondo gris vacío,
+     * haciendo que la página del banco suba y se vea mucho más grande.
+     */
+    private void actualizarDistribucionAlturas() {
+        if (modoVistaActual == 0) { // Modo Dividido
+            panelControlContainer.setVisibility(View.VISIBLE);
+            webViewContainer.setVisibility(View.VISIBLE);
+
+            if (consolaVisible) {
+                scrollConsola.setVisibility(View.VISIBLE);
+                LinearLayout.LayoutParams lpPanel = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.12f);
+                lpPanel.setMargins(dp(8), dp(2), dp(8), dp(4));
+                panelControlContainer.setLayoutParams(lpPanel);
+            } else {
+                scrollConsola.setVisibility(View.GONE);
+                LinearLayout.LayoutParams lpPanel = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0f);
+                lpPanel.setMargins(dp(8), dp(2), dp(8), dp(4));
+                panelControlContainer.setLayoutParams(lpPanel);
+            }
+
+            LinearLayout.LayoutParams lpWeb = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.0f);
+            lpWeb.setMargins(dp(8), dp(2), dp(8), dp(8));
+            webViewContainer.setLayoutParams(lpWeb);
+
+        } else if (modoVistaActual == 1) { // Solo Panel
+            panelControlContainer.setVisibility(View.VISIBLE);
+            webViewContainer.setVisibility(View.GONE);
+            scrollConsola.setVisibility(consolaVisible ? View.VISIBLE : View.GONE);
+
+            LinearLayout.LayoutParams lpPanel = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    consolaVisible ? 0 : ViewGroup.LayoutParams.WRAP_CONTENT,
+                    consolaVisible ? 1.0f : 0f);
+            lpPanel.setMargins(dp(8), dp(2), dp(8), dp(8));
+            panelControlContainer.setLayoutParams(lpPanel);
+
+        } else { // Solo Banco
+            panelControlContainer.setVisibility(View.GONE);
+            webViewContainer.setVisibility(View.VISIBLE);
+
+            LinearLayout.LayoutParams lpWeb = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.0f);
+            lpWeb.setMargins(dp(8), dp(2), dp(8), dp(8));
+            webViewContainer.setLayoutParams(lpWeb);
+        }
     }
 
     private void toggleConsola() {
         consolaVisible = !consolaVisible;
-        scrollConsola.setVisibility(consolaVisible ? View.VISIBLE : View.GONE);
         btnFoldConsola.setText(consolaVisible ? "▼" : "▲");
+        actualizarDistribucionAlturas();
+    }
+
+    private void cambiarVista(int modo) {
+        modoVistaActual = modo;
+        btnVistaDividida.setBackground(fondoRedondeado(modo == 0 ? "#0284C7" : "#27272A", 8));
+        btnVistaPanel.setBackground(fondoRedondeado(modo == 1 ? "#0284C7" : "#27272A", 8));
+        btnVistaWeb.setBackground(fondoRedondeado(modo == 2 ? "#0284C7" : "#27272A", 8));
+        actualizarDistribucionAlturas();
     }
 
     private void copiarLogPortapapeles() {
@@ -390,28 +559,6 @@ public class MainActivity extends Activity {
         b.setBackground(fondoRedondeado(bgHex, 8));
         b.setOnClickListener(v -> { if (accion != null) accion.run(); });
         return b;
-    }
-
-    private void cambiarVista(int modo) {
-        if (modo == 0) {
-            panelControlContainer.setVisibility(View.VISIBLE);
-            webViewContainer.setVisibility(View.VISIBLE);
-            btnVistaDividida.setBackground(fondoRedondeado("#0284C7", 8));
-            btnVistaPanel.setBackground(fondoRedondeado("#27272A", 8));
-            btnVistaWeb.setBackground(fondoRedondeado("#27272A", 8));
-        } else if (modo == 1) {
-            panelControlContainer.setVisibility(View.VISIBLE);
-            webViewContainer.setVisibility(View.GONE);
-            btnVistaDividida.setBackground(fondoRedondeado("#27272A", 8));
-            btnVistaPanel.setBackground(fondoRedondeado("#0284C7", 8));
-            btnVistaWeb.setBackground(fondoRedondeado("#27272A", 8));
-        } else {
-            panelControlContainer.setVisibility(View.GONE);
-            webViewContainer.setVisibility(View.VISIBLE);
-            btnVistaDividida.setBackground(fondoRedondeado("#27272A", 8));
-            btnVistaPanel.setBackground(fondoRedondeado("#27272A", 8));
-            btnVistaWeb.setBackground(fondoRedondeado("#0284C7", 8));
-        }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -689,7 +836,6 @@ public class MainActivity extends Activity {
     private void cambiarEstado(EstadoBot nuevoEstado) {
         estadoActual = nuevoEstado;
         tiempoEstadoMs = System.currentTimeMillis();
-        momentoCargaDetectadaMs = 0;
         accionEnCurso = false;
     }
 
@@ -922,7 +1068,6 @@ public class MainActivity extends Activity {
                     cambiarEstado(EstadoBot.ESPERANDO_ESTABILIZAR_PASS);
                     return;
                 }
-                // Si después de 18s sigue atrapado en Cédula sin cargar, reintenta
                 if (ahora - tiempoEstadoMs > 18000 && paginaCompleta && visDoc) {
                     log("⚠️ La página no avanzó a contraseña. Reintentando Fase 1...");
                     cambiarEstado(EstadoBot.ESPERANDO_ESTABILIZAR_LOGIN);
@@ -959,20 +1104,18 @@ public class MainActivity extends Activity {
                             "  });" +
                             "}";
                     evaluarJS(jsFase2, null);
-                    log("⏳ Esperando a que cargue la página de Inicio completa (sin límite apresurado)...");
+                    log("⏳ Esperando a que cargue la página de Inicio completa...");
                     cambiarEstado(EstadoBot.ESPERANDO_CARGA_INICIO);
                 }
                 break;
 
             case ESPERANDO_CARGA_INICIO:
-                // Espera pacientemente (incluso 2 o 3 minutos) hasta que toda la página principal esté cargada
                 if (paginaCompleta && visInicioCompleto) {
                     tiempoInicioSesionMs = ahora;
                     log("🎉 ¡Inicio cargado al 100%! Esperando 2s de estabilización...");
                     cambiarEstado(EstadoBot.ESPERANDO_ESTABILIZAR_INICIO);
                     return;
                 }
-                // Si el banco devolvió al login de Cédula por error de sesión
                 if (ahora - tiempoEstadoMs > 10000 && paginaCompleta && visDoc) {
                     log("⚠️ El banco regresó al login. Reintentando...");
                     cambiarEstado(EstadoBot.ESPERANDO_ESTABILIZAR_LOGIN);
@@ -996,7 +1139,6 @@ public class MainActivity extends Activity {
                     log("📍 Abriendo Operaciones Divisas -> Intervención...");
                     irAIntervencionJS();
                 } else if (ahora - tiempoEstadoMs > 8000 && paginaCompleta) {
-                    // Si después de 8s no abrió Intervención, vuelve a tocar el menú
                     tiempoEstadoMs = ahora;
                     irAIntervencionJS();
                 }
@@ -1043,7 +1185,6 @@ public class MainActivity extends Activity {
                 break;
 
             case LIMPIANDO_PANTALLA:
-                // Espera a que vuelva a cargar la tabla de Intervención limpia + 2s
                 if (paginaCompleta && visTablaInt && (ahora - tiempoEstadoMs >= 2500)) {
                     log("👉 Intento 2: Dando clic en Ordinaria tras limpiar vista...");
                     evaluarJS("var b = document.querySelector('a.btn-tesoro-green'); if(b) b.click();", null);
