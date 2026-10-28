@@ -72,7 +72,7 @@ public class MainActivity extends Activity {
     private LinearLayout webViewContainer;
     private WebView webView;
     private EditText edtUrlBar;
-    private Button btnNavBack, btnNavForward, btnNavReload, btnNavGo, btnNavAirplane;
+    private Button btnNavBack, btnNavForward, btnNavReload, btnZoomOut, btnZoomIn, btnNavGo, btnNavAirplane;
     private TextView badgeEstado, lblRefrescoVal, lblReloginVal, lblTimerRelogin, txtConsola;
     private ScrollView scrollConsola;
     private Button btnCuenta, btnOjoPrivacidad, btnIniciar, btnRecargar, btnDetener, btnFoldConsola;
@@ -89,6 +89,7 @@ public class MainActivity extends Activity {
 
     private int intervaloRefresco = 3;
     private int minutosRelogin = 10;
+    private int nivelZoom = 70; // Inicia en 70% para verse más alejado y completo
 
     private boolean botActivo = false;
     private boolean yaAvisoApertura = false;
@@ -133,6 +134,7 @@ public class MainActivity extends Activity {
         getWindow().setStatusBarColor(Color.parseColor("#18181B"));
         getWindow().setNavigationBarColor(Color.parseColor("#18181B"));
         prefs = getSharedPreferences("VigilanteBTPrefs", Context.MODE_PRIVATE);
+        nivelZoom = prefs.getInt("zoom_web", 70);
 
         construirInterfazCompleta();
         configurarWebView();
@@ -142,7 +144,6 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
-        // Al cerrar la app de segundo plano, limpia toda la sesión para que siempre inicie desde el Login
         try {
             if (webView != null) {
                 webView.evaluateJavascript("if(typeof Logout==='function'){Logout();}", null);
@@ -418,7 +419,7 @@ public class MainActivity extends Activity {
 
         root.addView(panelControlContainer);
 
-        // 3. NAVEGADOR INTEGRADO CON BARRA DE NAVEGACIÓN (ATRÁS, ADELANTE, REFRESCAR, BUSCADOR/URL Y RED)
+        // 3. NAVEGADOR INTEGRADO CON BARRA DE NAVEGACIÓN + BOTONES DE ZOOM (➖ y ➕)
         webViewContainer = new LinearLayout(this);
         webViewContainer.setOrientation(LinearLayout.VERTICAL);
         webViewContainer.setBackground(fondoRedondeado("#18181B", 14));
@@ -427,42 +428,49 @@ public class MainActivity extends Activity {
         LinearLayout navBar = new LinearLayout(this);
         navBar.setOrientation(LinearLayout.HORIZONTAL);
         navBar.setGravity(Gravity.CENTER_VERTICAL);
-        navBar.setPadding(dp(4), dp(4), dp(4), dp(4));
+        navBar.setPadding(dp(3), dp(3), dp(3), dp(3));
         navBar.setBackground(fondoRedondeado("#27272A", 10));
         LinearLayout.LayoutParams lpNavBar = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lpNavBar.setMargins(0, 0, 0, dp(4));
 
-        btnNavBack = crearBoton("◀", "#3F3F46", "#F4F4F5", 12, () -> {
+        LinearLayout.LayoutParams lpNavBtn = new LinearLayout.LayoutParams(dp(29), dp(30));
+        lpNavBtn.setMargins(0, 0, dp(2), 0);
+
+        btnNavBack = crearBoton("◀", "#3F3F46", "#F4F4F5", 11, () -> {
             if (webView.canGoBack()) {
                 webView.goBack();
                 log("◀ Regresando página anterior...");
             }
         });
-        LinearLayout.LayoutParams lpNavBtn = new LinearLayout.LayoutParams(dp(34), dp(32));
-        lpNavBtn.setMargins(0, 0, dp(3), 0);
         navBar.addView(btnNavBack, lpNavBtn);
 
-        btnNavForward = crearBoton("▶", "#3F3F46", "#F4F4F5", 12, () -> {
+        btnNavForward = crearBoton("▶", "#3F3F46", "#F4F4F5", 11, () -> {
             if (webView.canGoForward()) {
                 webView.goForward();
             }
         });
         navBar.addView(btnNavForward, lpNavBtn);
 
-        btnNavReload = crearBoton("🔄", "#0284C7", "#FFFFFF", 12, () -> {
-            log("🔄 Refrescando vista actual (el bot continúa en su estado actual)...");
+        btnNavReload = crearBoton("🔄", "#0284C7", "#FFFFFF", 11, () -> {
+            log("🔄 Refrescando vista actual...");
             webView.reload();
         });
         navBar.addView(btnNavReload, lpNavBtn);
+
+        btnZoomOut = crearBoton("➖", "#3F3F46", "#F4F4F5", 11, () -> cambiarZoomWeb(-10));
+        navBar.addView(btnZoomOut, lpNavBtn);
+
+        btnZoomIn = crearBoton("➕", "#3F3F46", "#F4F4F5", 11, () -> cambiarZoomWeb(10));
+        navBar.addView(btnZoomIn, lpNavBtn);
 
         edtUrlBar = new EditText(this);
         edtUrlBar.setSingleLine(true);
         edtUrlBar.setHint("https://...");
         edtUrlBar.setHintTextColor(Color.parseColor("#94A3B8"));
         edtUrlBar.setTextColor(Color.parseColor("#F4F4F5"));
-        edtUrlBar.setTextSize(11);
-        edtUrlBar.setPadding(dp(8), dp(2), dp(8), dp(2));
+        edtUrlBar.setTextSize(10);
+        edtUrlBar.setPadding(dp(6), dp(2), dp(6), dp(2));
         edtUrlBar.setBackground(fondoRedondeado("#18181B", 6));
         edtUrlBar.setImeOptions(EditorInfo.IME_ACTION_GO);
         edtUrlBar.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
@@ -474,15 +482,15 @@ public class MainActivity extends Activity {
             }
             return false;
         });
-        LinearLayout.LayoutParams lpUrl = new LinearLayout.LayoutParams(0, dp(32), 1f);
-        lpUrl.setMargins(0, 0, dp(3), 0);
+        LinearLayout.LayoutParams lpUrl = new LinearLayout.LayoutParams(0, dp(30), 1f);
+        lpUrl.setMargins(0, 0, dp(2), 0);
         navBar.addView(edtUrlBar, lpUrl);
 
-        btnNavGo = crearBoton("🔍", "#3F3F46", "#FFFFFF", 11, this::navegarDesdeBarraUrl);
+        btnNavGo = crearBoton("🔍", "#3F3F46", "#FFFFFF", 10, this::navegarDesdeBarraUrl);
         navBar.addView(btnNavGo, lpNavBtn);
 
-        btnNavAirplane = crearBoton("✈️", "#475569", "#FFFFFF", 11, () -> reconectarRedTelefono(true));
-        navBar.addView(btnNavAirplane, new LinearLayout.LayoutParams(dp(34), dp(32)));
+        btnNavAirplane = crearBoton("✈️", "#475569", "#FFFFFF", 10, () -> reconectarRedTelefono(true));
+        navBar.addView(btnNavAirplane, new LinearLayout.LayoutParams(dp(29), dp(30)));
 
         webViewContainer.addView(navBar, lpNavBar);
 
@@ -588,6 +596,25 @@ public class MainActivity extends Activity {
         }, 3000);
     }
 
+    /**
+     * Ajusta el nivel de zoom visual de la página (entre 40% y 150%) sin alterar el funcionamiento del bot.
+     */
+    private void cambiarZoomWeb(int delta) {
+        nivelZoom = Math.max(40, Math.min(150, nivelZoom + delta));
+        prefs.edit().putInt("zoom_web", nivelZoom).apply();
+        aplicarZoomWeb();
+        log("🔍 Zoom de página ajustado a: " + nivelZoom + "%");
+    }
+
+    private void aplicarZoomWeb() {
+        if (webView == null) return;
+        try {
+            webView.getSettings().setTextZoom(nivelZoom);
+            String jsZoom = "if(document.body){ document.body.style.zoom = '" + nivelZoom + "%'; }";
+            evaluarJS(jsZoom, null);
+        } catch (Exception ignored) {}
+    }
+
     private void navegarDesdeBarraUrl() {
         String raw = edtUrlBar.getText().toString().trim();
         if (raw.isEmpty()) return;
@@ -607,17 +634,12 @@ public class MainActivity extends Activity {
         webView.loadUrl(raw);
     }
 
-    /**
-     * Reinicia la conexión real del teléfono (Wi-Fi / Comandos de Red / Panel de Modo Avión)
-     * en vez de bloquear el navegador con setBlockNetworkLoads.
-     */
     @SuppressWarnings("deprecation")
     private void reconectarRedTelefono(boolean abrirPanelSiBloqueado) {
         log("✈️ Reiniciando red del teléfono (sin bloquear el navegador)...");
         new Thread(() -> {
             boolean cambioAutomatico = false;
             try {
-                // 1. Intentar comando de Modo Avión del sistema (funciona si tiene permisos root/shell)
                 Process p1 = Runtime.getRuntime().exec(new String[]{"sh", "-c", "cmd connectivity airplane-mode enable || settings put global airplane_mode_on 1"});
                 p1.waitFor();
                 if (p1.exitValue() == 0) {
@@ -628,7 +650,6 @@ public class MainActivity extends Activity {
             } catch (Exception ignored) {}
 
             try {
-                // 2. Intentar apagar y encender el Wi-Fi del teléfono directamente
                 WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
                 if (wm != null && wm.isWifiEnabled()) {
                     boolean okOff = wm.setWifiEnabled(false);
@@ -749,7 +770,7 @@ public class MainActivity extends Activity {
         b.setTextColor(Color.parseColor(fgHex));
         b.setTextSize(sizeSp);
         b.setTypeface(null, Typeface.BOLD);
-        b.setPadding(dp(4), 0, dp(4), 0);
+        b.setPadding(dp(2), 0, dp(2), 0);
         b.setBackground(fondoRedondeado(bgHex, 8));
         b.setOnClickListener(v -> { if (accion != null) accion.run(); });
         return b;
@@ -767,9 +788,9 @@ public class MainActivity extends Activity {
         ws.setBuiltInZoomControls(true);
         ws.setDisplayZoomControls(false);
         ws.setBlockNetworkLoads(false);
+        ws.setTextZoom(nivelZoom);
         ws.setUserAgentString("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
 
-        // Limpiar cualquier sesión vieja al abrir la app para arrancar siempre desde la página de Login
         CookieManager cm = CookieManager.getInstance();
         cm.setAcceptCookie(true);
         cm.setAcceptThirdPartyCookies(webView, true);
@@ -783,6 +804,9 @@ public class MainActivity extends Activity {
             @Override
             public void onProgressChanged(WebView view, int newProgress) {
                 progresoWeb = newProgress;
+                if (newProgress >= 60) {
+                    aplicarZoomWeb();
+                }
             }
         });
         webView.setWebViewClient(new WebViewClient() {
@@ -800,6 +824,7 @@ public class MainActivity extends Activity {
                 if (!edtUrlBar.hasFocus() && url != null) {
                     edtUrlBar.setText(url);
                 }
+                aplicarZoomWeb();
             }
 
             @Override
@@ -808,12 +833,13 @@ public class MainActivity extends Activity {
                 if (!edtUrlBar.hasFocus() && url != null) {
                     edtUrlBar.setText(url);
                 }
+                aplicarZoomWeb();
             }
         });
 
         edtUrlBar.setText(URL_LOGIN);
         webView.loadUrl(URL_LOGIN);
-        log("[SISTEMA] Iniciando limpio desde la página de sesión.");
+        log("[SISTEMA] Iniciando limpio desde la página de sesión (Zoom: " + nivelZoom + "%).");
     }
 
     private void togglePrivacidadUsuario() {
@@ -1119,11 +1145,14 @@ public class MainActivity extends Activity {
         handler.postDelayed(new Runnable() {
             @Override
             public void run() {
-                if (webView != null && edtUrlBar != null && !edtUrlBar.hasFocus()) {
-                    String currentUrl = webView.getUrl();
-                    if (currentUrl != null && !currentUrl.equals(edtUrlBar.getText().toString())) {
-                        edtUrlBar.setText(currentUrl);
+                if (webView != null) {
+                    if (edtUrlBar != null && !edtUrlBar.hasFocus()) {
+                        String currentUrl = webView.getUrl();
+                        if (currentUrl != null && !currentUrl.equals(edtUrlBar.getText().toString())) {
+                            edtUrlBar.setText(currentUrl);
+                        }
                     }
+                    aplicarZoomWeb();
                 }
                 if (botActivo) {
                     actualizarBarraProgresoRelogin();
@@ -1158,6 +1187,7 @@ public class MainActivity extends Activity {
         long ahora = System.currentTimeMillis();
 
         String jsInspector =
+                "if(document.body){ document.body.style.zoom = '" + nivelZoom + "%'; }" +
                 "var ready = (document.readyState === 'complete');" +
                 "var bodyTxt = document.body ? document.body.innerText.toLowerCase() : '';" +
                 "var cargandoTxt = (bodyTxt.indexOf('cargando, por favor espera') !== -1 || bodyTxt.indexOf('procesando') !== -1);" +
@@ -1465,8 +1495,6 @@ public class MainActivity extends Activity {
                 if (!accionEnCurso) {
                     accionEnCurso = true;
                     log("📝 Rellenando formulario y fijando monto exacto de 300,00$...");
-                    // Se evita el error de '3,00' escribiendo la progresión '3' -> '30' -> '300' -> '300,00'
-                    // y verificando el valor final antes de enviar la orden
                     String jsCompra =
                             "var d = document.querySelector('#desde'); if(d && d.options.length > 1) { d.selectedIndex = 1; d.dispatchEvent(new Event('change', {bubbles:true})); }" +
                             "var h = document.querySelector('#hasta'); if(h && h.options.length > 1) { h.selectedIndex = 1; h.dispatchEvent(new Event('change', {bubbles:true})); }" +
@@ -1552,7 +1580,7 @@ public class MainActivity extends Activity {
                             "}, 700);";
                     evaluarJS(jsLogout, null);
                 } else if (ahora - tiempoEstadoMs > 6000 && intentoLogout < 2) {
-                    accionEnCurso = false; // Segundo intento de clic en el botón rojo de salir
+                    accionEnCurso = false;
                 } else if (ahora - tiempoEstadoMs > 7000 && intentoLogout >= 2) {
                     log("⚠️ El banco no cerró por botón. Reiniciando red del teléfono y limpiando sesión...");
                     cambiarEstado(EstadoBot.REINICIANDO_RED);
