@@ -6,6 +6,7 @@ import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
@@ -17,15 +18,21 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.media.AudioManager;
 import android.media.ToneGenerator;
+import android.net.wifi.WifiManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.Settings;
 import android.text.InputType;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
 import android.webkit.CookieManager;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
@@ -64,6 +71,8 @@ public class MainActivity extends Activity {
     private LinearLayout panelControlContainer;
     private LinearLayout webViewContainer;
     private WebView webView;
+    private EditText edtUrlBar;
+    private Button btnNavBack, btnNavForward, btnNavReload, btnNavGo, btnNavAirplane;
     private TextView badgeEstado, lblRefrescoVal, lblReloginVal, lblTimerRelogin, txtConsola;
     private ScrollView scrollConsola;
     private Button btnCuenta, btnOjoPrivacidad, btnIniciar, btnRecargar, btnDetener, btnFoldConsola;
@@ -131,6 +140,25 @@ public class MainActivity extends Activity {
         iniciarCicloReloj();
     }
 
+    @Override
+    protected void onDestroy() {
+        // Al cerrar la app de segundo plano, limpia toda la sesión para que siempre inicie desde el Login
+        try {
+            if (webView != null) {
+                webView.evaluateJavascript("if(typeof Logout==='function'){Logout();}", null);
+                webView.stopLoading();
+                webView.clearCache(true);
+                webView.clearHistory();
+                webView.clearFormData();
+            }
+            CookieManager cm = CookieManager.getInstance();
+            cm.removeAllCookies(null);
+            cm.flush();
+            WebStorage.getInstance().deleteAllData();
+        } catch (Exception ignored) {}
+        super.onDestroy();
+    }
+
     private int dp(int val) {
         return (int) TypedValue.applyDimension(
                 TypedValue.COMPLEX_UNIT_DIP, val, getResources().getDisplayMetrics()
@@ -195,7 +223,7 @@ public class MainActivity extends Activity {
         root.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        // 1. BARRA SUPERIOR (Con el icono PNG transparente al lado de "Vigilante BT")
+        // 1. BARRA SUPERIOR
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
@@ -390,11 +418,73 @@ public class MainActivity extends Activity {
 
         root.addView(panelControlContainer);
 
-        // 3. NAVEGADOR INTEGRADO (WEBVIEW)
+        // 3. NAVEGADOR INTEGRADO CON BARRA DE NAVEGACIÓN (ATRÁS, ADELANTE, REFRESCAR, BUSCADOR/URL Y RED)
         webViewContainer = new LinearLayout(this);
         webViewContainer.setOrientation(LinearLayout.VERTICAL);
         webViewContainer.setBackground(fondoRedondeado("#18181B", 14));
         webViewContainer.setPadding(dp(4), dp(4), dp(4), dp(4));
+
+        LinearLayout navBar = new LinearLayout(this);
+        navBar.setOrientation(LinearLayout.HORIZONTAL);
+        navBar.setGravity(Gravity.CENTER_VERTICAL);
+        navBar.setPadding(dp(4), dp(4), dp(4), dp(4));
+        navBar.setBackground(fondoRedondeado("#27272A", 10));
+        LinearLayout.LayoutParams lpNavBar = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lpNavBar.setMargins(0, 0, 0, dp(4));
+
+        btnNavBack = crearBoton("◀", "#3F3F46", "#F4F4F5", 12, () -> {
+            if (webView.canGoBack()) {
+                webView.goBack();
+                log("◀ Regresando página anterior...");
+            }
+        });
+        LinearLayout.LayoutParams lpNavBtn = new LinearLayout.LayoutParams(dp(34), dp(32));
+        lpNavBtn.setMargins(0, 0, dp(3), 0);
+        navBar.addView(btnNavBack, lpNavBtn);
+
+        btnNavForward = crearBoton("▶", "#3F3F46", "#F4F4F5", 12, () -> {
+            if (webView.canGoForward()) {
+                webView.goForward();
+            }
+        });
+        navBar.addView(btnNavForward, lpNavBtn);
+
+        btnNavReload = crearBoton("🔄", "#0284C7", "#FFFFFF", 12, () -> {
+            log("🔄 Refrescando vista actual (el bot continúa en su estado actual)...");
+            webView.reload();
+        });
+        navBar.addView(btnNavReload, lpNavBtn);
+
+        edtUrlBar = new EditText(this);
+        edtUrlBar.setSingleLine(true);
+        edtUrlBar.setHint("https://...");
+        edtUrlBar.setHintTextColor(Color.parseColor("#94A3B8"));
+        edtUrlBar.setTextColor(Color.parseColor("#F4F4F5"));
+        edtUrlBar.setTextSize(11);
+        edtUrlBar.setPadding(dp(8), dp(2), dp(8), dp(2));
+        edtUrlBar.setBackground(fondoRedondeado("#18181B", 6));
+        edtUrlBar.setImeOptions(EditorInfo.IME_ACTION_GO);
+        edtUrlBar.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        edtUrlBar.setOnEditorActionListener((TextView v, int actionId, KeyEvent event) -> {
+            if (actionId == EditorInfo.IME_ACTION_GO || actionId == EditorInfo.IME_ACTION_DONE ||
+                    (event != null && event.getKeyCode() == KeyEvent.KEYCODE_ENTER)) {
+                navegarDesdeBarraUrl();
+                return true;
+            }
+            return false;
+        });
+        LinearLayout.LayoutParams lpUrl = new LinearLayout.LayoutParams(0, dp(32), 1f);
+        lpUrl.setMargins(0, 0, dp(3), 0);
+        navBar.addView(edtUrlBar, lpUrl);
+
+        btnNavGo = crearBoton("🔍", "#3F3F46", "#FFFFFF", 11, this::navegarDesdeBarraUrl);
+        navBar.addView(btnNavGo, lpNavBtn);
+
+        btnNavAirplane = crearBoton("✈️", "#475569", "#FFFFFF", 11, () -> reconectarRedTelefono(true));
+        navBar.addView(btnNavAirplane, new LinearLayout.LayoutParams(dp(34), dp(32)));
+
+        webViewContainer.addView(navBar, lpNavBar);
 
         webView = new WebView(this);
         webViewContainer.addView(webView, new LinearLayout.LayoutParams(
@@ -405,7 +495,7 @@ public class MainActivity extends Activity {
 
         frameRoot.addView(root);
 
-        // 4. PANTALLA DE ENTRADA EN GRIS OSCURO (#18181B) CON EL GIF TRANSPARENTE (SIN FONDO BLANCO)
+        // 4. PANTALLA DE ENTRADA EN GRIS OSCURO (#18181B) CON EL GIF TRANSPARENTE
         LinearLayout splashOverlay = new LinearLayout(this);
         splashOverlay.setOrientation(LinearLayout.VERTICAL);
         splashOverlay.setGravity(Gravity.CENTER);
@@ -421,8 +511,6 @@ public class MainActivity extends Activity {
         splashWebView.getSettings().setJavaScriptEnabled(true);
         splashWebView.getSettings().setLoadsImagesAutomatically(true);
 
-        // El script de Canvas lee el GIF oficial en vivo y borra todos los pixeles blancos (r>230, g>230, b>230)
-        // dejando únicamente el logo girando sobre el fondo gris oscuro (#18181B).
         String htmlSplash = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1.0'>" +
                 "<style>" +
                 "html,body{margin:0;padding:0;width:100%;height:100%;display:flex;justify-content:center;align-items:center;background:#18181B;overflow:hidden;}" +
@@ -498,6 +586,80 @@ public class MainActivity extends Activity {
                     })
                     .start();
         }, 3000);
+    }
+
+    private void navegarDesdeBarraUrl() {
+        String raw = edtUrlBar.getText().toString().trim();
+        if (raw.isEmpty()) return;
+        if (!raw.startsWith("http://") && !raw.startsWith("https://")) {
+            if (raw.contains(".") && !raw.contains(" ")) {
+                raw = "https://" + raw;
+            } else {
+                raw = "https://www.google.com/search?q=" + raw.replace(" ", "+");
+            }
+        }
+        try {
+            InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (imm != null) imm.hideSoftInputFromWindow(edtUrlBar.getWindowToken(), 0);
+        } catch (Exception ignored) {}
+        edtUrlBar.clearFocus();
+        log("🌐 Navegando a: " + raw);
+        webView.loadUrl(raw);
+    }
+
+    /**
+     * Reinicia la conexión real del teléfono (Wi-Fi / Comandos de Red / Panel de Modo Avión)
+     * en vez de bloquear el navegador con setBlockNetworkLoads.
+     */
+    @SuppressWarnings("deprecation")
+    private void reconectarRedTelefono(boolean abrirPanelSiBloqueado) {
+        log("✈️ Reiniciando red del teléfono (sin bloquear el navegador)...");
+        new Thread(() -> {
+            boolean cambioAutomatico = false;
+            try {
+                // 1. Intentar comando de Modo Avión del sistema (funciona si tiene permisos root/shell)
+                Process p1 = Runtime.getRuntime().exec(new String[]{"sh", "-c", "cmd connectivity airplane-mode enable || settings put global airplane_mode_on 1"});
+                p1.waitFor();
+                if (p1.exitValue() == 0) {
+                    cambioAutomatico = true;
+                    Thread.sleep(3500);
+                    Runtime.getRuntime().exec(new String[]{"sh", "-c", "cmd connectivity airplane-mode disable || settings put global airplane_mode_on 0"}).waitFor();
+                }
+            } catch (Exception ignored) {}
+
+            try {
+                // 2. Intentar apagar y encender el Wi-Fi del teléfono directamente
+                WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+                if (wm != null && wm.isWifiEnabled()) {
+                    boolean okOff = wm.setWifiEnabled(false);
+                    if (okOff) {
+                        cambioAutomatico = true;
+                        Thread.sleep(3500);
+                        wm.setWifiEnabled(true);
+                    }
+                }
+            } catch (Exception ignored) {}
+
+            final boolean logro = cambioAutomatico;
+            runOnUiThread(() -> {
+                if (logro) {
+                    log("🌐 Red del teléfono reconectada con éxito.");
+                } else if (abrirPanelSiBloqueado) {
+                    log("📲 Abriendo interruptor rápido de Red / Modo Avión del teléfono...");
+                    try {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            startActivity(new Intent(Settings.Panel.ACTION_INTERNET_CONNECTIVITY));
+                        } else {
+                            startActivity(new Intent(Settings.ACTION_AIRPLANE_MODE_SETTINGS));
+                        }
+                    } catch (Exception e) {
+                        try {
+                            startActivity(new Intent(Settings.ACTION_WIRELESS_SETTINGS));
+                        } catch (Exception ignored) {}
+                    }
+                }
+            });
+        }).start();
     }
 
     private void actualizarDistribucionAlturas() {
@@ -604,10 +766,18 @@ public class MainActivity extends Activity {
         ws.setSupportZoom(true);
         ws.setBuiltInZoomControls(true);
         ws.setDisplayZoomControls(false);
+        ws.setBlockNetworkLoads(false);
         ws.setUserAgentString("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
 
-        CookieManager.getInstance().setAcceptCookie(true);
-        CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
+        // Limpiar cualquier sesión vieja al abrir la app para arrancar siempre desde la página de Login
+        CookieManager cm = CookieManager.getInstance();
+        cm.setAcceptCookie(true);
+        cm.setAcceptThirdPartyCookies(webView, true);
+        cm.removeAllCookies(null);
+        cm.flush();
+        WebStorage.getInstance().deleteAllData();
+        webView.clearCache(true);
+        webView.clearHistory();
 
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
@@ -615,9 +785,35 @@ public class MainActivity extends Activity {
                 progresoWeb = newProgress;
             }
         });
-        webView.setWebViewClient(new WebViewClient());
+        webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageStarted(WebView view, String url, Bitmap favicon) {
+                super.onPageStarted(view, url, favicon);
+                if (!edtUrlBar.hasFocus() && url != null) {
+                    edtUrlBar.setText(url);
+                }
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                if (!edtUrlBar.hasFocus() && url != null) {
+                    edtUrlBar.setText(url);
+                }
+            }
+
+            @Override
+            public void doUpdateVisitedHistory(WebView view, String url, boolean isReload) {
+                super.doUpdateVisitedHistory(view, url, isReload);
+                if (!edtUrlBar.hasFocus() && url != null) {
+                    edtUrlBar.setText(url);
+                }
+            }
+        });
+
+        edtUrlBar.setText(URL_LOGIN);
         webView.loadUrl(URL_LOGIN);
-        log("[SISTEMA] Navegador interno listo.");
+        log("[SISTEMA] Iniciando limpio desde la página de sesión.");
     }
 
     private void togglePrivacidadUsuario() {
@@ -911,9 +1107,8 @@ public class MainActivity extends Activity {
     }
 
     private void recargarManual() {
-        log("🔄 [MANUAL] Recargando navegador interno...");
+        log("🔄 [MANUAL] Recargando página actual (el bot sigue en su punto)...");
         webView.reload();
-        if (botActivo) { cambiarEstado(EstadoBot.CARGANDO_LOGIN); }
     }
 
     private void evaluarJS(String script, ValueCallback<String> callback) {
@@ -924,6 +1119,12 @@ public class MainActivity extends Activity {
         handler.postDelayed(new Runnable() {
             @Override
             public void run() {
+                if (webView != null && edtUrlBar != null && !edtUrlBar.hasFocus()) {
+                    String currentUrl = webView.getUrl();
+                    if (currentUrl != null && !currentUrl.equals(edtUrlBar.getText().toString())) {
+                        edtUrlBar.setText(currentUrl);
+                    }
+                }
                 if (botActivo) {
                     actualizarBarraProgresoRelogin();
                     ejecutarPasoMaquinaEstados();
@@ -946,7 +1147,7 @@ public class MainActivity extends Activity {
             lblTimerRelogin.setText(String.format(Locale.getDefault(), "%02d:%02d", mins, secs));
 
             if (transcurridoSeg >= totalSeg) {
-                log("⏰ Tiempo de relogin alcanzado. Cerrando y reentrando...");
+                log("⏰ Tiempo de relogin alcanzado. Cerrando sesión...");
                 cambiarEstado(EstadoBot.CERRANDO_SESION);
                 intentoLogout = 0;
             }
@@ -962,21 +1163,22 @@ public class MainActivity extends Activity {
                 "var cargandoTxt = (bodyTxt.indexOf('cargando, por favor espera') !== -1 || bodyTxt.indexOf('procesando') !== -1);" +
                 "var btnX = document.querySelector(\"button.close, .btn-close, [aria-label='Close']\");" +
                 "if (btnX && btnX.offsetParent !== null) { btnX.click(); }" +
-                "var btnOk = document.querySelector('.swal2-confirm');" +
-                "if (btnOk && btnOk.innerText && btnOk.innerText.trim() === 'OK') { btnOk.click(); }" +
+                "var btnOk = Array.from(document.querySelectorAll('button, a')).find(el => el.innerText && (el.innerText.trim() === 'OK' || el.innerText.trim() === 'Aceptar'));" +
+                "if (btnOk && btnOk.offsetWidth > 0 && bodyTxt.indexOf('deseas realizar') === -1) { btnOk.click(); }" +
                 "var doc = document.querySelector('#documento');" +
                 "var usr = document.querySelector('#username');" +
                 "var pass = document.querySelector('#password');" +
                 "var monto = document.querySelector('#monto');" +
-                "var ord = document.querySelector('a.btn-tesoro-green');" +
+                "var ord = document.querySelector('a.btn-tesoro-green') || Array.from(document.querySelectorAll('a, button')).find(el => el.innerText && el.innerText.trim().toLowerCase() === 'ordinaria');" +
                 "var btnLogout = document.querySelector(\"a[href='javascript:Logout()'], header ul li a\");" +
                 "var menuInt = document.querySelector(\"a.sidebar-link[href='/int']\");" +
                 "var opsDiv = Array.from(document.querySelectorAll('a')).find(el => el.textContent.includes('Operaciones Divisas'));" +
                 "var inicioListo = !!(ready && !cargandoTxt && (menuInt || opsDiv || btnLogout) && (bodyTxt.indexOf('posición global') !== -1 || bodyTxt.indexOf('productos activos') !== -1 || bodyTxt.indexOf('operaciones') !== -1 || bodyTxt.indexOf('últ. conexión') !== -1 || bodyTxt.indexOf('ult. conexión') !== -1));" +
-                "var tablaIntLista = !!(ready && !cargandoTxt && (bodyTxt.indexOf('operaciones de intervención') !== -1 || (ord && ord.offsetParent !== null)));" +
-                "var inconv = bodyTxt.indexOf('presentando inconvenientes') !== -1;" +
+                "var tablaIntLista = !!(ready && !cargandoTxt && (bodyTxt.indexOf('operaciones de intervención') !== -1 || (ord && ord.offsetWidth > 0)));" +
+                "var inconv = (bodyTxt.indexOf('presentando inconvenientes') !== -1 || bodyTxt.indexOf('no podemos procesar su solicitud') !== -1);" +
                 "var exito = bodyTxt.indexOf('registrada exitosamente') !== -1;" +
                 "var sinCupo = bodyTxt.indexOf('no hay asignación disponible') !== -1;" +
+                "var sesionActivaErr = (bodyTxt.indexOf('sesión activa') !== -1 || bodyTxt.indexOf('sesion activa') !== -1 || bodyTxt.indexOf('posee una sesión') !== -1);" +
                 "return JSON.stringify({" +
                 "  ready: ready," +
                 "  cargando: cargandoTxt," +
@@ -986,7 +1188,7 @@ public class MainActivity extends Activity {
                 "  tablaInt: tablaIntLista," +
                 "  monto: !!(monto && monto.offsetWidth > 0 && !cargandoTxt)," +
                 "  ord: !!(ord && ord.offsetWidth > 0 && !cargandoTxt)," +
-                "  inconv: inconv, exito: exito, sinCupo: sinCupo" +
+                "  inconv: inconv, exito: exito, sinCupo: sinCupo, sesionActivaErr: sesionActivaErr" +
                 "});";
 
         evaluarJS(jsInspector, raw -> {
@@ -1012,7 +1214,8 @@ public class MainActivity extends Activity {
                         st.optBoolean("ord"),
                         st.optBoolean("inconv"),
                         st.optBoolean("exito"),
-                        st.optBoolean("sinCupo")
+                        st.optBoolean("sinCupo"),
+                        st.optBoolean("sesionActivaErr")
                 );
             } catch (Exception ignored) {}
         });
@@ -1021,7 +1224,7 @@ public class MainActivity extends Activity {
     private void procesarEstadoConDatos(
             long ahora, boolean paginaCompleta, boolean visDoc, boolean visPass,
             boolean visInicioCompleto, boolean visTablaInt, boolean visMonto,
-            boolean visOrd, boolean hayInconv, boolean hayExito, boolean haySinCupo
+            boolean visOrd, boolean hayInconv, boolean hayExito, boolean haySinCupo, boolean haySesionActivaErr
     ) {
         String cedSafe = cedula.replace("\\", "\\\\").replace("'", "\\'");
         String usrSafe = usuario.replace("\\", "\\\\").replace("'", "\\'");
@@ -1030,6 +1233,11 @@ public class MainActivity extends Activity {
         switch (estadoActual) {
 
             case CARGANDO_LOGIN:
+                if (paginaCompleta && visMonto) {
+                    log("✅ Formulario detectado en pantalla. Estabilizando 2s...");
+                    cambiarEstado(EstadoBot.ESPERANDO_ESTABILIZAR_FORM);
+                    return;
+                }
                 if (paginaCompleta && visInicioCompleto) {
                     tiempoInicioSesionMs = ahora;
                     log("✅ Página de inicio detectada y cargada. Estabilizando 2s...");
@@ -1076,8 +1284,8 @@ public class MainActivity extends Activity {
                             "  d.focus(); setter.call(d, ''); setter.call(u, '');" +
                             "  function typeStr(el, str, i, cb) {" +
                             "    if(i < str.length) {" +
-                            "      setter.call(el, el.value + str.charAt(i)); el.dispatchEvent(new Event('input', {bubbles:true}));" +
-                            "      setTimeout(function(){ typeStr(el, str, i+1, cb); }, 30);" +
+                            "      setter.call(el, str.substring(0, i + 1)); el.dispatchEvent(new Event('input', {bubbles:true}));" +
+                            "      setTimeout(function(){ typeStr(el, str, i+1, cb); }, 35);" +
                             "    } else { el.dispatchEvent(new Event('change', {bubbles:true})); if(cb) cb(); }" +
                             "  }" +
                             "  typeStr(d, '" + cedSafe + "', 0, function() {" +
@@ -1127,8 +1335,8 @@ public class MainActivity extends Activity {
                             "  p.focus(); setter.call(p, '');" +
                             "  function typeStr(el, str, i, cb) {" +
                             "    if(i < str.length) {" +
-                            "      setter.call(el, el.value + str.charAt(i)); el.dispatchEvent(new Event('input', {bubbles:true}));" +
-                            "      setTimeout(function(){ typeStr(el, str, i+1, cb); }, 30);" +
+                            "      setter.call(el, str.substring(0, i + 1)); el.dispatchEvent(new Event('input', {bubbles:true}));" +
+                            "      setTimeout(function(){ typeStr(el, str, i+1, cb); }, 35);" +
                             "    } else { el.dispatchEvent(new Event('change', {bubbles:true})); if(cb) cb(); }" +
                             "  }" +
                             "  typeStr(p, '" + clvSafe + "', 0, function() {" +
@@ -1146,6 +1354,12 @@ public class MainActivity extends Activity {
                     tiempoInicioSesionMs = ahora;
                     log("🎉 ¡Inicio cargado al 100%! Esperando 2s de estabilización...");
                     cambiarEstado(EstadoBot.ESPERANDO_ESTABILIZAR_INICIO);
+                    return;
+                }
+                if (haySesionActivaErr) {
+                    log("⚠️ El banco indica que aún hay sesión activa. Esperando 5s y reintentando...");
+                    tiempoEstadoMs = ahora;
+                    cambiarEstado(EstadoBot.ESPERANDO_ESTABILIZAR_LOGIN);
                     return;
                 }
                 if (ahora - tiempoEstadoMs > 10000 && paginaCompleta && visDoc) {
@@ -1182,11 +1396,16 @@ public class MainActivity extends Activity {
                     cambiarEstado(EstadoBot.ESPERANDO_ESTABILIZAR_LOGIN);
                     return;
                 }
+                if (paginaCompleta && visMonto) {
+                    log("✅ Formulario detectado abierto. Estabilizando 2s...");
+                    cambiarEstado(EstadoBot.ESPERANDO_ESTABILIZAR_FORM);
+                    return;
+                }
                 if (paginaCompleta && visOrd) {
                     log("🔔 !!! BOTÓN ORDINARIA DETECTADO !!!");
                     if (!yaAvisoApertura) { yaAvisoApertura = true; sonarAlarma(false); }
                     log("👉 Intento 1: Dando clic en Ordinaria...");
-                    evaluarJS("var b = document.querySelector('a.btn-tesoro-green'); if(b) b.click();", null);
+                    clicarOrdinariaJS();
                     cambiarEstado(EstadoBot.ESPERANDO_FORM_INTENTO1);
                     return;
                 }
@@ -1205,12 +1424,7 @@ public class MainActivity extends Activity {
                     return;
                 }
                 if (hayInconv || (paginaCompleta && ahora - tiempoEstadoMs > 4500)) {
-                    if (hayInconv) {
-                        log("🚨 Error en Intento 1: 'Presentando inconvenientes'.");
-                    } else {
-                        log("⚠️ Pantalla en blanco en Intento 1.");
-                    }
-                    log("🔄 Limpiando pantalla por menú lateral...");
+                    log("⚠️ Error o pantalla en blanco en Intento 1. Limpiando pantalla por menú...");
                     irAIntervencionJS();
                     cambiarEstado(EstadoBot.LIMPIANDO_PANTALLA);
                 }
@@ -1219,10 +1433,10 @@ public class MainActivity extends Activity {
             case LIMPIANDO_PANTALLA:
                 if (paginaCompleta && visTablaInt && (ahora - tiempoEstadoMs >= 2500)) {
                     log("👉 Intento 2: Dando clic en Ordinaria tras limpiar vista...");
-                    evaluarJS("var b = document.querySelector('a.btn-tesoro-green'); if(b) b.click();", null);
+                    clicarOrdinariaJS();
                     cambiarEstado(EstadoBot.ESPERANDO_FORM_INTENTO2);
                 } else if (ahora - tiempoEstadoMs > 10000) {
-                    evaluarJS("var b = document.querySelector('a.btn-tesoro-green'); if(b) b.click();", null);
+                    clicarOrdinariaJS();
                     cambiarEstado(EstadoBot.ESPERANDO_FORM_INTENTO2);
                 }
                 break;
@@ -1235,7 +1449,7 @@ public class MainActivity extends Activity {
                     return;
                 }
                 if (hayInconv || (paginaCompleta && ahora - tiempoEstadoMs > 5000)) {
-                    log("❌ Ambos intentos quedaron en blanco o con error. Cerrando sesión...");
+                    log("❌ Ambos intentos quedaron con error. Cerrando sesión...");
                     cambiarEstado(EstadoBot.CERRANDO_SESION);
                     intentoLogout = 0;
                 }
@@ -1250,7 +1464,9 @@ public class MainActivity extends Activity {
             case LLENANDO_COMPRA:
                 if (!accionEnCurso) {
                     accionEnCurso = true;
-                    log("📝 Rellenando formulario de compra...");
+                    log("📝 Rellenando formulario y fijando monto exacto de 300,00$...");
+                    // Se evita el error de '3,00' escribiendo la progresión '3' -> '30' -> '300' -> '300,00'
+                    // y verificando el valor final antes de enviar la orden
                     String jsCompra =
                             "var d = document.querySelector('#desde'); if(d && d.options.length > 1) { d.selectedIndex = 1; d.dispatchEvent(new Event('change', {bubbles:true})); }" +
                             "var h = document.querySelector('#hasta'); if(h && h.options.length > 1) { h.selectedIndex = 1; h.dispatchEvent(new Event('change', {bubbles:true})); }" +
@@ -1258,20 +1474,34 @@ public class MainActivity extends Activity {
                             "var dst = document.querySelector('#destino'); if(dst) { for(var j=0;j<dst.options.length;j++){ if(dst.options[j].text.includes('" + DESTINO_FONDOS + "')){ dst.selectedIndex=j; break; } } dst.dispatchEvent(new Event('change', {bubbles:true})); }" +
                             "var m = document.querySelector('#monto');" +
                             "var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;" +
-                            "m.focus(); setter.call(m, '');" +
-                            "function typeStr(el, str, i) {" +
-                            "  if(i < str.length) {" +
-                            "    setter.call(el, el.value + str.charAt(i)); el.dispatchEvent(new Event('input', {bubbles:true}));" +
-                            "    setTimeout(function(){ typeStr(el, str, i+1); }, 35);" +
-                            "  } else {" +
-                            "    el.dispatchEvent(new Event('change', {bubbles:true}));" +
-                            "    setTimeout(function(){" +
-                            "      var col = document.querySelector(\"a[href='javascript:mod.save()']\"); if(col) col.click();" +
-                            "      setTimeout(function(){ var conf = document.querySelector('.swal2-confirm'); if(conf) conf.click(); }, 900);" +
-                            "    }, 500);" +
+                            "if(m) {" +
+                            "  m.focus();" +
+                            "  var pasos = ['3', '30', '300', '" + MONTO_COMPRA + "'];" +
+                            "  function escribirPaso(idx) {" +
+                            "    if(idx < pasos.length) {" +
+                            "      setter.call(m, pasos[idx]);" +
+                            "      m.dispatchEvent(new Event('input', {bubbles:true}));" +
+                            "      m.dispatchEvent(new KeyboardEvent('keyup', {bubbles:true}));" +
+                            "      setTimeout(function(){ escribirPaso(idx + 1); }, 80);" +
+                            "    } else {" +
+                            "      if(m.value.indexOf('300') === -1) {" +
+                            "        setter.call(m, '" + MONTO_COMPRA + "');" +
+                            "        m.dispatchEvent(new Event('input', {bubbles:true}));" +
+                            "      }" +
+                            "      m.dispatchEvent(new Event('change', {bubbles:true}));" +
+                            "      m.dispatchEvent(new Event('blur', {bubbles:true}));" +
+                            "      setTimeout(function(){" +
+                            "        var col = document.querySelector(\"a[href='javascript:mod.save()']\") || Array.from(document.querySelectorAll('a, button')).find(el => el.innerText && el.innerText.toLowerCase().includes('colocar orden'));" +
+                            "        if(col) col.click();" +
+                            "        setTimeout(function(){" +
+                            "          var btnSi = document.querySelector('.swal2-confirm') || Array.from(document.querySelectorAll('button, a')).find(el => el.innerText && (el.innerText.trim().toLowerCase() === 'si' || el.innerText.trim().toLowerCase() === 'sí'));" +
+                            "          if(btnSi) btnSi.click();" +
+                            "        }, 900);" +
+                            "      }, 600);" +
+                            "    }" +
                             "  }" +
-                            "}" +
-                            "setTimeout(function(){ typeStr(m, '" + MONTO_COMPRA + "', 0); }, 300);";
+                            "  setTimeout(function(){ escribirPaso(0); }, 250);" +
+                            "}";
                     evaluarJS(jsCompra, null);
                     cambiarEstado(EstadoBot.COMPRANDO);
                 }
@@ -1289,6 +1519,11 @@ public class MainActivity extends Activity {
                     cambiarEstado(EstadoBot.VIGILANDO);
                     return;
                 }
+                if (hayInconv) {
+                    log("⚠️ El banco indicó 'No podemos procesar su solicitud'. Reintentando en formulario...");
+                    cambiarEstado(EstadoBot.ESPERANDO_ESTABILIZAR_FORM);
+                    return;
+                }
                 if (ahora - tiempoEstadoMs > 10000) {
                     log("✅ Orden procesada. Retomando vigilancia...");
                     sonarAlarma(true);
@@ -1298,7 +1533,7 @@ public class MainActivity extends Activity {
 
             case CERRANDO_SESION:
                 if (paginaCompleta && visDoc) {
-                    log("✅ Sesión cerrada y login cargado. Estabilizando 2s...");
+                    log("✅ Sesión cerrada correctamente en el banco. Estabilizando 2s...");
                     cambiarEstado(EstadoBot.ESPERANDO_ESTABILIZAR_LOGIN);
                     return;
                 }
@@ -1306,25 +1541,33 @@ public class MainActivity extends Activity {
                     accionEnCurso = true;
                     intentoLogout++;
                     tiempoEstadoMs = ahora;
-                    log("🔒 Intento #" + intentoLogout + " de cerrar sesión...");
+                    log("🔒 Intento #" + intentoLogout + " de cerrar sesión en el servidor del banco...");
                     String jsLogout =
-                            "if (typeof Logout === 'function') { Logout(); } else { var b = document.querySelector(\"a[href='javascript:Logout()'], header ul li:nth-child(4) a\"); if(b) b.click(); }" +
-                            "setTimeout(function(){ var si = document.querySelector('button.swal2-confirm'); if(si) si.click(); }, 700);";
+                            "var btnSalir = document.querySelector(\"a[href*='Logout' i], a[onclick*='Logout' i], header ul li:nth-child(4) a, .btn-danger\");" +
+                            "if (btnSalir) { btnSalir.click(); }" +
+                            "if (typeof Logout === 'function') { try { Logout(); } catch(e){} }" +
+                            "setTimeout(function(){" +
+                            "  var si = document.querySelector('button.swal2-confirm') || Array.from(document.querySelectorAll('button, a')).find(el => el.innerText && (el.innerText.trim().toLowerCase() === 'si' || el.innerText.trim().toLowerCase() === 'sí' || el.innerText.trim().toLowerCase() === 'aceptar'));" +
+                            "  if(si) si.click();" +
+                            "}, 700);";
                     evaluarJS(jsLogout, null);
-                } else if (ahora - tiempoEstadoMs > 8000) {
-                    log("❌ El banco no cerró en 8s. Cortando red interna...");
+                } else if (ahora - tiempoEstadoMs > 6000 && intentoLogout < 2) {
+                    accionEnCurso = false; // Segundo intento de clic en el botón rojo de salir
+                } else if (ahora - tiempoEstadoMs > 7000 && intentoLogout >= 2) {
+                    log("⚠️ El banco no cerró por botón. Reiniciando red del teléfono y limpiando sesión...");
                     cambiarEstado(EstadoBot.REINICIANDO_RED);
-                    webView.getSettings().setBlockNetworkLoads(true);
-                    webView.stopLoading();
+                    reconectarRedTelefono(false);
                 }
                 break;
 
             case REINICIANDO_RED:
-                if (ahora - tiempoEstadoMs >= 3000) {
-                    log("🌐 Reconectando navegador interno y esperando login completo...");
-                    webView.getSettings().setBlockNetworkLoads(false);
-                    CookieManager.getInstance().removeSessionCookies(null);
+                if (ahora - tiempoEstadoMs >= 4500) {
+                    log("🌐 Limpiando cookies de sesión y cargando Login desde cero...");
+                    CookieManager cm = CookieManager.getInstance();
+                    cm.removeAllCookies(null);
+                    cm.flush();
                     WebStorage.getInstance().deleteAllData();
+                    webView.clearCache(true);
                     webView.loadUrl(URL_LOGIN);
                     cambiarEstado(EstadoBot.CARGANDO_LOGIN);
                 }
@@ -1332,11 +1575,18 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void clicarOrdinariaJS() {
+        String jsOrd =
+                "var b = document.querySelector('a.btn-tesoro-green') || Array.from(document.querySelectorAll('a, button')).find(el => el.innerText && el.innerText.trim().toLowerCase() === 'ordinaria');" +
+                "if(b) b.click();";
+        evaluarJS(jsOrd, null);
+    }
+
     private void irAIntervencionJS() {
         String jsMenu =
                 "var sub = document.querySelector(\"a.sidebar-link[href='/int']\");" +
                 "var ops = Array.from(document.querySelectorAll('a')).find(el => el.textContent.includes('Operaciones Divisas'));" +
-                "if(ops) { ops.click(); }" +
+                "if(ops && (!sub || sub.offsetWidth === 0)) { ops.click(); }" +
                 "setTimeout(function(){" +
                 "  var sub2 = document.querySelector(\"a.sidebar-link[href='/int']\");" +
                 "  if(sub2) { sub2.click(); } else { window.location.hash = '#/int'; }" +
