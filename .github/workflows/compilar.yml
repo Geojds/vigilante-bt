@@ -24,7 +24,7 @@ jobs:
         with:
           gradle-version: '8.4'
 
-      - name: Generar Iconos + Tema Sin Cuadrado Blanco Inicial y Armar APK
+      - name: Generar Iconos + Permisos de Red y Armar APK
         run: |
           pip install pillow
           mkdir -p app/src/main/java/com/vigilantebt/app
@@ -38,7 +38,6 @@ jobs:
           mkdir -p app/src/main/res/mipmap-xxxhdpi
           cp MainActivity.java app/src/main/java/com/vigilantebt/app/MainActivity.java
 
-          # 1. Crear imagen 100% transparente para anular el cuadrado blanco de arranque de Android 12+
           cat << 'EOF' > app/src/main/res/drawable/empty_splash.xml
           <?xml version="1.0" encoding="utf-8"?>
           <shape xmlns:android="http://schemas.android.com/apk/res/android"
@@ -209,8 +208,8 @@ jobs:
                   applicationId "com.vigilantebt.app"
                   minSdk 24
                   targetSdk 34
-                  versionCode 5
-                  versionName "1.4"
+                  versionCode 6
+                  versionName "1.5"
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_1_8
@@ -225,6 +224,10 @@ jobs:
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+              <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+              <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+              <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
               <application
                   android:allowBackup="true"
                   android:icon="@mipmap/ic_launcher"
