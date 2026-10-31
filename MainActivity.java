@@ -6,7 +6,6 @@ import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
-import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
@@ -25,12 +24,10 @@ import android.media.ToneGenerator;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
-import android.net.wifi.WifiManager;
-import android.os.Build;
+import android.net.NetworkInfo;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.provider.Settings;
 import android.text.InputType;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -62,7 +59,6 @@ import android.widget.Toast;
 
 import org.json.JSONObject;
 
-import java.lang.reflect.Method;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
@@ -113,10 +109,9 @@ public class MainActivity extends Activity {
     private boolean accionEnCurso = false;
     private int vueltaActual = 0;
 
-    // Control de corte y reconexión real de red del teléfono
-    private boolean esperandoCambioRed = false;
-    private boolean vioCaidaRed = false;
-    private boolean redYaReconectada = false;
+    // Control de estado de red sin pedir permisos del sistema
+    private boolean microCorteEnCurso = false;
+    private boolean avisoSinInternetMostrado = false;
     private String ultimaUrlValida = URL_LOGIN;
     private ConnectivityManager.NetworkCallback networkCallback;
 
@@ -144,7 +139,6 @@ public class MainActivity extends Activity {
 
     private EstadoBot estadoActual = EstadoBot.DETENIDO;
     private int intentoLogout = 0;
-    private int ciclosRedLogout = 0;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private SharedPreferences prefs;
@@ -160,7 +154,7 @@ public class MainActivity extends Activity {
 
         construirInterfazCompleta();
         configurarWebView();
-        registrarMonitorRedTiempoReal();
+        registrarMonitorPasivoRed();
         cargarUltimaCuentaUsada();
         iniciarCicloReloj();
     }
@@ -457,13 +451,12 @@ public class MainActivity extends Activity {
 
         root.addView(panelControlContainer);
 
-        // 3. NAVEGADOR INTEGRADO ESTILO GOOGLE CHROME (BARRA OMNIBOX + PROGRESO + ZOOM INTERNO)
+        // 3. NAVEGADOR INTEGRADO ESTILO GOOGLE CHROME
         webViewContainer = new LinearLayout(this);
         webViewContainer.setOrientation(LinearLayout.VERTICAL);
         webViewContainer.setBackground(fondoRedondeadoConBorde("#202124", "#2E3035", 12, 1));
         webViewContainer.setPadding(dp(2), dp(2), dp(2), dp(2));
 
-        // Cabecera integrada de Chrome
         LinearLayout chromeToolbar = new LinearLayout(this);
         chromeToolbar.setOrientation(LinearLayout.HORIZONTAL);
         chromeToolbar.setGravity(Gravity.CENTER_VERTICAL);
@@ -486,7 +479,7 @@ public class MainActivity extends Activity {
         btnChromeReload = crearIconoChrome("↻", this::forzarRecargaEstiloChrome);
         chromeToolbar.addView(btnChromeReload, new LinearLayout.LayoutParams(dp(32), dp(32)));
 
-        // Cápsula Omnibox estilo Chrome (URL ancha completa + candado + botón de Zoom integrado)
+        // Cápsula Omnibox estilo Chrome
         LinearLayout omniboxPill = new LinearLayout(this);
         omniboxPill.setOrientation(LinearLayout.HORIZONTAL);
         omniboxPill.setGravity(Gravity.CENTER_VERTICAL);
@@ -522,7 +515,7 @@ public class MainActivity extends Activity {
         });
         omniboxPill.addView(edtUrlBar, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
 
-        // Botón compacto de Zoom dentro de la misma barra Omnibox de Chrome
+        // Botón compacto de Zoom dentro de la barra Omnibox
         btnChromeZoom = new TextView(this);
         btnChromeZoom.setText(nivelZoom + "%");
         btnChromeZoom.setTextColor(Color.parseColor("#8AB4F8"));
@@ -536,14 +529,14 @@ public class MainActivity extends Activity {
 
         chromeToolbar.addView(omniboxPill, lpOmnibox);
 
-        // Botón de corte y reconexión real de Red del Teléfono (Wi-Fi / Datos)
-        btnChromeNet = crearIconoChrome("📶", () -> reconectarRedTelefono(true));
+        // Botón de micro-corte interno de red (destraba peticiones colgadas sin pedir permisos de Wi-Fi)
+        btnChromeNet = crearIconoChrome("📶", () -> reiniciarConexionInternaWebView(true));
         chromeToolbar.addView(btnChromeNet, new LinearLayout.LayoutParams(dp(32), dp(32)));
 
         webViewContainer.addView(chromeToolbar, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        // Sub-barra compacta desplegable de Zoom (aparece dentro del navegador al tocar el % de zoom)
+        // Sub-barra desplegable de Zoom
         barraZoomDesplegable = new LinearLayout(this);
         barraZoomDesplegable.setOrientation(LinearLayout.HORIZONTAL);
         barraZoomDesplegable.setGravity(Gravity.CENTER);
@@ -570,7 +563,7 @@ public class MainActivity extends Activity {
         webViewContainer.addView(barraZoomDesplegable, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        // Línea fina azul de carga estilo Google Chrome pegada arriba de la página web
+        // Línea azul de carga estilo Chrome
         chromeProgressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         chromeProgressBar.setMax(100);
         chromeProgressBar.setProgress(0);
@@ -712,15 +705,19 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * Corta cualquier petición colgada del navegador en plena intervención y fuerza el refresco inmediato.
+     * Corta cualquier petición colgada del navegador en plena intervención y fuerza el refresco si hay internet.
      */
     private void forzarRecargaEstiloChrome() {
         if (webView == null) return;
         webView.stopLoading();
+        if (!hayInternetDisponible()) {
+            log("⏸️ Sin internet en el teléfono. La página se mantiene quieta sin recargar.");
+            return;
+        }
         chromeProgressBar.setVisibility(View.VISIBLE);
         chromeProgressBar.setProgress(18);
         String urlActual = webView.getUrl();
-        if (urlActual == null || urlActual.isEmpty() || urlActual.startsWith("about:")) {
+        if (urlActual == null || urlActual.isEmpty() || urlActual.startsWith("about:") || urlActual.startsWith("chrome")) {
             urlActual = (ultimaUrlValida != null && !ultimaUrlValida.isEmpty()) ? ultimaUrlValida : URL_LOGIN;
             webView.loadUrl(urlActual);
         } else {
@@ -729,9 +726,6 @@ public class MainActivity extends Activity {
         log("🔄 Recargando página actual (" + urlActual + ")...");
     }
 
-    /**
-     * Ajusta el nivel de zoom visual de la página (entre 40% y 150%) sin alterar el funcionamiento del bot.
-     */
     private void cambiarZoomWeb(int delta) {
         nivelZoom = Math.max(40, Math.min(150, nivelZoom + delta));
         prefs.edit().putInt("zoom_web", nivelZoom).apply();
@@ -765,6 +759,10 @@ public class MainActivity extends Activity {
             if (imm != null) imm.hideSoftInputFromWindow(edtUrlBar.getWindowToken(), 0);
         } catch (Exception ignored) {}
         edtUrlBar.clearFocus();
+        if (!hayInternetDisponible()) {
+            log("⏸️ No hay conexión a internet. Conéctate antes de abrir otra dirección.");
+            return;
+        }
         ultimaUrlValida = raw;
         webView.stopLoading();
         chromeProgressBar.setVisibility(View.VISIBLE);
@@ -774,36 +772,56 @@ public class MainActivity extends Activity {
     }
 
     // =========================================================================================
-    // DETECCIÓN Y CORTE REAL DE RED EN EL TELÉFONO (SOLO DATOS, SOLO WI-FI O AMBOS)
+    // CONTROL INTERNO DE RED DEL NAVEGADOR (CERO PERMISOS DE WI-FI / PÁGINA SIEMPRE QUIETA)
     // =========================================================================================
-    private void registrarMonitorRedTiempoReal() {
+    @SuppressWarnings("deprecation")
+    private boolean hayInternetDisponible() {
+        try {
+            ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return true;
+            if ( android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                Network net = cm.getActiveNetwork();
+                if (net == null) return false;
+                NetworkCapabilities caps = cm.getNetworkCapabilities(net);
+                return caps != null && (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                        || caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+                        || caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET));
+            } else {
+                NetworkInfo ni = cm.getActiveNetworkInfo();
+                return ni != null && ni.isConnected();
+            }
+        } catch (Exception ignored) {
+            return true;
+        }
+    }
+
+    private void registrarMonitorPasivoRed() {
         try {
             ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
             if (cm == null) return;
             networkCallback = new ConnectivityManager.NetworkCallback() {
                 @Override
                 public void onLost(Network network) {
-                    vioCaidaRed = true;
                     runOnUiThread(() -> {
-                        if (webView != null) webView.stopLoading();
-                        log("📴 [RED] Se desconectó el internet en el teléfono. Esperando reconexión...");
+                        if (webView != null) {
+                            // Frena cualquier carga en curso para que la página actual se quede quieta
+                            webView.stopLoading();
+                        }
+                        if (!avisoSinInternetMostrado) {
+                            avisoSinInternetMostrado = true;
+                            log("⏸️ [RED] Internet desconectado. Página congelada en su sitio sin errores.");
+                        }
                     });
                 }
 
                 @Override
                 public void onAvailable(Network network) {
                     runOnUiThread(() -> {
-                        if (esperandoCambioRed || vioCaidaRed) {
-                            redYaReconectada = true;
-                            esperandoCambioRed = false;
-                            vioCaidaRed = false;
-                            log("📶 [RED] Internet del teléfono conectado nuevamente.");
-                            handler.postDelayed(() -> {
-                                if (webView != null && !botActivo) {
-                                    webView.stopLoading();
-                                    webView.loadUrl(ultimaUrlValida != null ? ultimaUrlValida : URL_LOGIN);
-                                }
-                            }, 900);
+                        if (avisoSinInternetMostrado) {
+                            avisoSinInternetMostrado = false;
+                            log("📶 [RED] Internet detectado de nuevo. Retomando operación desde el punto actual...");
+                            tiempoEstadoMs = System.currentTimeMillis();
+                            accionEnCurso = false;
                         }
                     });
                 }
@@ -812,147 +830,37 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {}
     }
 
-    private boolean estaWifiEncendido() {
-        try {
-            WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
-            if (wm != null && wm.isWifiEnabled()) return true;
-            ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
-            if (cm != null) {
-                Network net = cm.getActiveNetwork();
-                if (net != null) {
-                    NetworkCapabilities caps = cm.getNetworkCapabilities(net);
-                    if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return true;
-                }
-            }
-        } catch (Exception ignored) {}
-        return false;
-    }
-
-    private boolean estanDatosMovilesEncendidos() {
-        try {
-            int mobileDataSetting = Settings.Global.getInt(getContentResolver(), "mobile_data", -1);
-            if (mobileDataSetting == 1) return true;
-            if (mobileDataSetting == 0) return false;
-        } catch (Exception ignored) {}
+    /**
+     * Hace el truco de "quitar y poner el internet" directamente dentro del navegador (WebView)
+     * sin tocar el Wi-Fi ni los Datos del teléfono (nunca pide permisos) y dejando la página quieta.
+     */
+    private void reiniciarConexionInternaWebView(boolean esManual) {
+        if (webView == null || microCorteEnCurso) return;
+        microCorteEnCurso = true;
+        log("📶 Cortando y reconectando red interna del navegador (página fija, sin permisos)...");
 
         try {
-            ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
-            if (cm != null) {
-                Network net = cm.getActiveNetwork();
-                if (net != null) {
-                    NetworkCapabilities caps = cm.getNetworkCapabilities(net);
-                    if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) return true;
-                }
-            }
-        } catch (Exception ignored) {}
-        return false;
-    }
-
-    @SuppressLint("WrongConstant")
-    private void bajarBarraAjustesRapidosTelefono(String mensajeAviso) {
-        runOnUiThread(() -> {
-            Toast.makeText(MainActivity.this, mensajeAviso, Toast.LENGTH_LONG).show();
-            boolean barraAbierta = false;
-            try {
-                Object sbService = getSystemService("statusbar");
-                Class<?> sbClass = Class.forName("android.app.StatusBarManager");
-                Method expandSettings;
-                try {
-                    expandSettings = sbClass.getMethod("expandSettingsPanel");
-                } catch (NoSuchMethodException e) {
-                    expandSettings = sbClass.getMethod("expandNotificationsPanel");
-                }
-                expandSettings.setAccessible(true);
-                expandSettings.invoke(sbService);
-                barraAbierta = true;
-            } catch (Exception ignored) {}
-
-            if (!barraAbierta) {
-                try {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        startActivity(new Intent(Settings.Panel.ACTION_INTERNET_CONNECTIVITY));
-                    } else {
-                        startActivity(new Intent(Settings.ACTION_DATA_ROAMING_SETTINGS));
-                    }
-                } catch (Exception ignored) {}
-            }
-        });
-    }
-
-    @SuppressWarnings("deprecation")
-    private void reconectarRedTelefono(boolean mostrarPanelSiNecesario) {
-        final boolean wifiActivo = estaWifiEncendido();
-        final boolean datosActivos = estanDatosMovilesEncendidos();
-
-        esperandoCambioRed = true;
-        redYaReconectada = false;
-        if (webView != null) {
+            // 1. Cortar inmediatamente cualquier envío colgado y pausar red interna del navegador
             webView.stopLoading();
-        }
+            webView.getSettings().setBlockNetworkLoads(true);
+            webView.setNetworkAvailable(false);
+            evaluarJS("if(window.stop){try{window.stop();}catch(e){}}", null);
+        } catch (Exception ignored) {}
 
-        if (wifiActivo && datosActivos) {
-            log("📶📱 [RED] Detectados Wi-Fi y Datos activos en el teléfono. Desconectando y reconectando ambos...");
-        } else if (datosActivos) {
-            log("📱 [RED] Detectado SOLO Datos Móviles activos. Desconectando y reconectando únicamente los Datos...");
-        } else if (wifiActivo) {
-            log("📶 [RED] Detectado SOLO Wi-Fi activo. Desconectando y reconectando únicamente el Wi-Fi...");
-        } else {
-            log("📡 [RED] Verificando estado de red en el teléfono...");
-        }
-
-        new Thread(() -> {
-            WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
-            boolean wifiCambiadoPorCodigo = false;
-            boolean datosCambiadosPorShell = false;
-
-            // 1. Si el Wi-Fi estaba activo, apagar SOLO Wi-Fi (y volverlo a prender luego)
-            if (wifiActivo && wm != null) {
-                try {
-                    wifiCambiadoPorCodigo = wm.setWifiEnabled(false);
-                } catch (Exception ignored) {}
-            }
-
-            // 2. Si los Datos estaban activos, intentar comando directo o bajar la barra del teléfono
-            if (datosActivos) {
-                try {
-                    Process pOff = Runtime.getRuntime().exec(new String[]{"sh", "-c", "svc data disable || cmd phone data disable"});
-                    pOff.waitFor();
-                    if (pOff.exitValue() == 0) {
-                        datosCambiadosPorShell = true;
-                    }
-                } catch (Exception ignored) {}
-
-                if (!datosCambiadosPorShell && mostrarPanelSiNecesario) {
-                    String msg = wifiActivo
-                            ? "📲 Apaga y vuelve a prender los Datos Móviles arriba (el Wi-Fi se reinicia solo)"
-                            : "📲 Apaga y vuelve a prender tus Datos Móviles en la barra superior";
-                    bajarBarraAjustesRapidosTelefono(msg);
-                }
-            } else if (wifiActivo && !wifiCambiadoPorCodigo && mostrarPanelSiNecesario) {
-                bajarBarraAjustesRapidosTelefono("📲 Apaga y vuelve a prender tu Wi-Fi en la barra superior");
-            } else if (!wifiActivo && !datosActivos && mostrarPanelSiNecesario) {
-                bajarBarraAjustesRapidosTelefono("📲 Reconecta tu red en la barra superior");
-            }
-
+        // 2. Reconectar la red interna después de 1.5 segundos sin borrar la página de la pantalla
+        handler.postDelayed(() -> {
             try {
-                Thread.sleep(4000);
-            } catch (InterruptedException ignored) {}
-
-            // 3. Reconectar únicamente lo que estaba encendido originalmente
-            if (wifiActivo && wm != null && wifiCambiadoPorCodigo) {
-                try {
-                    wm.setWifiEnabled(true);
-                    runOnUiThread(() -> log("📶 [RED] Wi-Fi encendido de nuevo en el teléfono."));
-                } catch (Exception ignored) {}
+                if (webView != null) {
+                    webView.getSettings().setBlockNetworkLoads(false);
+                    webView.setNetworkAvailable(true);
+                }
+            } catch (Exception ignored) {}
+            microCorteEnCurso = false;
+            log("✅ Red interna del navegador reconectada y lista.");
+            if (esManual && botActivo && estadoActual == EstadoBot.CERRANDO_SESION) {
+                accionEnCurso = false;
             }
-
-            if (datosActivos && datosCambiadosPorShell) {
-                try {
-                    Runtime.getRuntime().exec(new String[]{"sh", "-c", "svc data enable || cmd phone data enable"}).waitFor();
-                    runOnUiThread(() -> log("📱 [RED] Datos Móviles encendidos de nuevo en el teléfono."));
-                } catch (Exception ignored) {}
-            }
-        }).start();
+        }, 1500);
     }
 
     private void actualizarDistribucionAlturas() {
@@ -1132,18 +1040,18 @@ public class MainActivity extends Activity {
                 aplicarZoomWeb();
             }
 
-            // Evita que salga la pantalla blanca de fallo de conexión cuando se apagan los datos/Wi-Fi
+            // Si un clic falla porque justo se fue el internet, frena el cambio y regresa a la vista quieta
             @Override
             public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
                 if (request != null && request.isForMainFrame()) {
-                    evitarPantallaErrorConexion(view);
+                    mantenerPaginaQuietaSinError(view);
                 }
             }
 
             @SuppressWarnings("deprecation")
             @Override
             public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
-                evitarPantallaErrorConexion(view);
+                mantenerPaginaQuietaSinError(view);
             }
         });
 
@@ -1152,18 +1060,16 @@ public class MainActivity extends Activity {
         log("[SISTEMA] Navegador estilo Chrome listo (Zoom: " + nivelZoom + "%).");
     }
 
-    private void evitarPantallaErrorConexion(WebView view) {
+    /**
+     * Impide que Android muestre la pantalla de "Página web no disponible", regresando de inmediato
+     * a la vista anterior del banco para que la pantalla se quede quieta donde estaba.
+     */
+    private void mantenerPaginaQuietaSinError(WebView view) {
         try {
             view.stopLoading();
-            String htmlEspera = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1.0'>" +
-                    "<style>body{margin:0;background:#18181B;color:#E4E4E7;font-family:sans-serif;display:flex;flex-direction:column;justify-content:center;align-items:center;height:100vh;text-align:center;padding:20px;}" +
-                    ".sp{width:38px;height:38px;border:4px solid #27272A;border-top-color:#0284C7;border-radius:50%;animation:r 0.9s linear infinite;margin-bottom:14px;}" +
-                    "@keyframes r{to{transform:rotate(360deg);}}</style></head><body>" +
-                    "<div class='sp'></div>" +
-                    "<div style='font-size:15px;font-weight:bold;color:#38BDF8;'>Esperando reconexión de red del teléfono...</div>" +
-                    "<div style='font-size:12px;color:#A1A1AA;margin-top:6px;'>Apenas regresen los datos o el Wi-Fi, el navegador continuará automáticamente sin errores.</div>" +
-                    "</body></html>";
-            view.loadDataWithBaseURL(ultimaUrlValida != null ? ultimaUrlValida : URL_LOGIN, htmlEspera, "text/html", "UTF-8", null);
+            if (view.canGoBack()) {
+                view.goBack();
+            }
         } catch (Exception ignored) {}
     }
 
@@ -1426,7 +1332,7 @@ public class MainActivity extends Activity {
         botActivo = true;
         yaAvisoApertura = false;
         vueltaActual = 0;
-        ciclosRedLogout = 0;
+        intentoLogout = 0;
         cambiarEstado(EstadoBot.CARGANDO_LOGIN);
 
         badgeEstado.setText("⬛ VIGILANDO");
@@ -1459,11 +1365,12 @@ public class MainActivity extends Activity {
     }
 
     private void recargarManual() {
-        log("🔄 [MANUAL] Cortando carga colgada y refrescando página...");
+        log("🔄 [MANUAL] Refrescando página actual...");
         forzarRecargaEstiloChrome();
     }
 
     private void evaluarJS(String script, ValueCallback<String> callback) {
+        if (webView == null) return;
         webView.evaluateJavascript("(function() { try { " + script + " } catch(e) { return 'ERR:' + e.message; } })()", callback);
     }
 
@@ -1505,12 +1412,19 @@ public class MainActivity extends Activity {
                 log("⏰ Tiempo de relogin alcanzado. Cerrando sesión...");
                 cambiarEstado(EstadoBot.CERRANDO_SESION);
                 intentoLogout = 0;
-                ciclosRedLogout = 0;
             }
         }
     }
 
     private void ejecutarPasoMaquinaEstados() {
+        if (microCorteEnCurso) return;
+
+        // Si el usuario quitó el internet en el teléfono, el bot mantiene la página quieta y espera
+        if (!hayInternetDisponible()) {
+            tiempoEstadoMs = System.currentTimeMillis();
+            return;
+        }
+
         long ahora = System.currentTimeMillis();
 
         String jsInspector =
@@ -1518,10 +1432,11 @@ public class MainActivity extends Activity {
                 "var ready = (document.readyState === 'complete');" +
                 "var bodyTxt = document.body ? document.body.innerText.toLowerCase() : '';" +
                 "var cargandoTxt = (bodyTxt.indexOf('cargando, por favor espera') !== -1 || bodyTxt.indexOf('procesando') !== -1);" +
+                "var modalLogout = (bodyTxt.indexOf('deseas cerrar tu sesión') !== -1 || bodyTxt.indexOf('deseas cerrar tu sesion') !== -1);" +
                 "var btnX = document.querySelector(\"button.close, .btn-close, [aria-label='Close']\");" +
-                "if (btnX && btnX.offsetParent !== null) { btnX.click(); }" +
+                "if (btnX && btnX.offsetParent !== null && !modalLogout) { btnX.click(); }" +
                 "var btnOk = Array.from(document.querySelectorAll('button, a')).find(el => el.innerText && (el.innerText.trim() === 'OK' || el.innerText.trim() === 'Aceptar'));" +
-                "if (btnOk && btnOk.offsetWidth > 0 && bodyTxt.indexOf('deseas realizar') === -1) { btnOk.click(); }" +
+                "if (btnOk && btnOk.offsetWidth > 0 && bodyTxt.indexOf('deseas realizar') === -1 && !modalLogout) { btnOk.click(); }" +
                 "var doc = document.querySelector('#documento');" +
                 "var usr = document.querySelector('#username');" +
                 "var pass = document.querySelector('#password');" +
@@ -1545,6 +1460,7 @@ public class MainActivity extends Activity {
                 "  tablaInt: tablaIntLista," +
                 "  monto: !!(monto && monto.offsetWidth > 0 && !cargandoTxt)," +
                 "  ord: !!(ord && ord.offsetWidth > 0 && !cargandoTxt)," +
+                "  modalLogout: modalLogout," +
                 "  inconv: inconv, exito: exito, sinCupo: sinCupo, sesionActivaErr: sesionActivaErr" +
                 "});";
 
@@ -1569,6 +1485,7 @@ public class MainActivity extends Activity {
                         st.optBoolean("tablaInt"),
                         st.optBoolean("monto"),
                         st.optBoolean("ord"),
+                        st.optBoolean("modalLogout"),
                         st.optBoolean("inconv"),
                         st.optBoolean("exito"),
                         st.optBoolean("sinCupo"),
@@ -1581,7 +1498,8 @@ public class MainActivity extends Activity {
     private void procesarEstadoConDatos(
             long ahora, boolean paginaCompleta, boolean visDoc, boolean visPass,
             boolean visInicioCompleto, boolean visTablaInt, boolean visMonto,
-            boolean visOrd, boolean hayInconv, boolean hayExito, boolean haySinCupo, boolean haySesionActivaErr
+            boolean visOrd, boolean visModalLogout, boolean hayInconv, boolean hayExito,
+            boolean haySinCupo, boolean haySesionActivaErr
     ) {
         String cedSafe = cedula.replace("\\", "\\\\").replace("'", "\\'");
         String usrSafe = usuario.replace("\\", "\\\\").replace("'", "\\'");
@@ -1715,9 +1633,9 @@ public class MainActivity extends Activity {
                     return;
                 }
                 if (haySesionActivaErr) {
-                    log("⚠️ El banco indica que aún hay sesión activa. Reiniciando red y reintentando...");
-                    cambiarEstado(EstadoBot.REINICIANDO_RED);
-                    reconectarRedTelefono(true);
+                    log("⚠️ El banco indica sesión activa. Esperando 5s y reintentando en el login...");
+                    tiempoEstadoMs = ahora;
+                    cambiarEstado(EstadoBot.ESPERANDO_ESTABILIZAR_LOGIN);
                     return;
                 }
                 if (ahora - tiempoEstadoMs > 10000 && paginaCompleta && visDoc) {
@@ -1810,7 +1728,6 @@ public class MainActivity extends Activity {
                     log("❌ Ambos intentos quedaron con error. Cerrando sesión...");
                     cambiarEstado(EstadoBot.CERRANDO_SESION);
                     intentoLogout = 0;
-                    ciclosRedLogout = 0;
                 }
                 break;
 
@@ -1889,63 +1806,65 @@ public class MainActivity extends Activity {
                 break;
 
             case CERRANDO_SESION:
-                if (paginaCompleta && visDoc) {
+                // Si ya regresó al Login o a la pantalla de contraseña tras /lg/ex, sesión cerrada con éxito
+                if (paginaCompleta && (visDoc || visPass)) {
                     log("✅ Sesión cerrada correctamente en el banco. Estabilizando 2s...");
-                    cambiarEstado(EstadoBot.ESPERANDO_ESTABILIZAR_LOGIN);
+                    if (visDoc) {
+                        cambiarEstado(EstadoBot.ESPERANDO_ESTABILIZAR_LOGIN);
+                    } else {
+                        webView.loadUrl(URL_LOGIN);
+                        cambiarEstado(EstadoBot.CARGANDO_LOGIN);
+                    }
                     return;
                 }
                 if (!accionEnCurso) {
                     accionEnCurso = true;
                     intentoLogout++;
                     tiempoEstadoMs = ahora;
-                    log("🔒 Intento #" + intentoLogout + " de cerrar sesión en el servidor del banco...");
+                    if (visModalLogout) {
+                        log("🔒 Confirmando botón 'Sí' en ¿Deseas cerrar tu sesión? (Intento #" + intentoLogout + ")...");
+                    } else {
+                        log("🔒 Intento #" + intentoLogout + " de cerrar sesión en el servidor del banco...");
+                    }
                     ejecutarScriptLogout();
-                } else if (ahora - tiempoEstadoMs > 5500 && intentoLogout < 2) {
+                } else if (ahora - tiempoEstadoMs > 4800 && intentoLogout % 2 == 1) {
+                    // Segundo intento directo sobre el botón Sí / Salir
                     accionEnCurso = false;
-                } else if (ahora - tiempoEstadoMs > 6500 && intentoLogout >= 2) {
-                    log("⚠️ No cerró sesión por colapso. Cortando y reconectando red del teléfono para forzar salida...");
+                } else if (ahora - tiempoEstadoMs > 5500 && intentoLogout % 2 == 0) {
+                    // Si sigue colgado, hace micro-corte interno de red sin quitar la página ni pedir permisos
+                    log("⚠️ Página colgada al cerrar sesión. Haciendo corte/reconexión interna y reintentando...");
                     cambiarEstado(EstadoBot.REINICIANDO_RED);
-                    reconectarRedTelefono(true);
+                    reiniciarConexionInternaWebView(false);
                 }
                 break;
 
             case REINICIANDO_RED:
-                // Espera a que el teléfono reconecte el internet (o mínimo 5.5s si reconectó automático)
-                boolean listoParaContinuar = redYaReconectada || (ahora - tiempoEstadoMs >= 6500 && (estaWifiEncendido() || estanDatosMovilesEncendidos()));
-                if (listoParaContinuar && (ahora - tiempoEstadoMs >= 4800)) {
-                    redYaReconectada = false;
-                    ciclosRedLogout++;
-                    if (ciclosRedLogout <= 1) {
-                        log("🔄 Red restablecida. Dando clic en Cerrar Sesión nuevamente...");
-                        ejecutarScriptLogout();
-                        intentoLogout = 1;
-                        cambiarEstado(EstadoBot.CERRANDO_SESION);
-                    } else {
-                        log("🌐 Limpiando cookies de sesión y cargando Login tras cambio de red...");
-                        CookieManager cm = CookieManager.getInstance();
-                        cm.removeAllCookies(null);
-                        cm.flush();
-                        WebStorage.getInstance().deleteAllData();
-                        webView.stopLoading();
-                        webView.clearCache(true);
-                        webView.loadUrl(URL_LOGIN);
-                        ciclosRedLogout = 0;
-                        cambiarEstado(EstadoBot.CARGANDO_LOGIN);
-                    }
+                if (!microCorteEnCurso && (ahora - tiempoEstadoMs >= 2000)) {
+                    log("🔄 Red interna restablecida. Dando clic en Cerrar Sesión / Sí nuevamente...");
+                    cambiarEstado(EstadoBot.CERRANDO_SESION);
                 }
                 break;
         }
     }
 
+    /**
+     * Si el cuadro "¿Deseas cerrar tu sesión?" ya está abierto, pulsa directamente "Sí"
+     * sin reiniciar el cuadro; si no está abierto, abre el cierre de sesión y pulsa "Sí".
+     */
     private void ejecutarScriptLogout() {
         String jsLogout =
-                "var btnSalir = document.querySelector(\"a[href*='Logout' i], a[onclick*='Logout' i], header ul li:nth-child(4) a, .btn-danger\");" +
-                "if (btnSalir) { btnSalir.click(); }" +
-                "if (typeof Logout === 'function') { try { Logout(); } catch(e){} }" +
-                "setTimeout(function(){" +
-                "  var si = document.querySelector('button.swal2-confirm') || Array.from(document.querySelectorAll('button, a')).find(el => el.innerText && (el.innerText.trim().toLowerCase() === 'si' || el.innerText.trim().toLowerCase() === 'sí' || el.innerText.trim().toLowerCase() === 'aceptar'));" +
-                "  if(si) si.click();" +
-                "}, 650);";
+                "var btnSiExistente = document.querySelector('button.swal2-confirm') || Array.from(document.querySelectorAll('button, a')).find(el => el.innerText && (el.innerText.trim().toLowerCase() === 'si' || el.innerText.trim().toLowerCase() === 'sí'));" +
+                "if (btnSiExistente && btnSiExistente.offsetWidth > 0) {" +
+                "  btnSiExistente.click();" +
+                "} else {" +
+                "  var btnSalir = document.querySelector(\"a[href*='Logout' i], a[onclick*='Logout' i], header ul li:nth-child(4) a, .btn-danger\");" +
+                "  if (btnSalir) { btnSalir.click(); }" +
+                "  if (typeof Logout === 'function') { try { Logout(); } catch(e){} }" +
+                "  setTimeout(function(){" +
+                "    var si = document.querySelector('button.swal2-confirm') || Array.from(document.querySelectorAll('button, a')).find(el => el.innerText && (el.innerText.trim().toLowerCase() === 'si' || el.innerText.trim().toLowerCase() === 'sí' || el.innerText.trim().toLowerCase() === 'aceptar'));" +
+                "    if(si) si.click();" +
+                "  }, 650);" +
+                "}";
         evaluarJS(jsLogout, null);
     }
 
