@@ -24,7 +24,7 @@ jobs:
         with:
           gradle-version: '8.4'
 
-      - name: Generar Iconos + Permisos de Red y Armar APK
+      - name: Generar Iconos + Multi-Perfil y Armar APK
         run: |
           pip install pillow
           mkdir -p app/src/main/java/com/vigilantebt/app
@@ -172,6 +172,11 @@ jobs:
               icono_final.resize((tam, tam), Image.LANCZOS).save(ruta, "PNG")
           PYEOF
 
+          cat << 'EOF' > gradle.properties
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          EOF
+
           cat << 'EOF' > settings.gradle
           pluginManagement {
               repositories {
@@ -208,8 +213,8 @@ jobs:
                   applicationId "com.vigilantebt.app"
                   minSdk 24
                   targetSdk 34
-                  versionCode 8
-                  versionName "1.7"
+                  versionCode 9
+                  versionName "1.8"
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_1_8
@@ -217,6 +222,7 @@ jobs:
               }
           }
           dependencies {
+              implementation 'androidx.webkit:webkit:1.11.0'
           }
           EOF
 
@@ -239,7 +245,7 @@ jobs:
                       android:exported="true">
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN" />
-                          <category android:name="android.intent.action.LAUNCHER" />
+                          <category android:name="android.intent.category.LAUNCHER" />
                       </intent-filter>
                   </activity>
               </application>
