@@ -3,8 +3,6 @@ package com.vigilantebt.app;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.content.ClipData;
-import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
@@ -34,6 +32,9 @@ import android.os.Looper;
 import android.text.InputType;
 import android.text.SpannableString;
 import android.text.Spanned;
+import android.text.TextUtils;
+import android.text.method.HideReturnsTransformationMethod;
+import android.text.method.PasswordTransformationMethod;
 import android.text.style.ImageSpan;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -101,23 +102,23 @@ public class MainActivity extends Activity {
 
     private TextView badgeEstado, lblRefrescoVal, lblReloginVal, txtConsola;
     private ScrollView scrollConsola;
-    private Button btnCuenta, btnOjoPrivacidad, btnIniciar, btnRecargar, btnDetener, btnFoldConsola;
+    private FrameLayout consoleWrapper;
+    private Button btnCuenta, btnOjoPrivacidad, btnIniciar, btnDetener, btnFoldConsola;
     private Button btnVistaDividida, btnVistaPanel, btnVistaWeb;
 
     private boolean usuarioOculto = false;
     private boolean consolaVisible = true;
     private int modoVistaActual = 0;
 
-    // -1 = Vista Mosaico (todas las activas a la vez), 0..3 = Pestaña individual por usuario
+    // -1 = Vista Mosaico (Todas), 0..3 = Pestaña individual seleccionada
     private int slotEnfocado = -1;
-    // Índice de la cuenta cuya URL se inspecciona actualmente cuando está en modo Mosaico
+    // Índice del panel cuya URL se muestra cuando está en modo Todas
     private int slotInspeccionadoUrl = 0;
 
     private int intervaloRefresco = 3;
     private int minutosRelogin = 10;
     private int nivelZoom = 70;
 
-    private boolean botActivo = false;
     private boolean pulsoNeon = false;
     private boolean yaAvisoApertura = false;
     private boolean avisoSinInternetMostrado = false;
@@ -148,6 +149,7 @@ public class MainActivity extends Activity {
     private class SesionBot {
         final int slotIndex;
         boolean activa = false;
+        boolean corriendo = false;
         String tipoDoc = "V";
         String cedula = "";
         String usuario = "";
@@ -175,7 +177,6 @@ public class MainActivity extends Activity {
             this.slotIndex = idx;
         }
 
-        // Muestra únicamente el usuario, sin C1, C2, etc.
         String nombreMostrado() {
             if (usuario == null || usuario.isEmpty()) return "Sin cuenta";
             if (usuarioOculto) return "********";
@@ -183,7 +184,7 @@ public class MainActivity extends Activity {
         }
 
         boolean estaCorriendo() {
-            return botActivo && activa && !compraCompletada && estadoActual != EstadoBot.DETENIDO;
+            return activa && corriendo && !compraCompletada && estadoActual != EstadoBot.DETENIDO;
         }
     }
 
@@ -193,7 +194,6 @@ public class MainActivity extends Activity {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private SharedPreferences prefs;
 
-    // Span para alinear perfectamente los iconos vectoriales y puntos neón con el texto
     private static class CenteredImageSpan extends ImageSpan {
         CenteredImageSpan(Drawable d) {
             super(d);
@@ -282,7 +282,7 @@ public class MainActivity extends Activity {
     }
 
     // =========================================================================================
-    // MOTOR DE ICONOS VECTORIALES PROFESIONALES Y LUCES LED NEÓN (SIN EMOJIS)
+    // MOTOR DE ICONOS VECTORIALES Y LUCES LED NEÓN
     // =========================================================================================
     private Drawable crearCirculoNeon(boolean encendido, boolean faseBrillante, int sizeDp) {
         int s = dp(sizeDp);
@@ -294,7 +294,6 @@ public class MainActivity extends Activity {
         float rMax = s / 2f;
 
         if (!encendido) {
-            // Círculo en Rojo Brillante Neón fijo
             RadialGradient glow = new RadialGradient(
                     cx, cy, rMax,
                     new int[]{Color.parseColor("#FF1744"), Color.parseColor("#88FF1744"), Color.TRANSPARENT},
@@ -311,7 +310,6 @@ public class MainActivity extends Activity {
             p.setColor(Color.parseColor("#FF8A80"));
             c.drawCircle(cx - rMax * 0.12f, cy - rMax * 0.12f, rMax * 0.16f, p);
         } else {
-            // Círculo en Verde Neón Brillante Titilando
             if (faseBrillante) {
                 RadialGradient glow = new RadialGradient(
                         cx, cy, rMax,
@@ -602,7 +600,7 @@ public class MainActivity extends Activity {
         topBar.addView(badgeEstado);
         root.addView(topBar);
 
-        // Selector de Vista con Iconos Vectoriales
+        // Selector de Vista
         LinearLayout viewBar = new LinearLayout(this);
         viewBar.setOrientation(LinearLayout.HORIZONTAL);
         viewBar.setPadding(dp(12), dp(2), dp(12), dp(6));
@@ -624,7 +622,7 @@ public class MainActivity extends Activity {
         panelControlContainer.setPadding(dp(12), dp(10), dp(12), dp(8));
         panelControlContainer.setBackground(fondoRedondeado("#18181B", 14));
 
-        // Botón Cuentas Activas (Solo muestra cantidad, sin los nombres) + Ojo
+        // Botón Cuentas Activas + Ojo
         LinearLayout filaCuenta = new LinearLayout(this);
         filaCuenta.setOrientation(LinearLayout.HORIZONTAL);
         filaCuenta.setGravity(Gravity.CENTER_VERTICAL);
@@ -638,7 +636,7 @@ public class MainActivity extends Activity {
         filaCuenta.addView(btnOjoPrivacidad, new LinearLayout.LayoutParams(dp(42), dp(38)));
         panelControlContainer.addView(filaCuenta);
 
-        // Tarjeta de Tiempos (Sin Cierre Sincronizado porque cada cuenta sale de forma independiente)
+        // Tarjeta de Tiempos
         LinearLayout cardTiempos = new LinearLayout(this);
         cardTiempos.setOrientation(LinearLayout.VERTICAL);
         cardTiempos.setPadding(dp(10), dp(8), dp(10), dp(8));
@@ -694,47 +692,37 @@ public class MainActivity extends Activity {
 
         panelControlContainer.addView(cardTiempos, lpCard);
 
-        // Botones INICIAR | RECARGAR | DETENER con Iconos Vectoriales
+        // Botones INICIAR y DETENER (Sin el botón Recargar del medio)
         LinearLayout filaBotones = new LinearLayout(this);
         filaBotones.setOrientation(LinearLayout.HORIZONTAL);
-        btnIniciar = crearBotonConIcono("PLAY", "INICIAR", "#16A34A", "#FFFFFF", 12, this::iniciarBot);
-        btnRecargar = crearBotonConIcono("RELOAD", "RECARGAR", "#0284C7", "#FFFFFF", 12, this::recargarManual);
-        btnDetener = crearBotonConIcono("STOP", "DETENER", "#7F1D1D", "#FCA5A5", 12, this::detenerBot);
+        btnIniciar = crearBotonConIcono("PLAY", "INICIAR", "#16A34A", "#FFFFFF", 12, this::accionBotonIniciar);
+        btnDetener = crearBotonConIcono("STOP", "DETENER", "#7F1D1D", "#FCA5A5", 12, this::accionBotonDetener);
         btnDetener.setEnabled(false);
 
         LinearLayout.LayoutParams lpBtnMando = new LinearLayout.LayoutParams(0, dp(38), 1f);
-        lpBtnMando.setMargins(dp(2), 0, dp(2), 0);
+        lpBtnMando.setMargins(dp(3), 0, dp(3), 0);
         filaBotones.addView(btnIniciar, lpBtnMando);
-        filaBotones.addView(btnRecargar, lpBtnMando);
         filaBotones.addView(btnDetener, lpBtnMando);
         panelControlContainer.addView(filaBotones);
 
-        // Cabecera Consola
+        // Cabecera compacta de Consola (Sin botón Guardar)
         LinearLayout headerConsola = new LinearLayout(this);
         headerConsola.setGravity(Gravity.CENTER_VERTICAL);
-        headerConsola.setPadding(0, dp(6), 0, dp(4));
+        headerConsola.setPadding(0, dp(4), 0, dp(2));
 
-        TextView lblConsola = crearTexto("Consola Multi-Cuenta", "#F4F4F5", 12, true);
+        TextView lblConsola = crearTexto("Consola Multi-Cuenta", "#F4F4F5", 11.5f, true);
+        lblConsola.setOnClickListener(v -> toggleConsola());
         headerConsola.addView(lblConsola);
 
-        btnFoldConsola = crearBoton("▼", "#18181B", "#F4F4F5", 11, this::toggleConsola);
-        LinearLayout.LayoutParams lpFold = new LinearLayout.LayoutParams(dp(30), dp(26));
+        btnFoldConsola = crearBoton("▼", "#18181B", "#F4F4F5", 10, this::toggleConsola);
+        LinearLayout.LayoutParams lpFold = new LinearLayout.LayoutParams(dp(26), dp(22));
         lpFold.setMargins(dp(4), 0, 0, 0);
         headerConsola.addView(btnFoldConsola, lpFold);
 
-        View espaciadorConsola = new View(this);
-        headerConsola.addView(espaciadorConsola, new LinearLayout.LayoutParams(0, dp(1), 1f));
-
-        Button btnLimpiar = crearBoton("Limpiar", "#3F3F46", "#FFFFFF", 10, () -> txtConsola.setText(""));
-        LinearLayout.LayoutParams lpLimpiar = new LinearLayout.LayoutParams(dp(65), dp(26));
-        lpLimpiar.setMargins(0, 0, dp(4), 0);
-        headerConsola.addView(btnLimpiar, lpLimpiar);
-
-        Button btnGuardarLog = crearBoton("Guardar", "#3F3F46", "#FFFFFF", 10, this::copiarLogPortapapeles);
-        headerConsola.addView(btnGuardarLog, new LinearLayout.LayoutParams(dp(65), dp(26)));
         panelControlContainer.addView(headerConsola);
 
-        // Caja de Consola
+        // Contenedor de Consola con el botón minúsculo de "Limpiar" integrado en la esquina superior derecha
+        consoleWrapper = new FrameLayout(this);
         scrollConsola = new ScrollView(this);
         scrollConsola.setBackground(fondoRedondeado("#1E2022", 8));
         scrollConsola.setPadding(dp(8), dp(6), dp(8), dp(6));
@@ -743,7 +731,26 @@ public class MainActivity extends Activity {
         txtConsola.setTextSize(10.5f);
         txtConsola.setTypeface(Typeface.MONOSPACE);
         scrollConsola.addView(txtConsola);
-        panelControlContainer.addView(scrollConsola, new LinearLayout.LayoutParams(
+
+        consoleWrapper.addView(scrollConsola, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        TextView btnLimpiarCorner = new TextView(this);
+        btnLimpiarCorner.setText("Limpiar");
+        btnLimpiarCorner.setTextColor(Color.parseColor("#A1A1AA"));
+        btnLimpiarCorner.setTextSize(9f);
+        btnLimpiarCorner.setTypeface(null, Typeface.BOLD);
+        btnLimpiarCorner.setGravity(Gravity.CENTER);
+        btnLimpiarCorner.setPadding(dp(7), dp(2), dp(7), dp(2));
+        btnLimpiarCorner.setBackground(fondoRedondeadoConBorde("#27272A", "#3F3F46", 5, 1));
+        btnLimpiarCorner.setOnClickListener(v -> txtConsola.setText(""));
+
+        FrameLayout.LayoutParams lpLimpiarCorner = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.END);
+        lpLimpiarCorner.setMargins(0, dp(4), dp(6), 0);
+        consoleWrapper.addView(btnLimpiarCorner, lpLimpiarCorner);
+
+        panelControlContainer.addView(consoleWrapper, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         root.addView(panelControlContainer);
@@ -754,7 +761,7 @@ public class MainActivity extends Activity {
         webViewContainer.setBackground(fondoRedondeadoConBorde("#202124", "#2E3035", 12, 1));
         webViewContainer.setPadding(dp(2), dp(2), dp(2), dp(2));
 
-        // Barra de Pestañas Multi-Cuenta (Solo usuarios con círculo neón, sin C1/C2)
+        // Barra de Pestañas Multi-Cuenta (Solo nombres de usuario en gris, centrados y sin círculos)
         barraPestanasMulti = new LinearLayout(this);
         barraPestanasMulti.setOrientation(LinearLayout.HORIZONTAL);
         barraPestanasMulti.setGravity(Gravity.CENTER_VERTICAL);
@@ -762,13 +769,21 @@ public class MainActivity extends Activity {
         barraPestanasMulti.setBackgroundColor(Color.parseColor("#18191C"));
 
         btnTabMosaico = crearBotonConIcono("GRID", "Todas", "#0284C7", "#FFFFFF", 10, () -> cambiarSlotEnfocado(-1));
+        btnTabMosaico.setGravity(Gravity.CENTER);
+        btnTabMosaico.setSingleLine(true);
+        btnTabMosaico.setIncludeFontPadding(false);
         LinearLayout.LayoutParams lpTabM = new LinearLayout.LayoutParams(0, dp(26), 1.15f);
         lpTabM.setMargins(dp(2), 0, dp(2), 0);
         barraPestanasMulti.addView(btnTabMosaico, lpTabM);
 
         for (int i = 0; i < MAX_CUENTAS_SIMULTANEAS; i++) {
             final int idx = i;
-            Button bTab = crearBoton("", "#27272A", "#9CA3AF", 10, () -> cambiarSlotEnfocado(idx));
+            Button bTab = crearBoton("", "#27272A", "#A1A1AA", 10, () -> cambiarSlotEnfocado(idx));
+            bTab.setGravity(Gravity.CENTER);
+            bTab.setSingleLine(true);
+            bTab.setEllipsize(TextUtils.TruncateAt.END);
+            bTab.setIncludeFontPadding(false);
+            bTab.setPadding(dp(3), 0, dp(3), 0);
             sesiones[i].btnTabSelector = bTab;
             LinearLayout.LayoutParams lpT = new LinearLayout.LayoutParams(0, dp(26), 1f);
             lpT.setMargins(dp(2), 0, dp(2), 0);
@@ -1050,12 +1065,13 @@ public class MainActivity extends Activity {
             WebView wv = new WebView(this);
             wv.setBackgroundColor(Color.parseColor("#18181B"));
 
-            // Al tocar cualquier navegador en vista mosaico, la barra de URL pasa a mostrar/controlar esa cuenta
+            // Al tocar el navegador de una cuenta en el mosaico, la barra de URL pasa a mostrar la URL de esa cuenta
             wv.setOnTouchListener((View v, MotionEvent event) -> {
                 if (event.getAction() == MotionEvent.ACTION_DOWN) {
                     if (slotInspeccionadoUrl != sesion.slotIndex) {
                         slotInspeccionadoUrl = sesion.slotIndex;
                         sincronizarBarraUrlConSesionActiva();
+                        actualizarBotonesMandoSegunSeleccion();
                     }
                 }
                 return false;
@@ -1110,7 +1126,6 @@ public class MainActivity extends Activity {
                 @Override
                 public void doUpdateVisitedHistory(WebView view, String url, boolean isReload) {
                     super.doUpdateVisitedHistory(view, url, isReload);
-                    // Detecta cambios de URL tipo SPA (/lg, /int, etc.) en tiempo real
                     actualizarUrlDeSesion(sesion, url);
                 }
 
@@ -1177,15 +1192,27 @@ public class MainActivity extends Activity {
     }
 
     private void sincronizarBarraUrlConSesionActiva() {
-        SesionBot obj = obtenerSesionControlUrl();
-        if (obj != null && !edtUrlBar.hasFocus()) {
-            String urlVivo = (obj.webView != null && obj.webView.getUrl() != null && obj.webView.getUrl().startsWith("http"))
-                    ? obj.webView.getUrl() : obj.ultimaUrlValida;
-            if (urlVivo != null) {
-                edtUrlBar.setText(urlVivo);
-            }
+        final SesionBot obj = obtenerSesionControlUrl();
+        if (obj == null) return;
+
+        if (!edtUrlBar.hasFocus() && obj.ultimaUrlValida != null) {
+            edtUrlBar.setText(obj.ultimaUrlValida);
         }
-        actualizarEstilosIndicadoresNeon();
+
+        if (obj.webView != null) {
+            evaluarJS(obj, "return window.location.href;", raw -> {
+                if (raw != null && !raw.equals("null")) {
+                    String cleanUrl = raw.replace("\"", "").trim();
+                    if (cleanUrl.startsWith("http")) {
+                        obj.ultimaUrlValida = cleanUrl;
+                        SesionBot actual = obtenerSesionControlUrl();
+                        if (actual != null && actual.slotIndex == obj.slotIndex && !edtUrlBar.hasFocus()) {
+                            edtUrlBar.setText(cleanUrl);
+                        }
+                    }
+                }
+            });
+        }
     }
 
     private void configurarPerfilAisladoWebView(WebView wv, int slotIdx) {
@@ -1229,17 +1256,34 @@ public class MainActivity extends Activity {
         } catch (Throwable ignored) {}
     }
 
+    private boolean hayAlgunaCuentaCorriendo() {
+        for (SesionBot s : obtenerSesionesActivas()) {
+            if (s.estaCorriendo()) return true;
+        }
+        return false;
+    }
+
+    private int contarCuentasCorriendo() {
+        int c = 0;
+        for (SesionBot s : obtenerSesionesActivas()) {
+            if (s.estaCorriendo()) c++;
+        }
+        return c;
+    }
+
     /**
-     * Actualiza en tiempo real los círculos neón (rojo fijo si está detenido / verde neón titilando si está encendido)
-     * y cambia el color del usuario a gris (#9CA3AF) o verde (#4ADE80) sin mostrar C1, C2, etc.
+     * Actualiza:
+     * 1) Cabeceras de cada panel individual (con su círculo neón rojo/verde titilando y nombre en gris/verde).
+     * 2) Pestañas de arriba de la URL: SOLO el nombre de usuario centrado en color gris fijo (#A1A1AA), sin círculos y sin cambiar a verde.
      */
     private void actualizarEstilosIndicadoresNeon() {
         ArrayList<SesionBot> activas = obtenerSesionesActivas();
         int cantActivas = activas.isEmpty() ? 1 : activas.size();
+        int cantCorriendo = contarCuentasCorriendo();
 
         // Badge global arriba a la derecha
-        if (botActivo) {
-            ponerIconoYTexto(badgeEstado, crearCirculoNeon(true, pulsoNeon, 10), "VIGILANDO (" + activas.size() + ")");
+        if (cantCorriendo > 0) {
+            ponerIconoYTexto(badgeEstado, crearCirculoNeon(true, pulsoNeon, 10), "VIGILANDO (" + cantCorriendo + ")");
             badgeEstado.setTextColor(Color.parseColor("#4ADE80"));
             badgeEstado.setBackground(fondoRedondeado("#14532D", 8));
         } else {
@@ -1257,17 +1301,17 @@ public class MainActivity extends Activity {
             SesionBot s = sesiones[i];
             boolean corriendo = s.estaCorriendo();
             Drawable dotNeon = crearCirculoNeon(corriendo, pulsoNeon, 10);
-            String colorTextoUsuario = corriendo ? "#4ADE80" : "#9CA3AF";
+            String colorTextoPanel = corriendo ? "#4ADE80" : "#9CA3AF";
             String nombre = s.nombreMostrado();
 
-            // 1. Cabecera mini de cada tarjeta de banco: (Círculo Neón) usuario
+            // 1. Cabecera mini de cada panel abajo: conserva su círculo neón y texto gris/verde
             ponerIconoYTexto(s.lblTituloMini, dotNeon, nombre);
-            s.lblTituloMini.setTextColor(Color.parseColor(colorTextoUsuario));
+            s.lblTituloMini.setTextColor(Color.parseColor(colorTextoPanel));
 
-            // 2. Pestaña sobre la barra de URL: (Círculo Neón) usuario
-            Drawable dotTab = crearCirculoNeon(corriendo, pulsoNeon, 9);
-            ponerIconoYTexto(s.btnTabSelector, dotTab, nombre);
-            s.btnTabSelector.setTextColor(Color.parseColor(colorTextoUsuario));
+            // 2. Pestaña sobre la barra de URL: SOLO el nombre centrado en gris fijo (#A1A1AA), sin círculos ni parpadeo
+            s.btnTabSelector.setText(nombre);
+            s.btnTabSelector.setTextColor(Color.parseColor("#A1A1AA"));
+            s.btnTabSelector.setGravity(Gravity.CENTER);
             s.btnTabSelector.setVisibility(s.activa || (activas.isEmpty() && i == 0) ? View.VISIBLE : View.GONE);
 
             boolean tabSeleccionada = (slotEnfocado == i);
@@ -1276,6 +1320,56 @@ public class MainActivity extends Activity {
             } else {
                 s.btnTabSelector.setBackground(fondoRedondeado("#27272A", 6));
             }
+        }
+    }
+
+    /**
+     * Ajusta el estado de los botones INICIAR y DETENER según la pestaña seleccionada
+     * para poder encender o detener una cuenta individual sin afectar a las demás.
+     */
+    private void actualizarBotonesMandoSegunSeleccion() {
+        ArrayList<SesionBot> activas = obtenerSesionesActivas();
+        if (activas.isEmpty()) {
+            btnIniciar.setEnabled(true);
+            btnIniciar.setBackground(fondoRedondeado("#16A34A", 8));
+            ponerIconoYTexto(btnIniciar, crearIconoVectorial("PLAY", "#FFFFFF", 14), "INICIAR");
+
+            btnDetener.setEnabled(false);
+            btnDetener.setBackground(fondoRedondeado("#7F1D1D", 8));
+            ponerIconoYTexto(btnDetener, crearIconoVectorial("STOP", "#FCA5A5", 14), "DETENER");
+            return;
+        }
+
+        if (slotEnfocado >= 0 && slotEnfocado < MAX_CUENTAS_SIMULTANEAS && sesiones[slotEnfocado].activa) {
+            SesionBot sel = sesiones[slotEnfocado];
+            boolean corriendo = sel.estaCorriendo();
+
+            btnIniciar.setEnabled(!corriendo);
+            btnIniciar.setBackground(fondoRedondeado(corriendo ? "#14532D" : "#16A34A", 8));
+            ponerIconoYTexto(btnIniciar, crearIconoVectorial("PLAY", corriendo ? "#86EFAC" : "#FFFFFF", 14), "INICIAR");
+            btnIniciar.setTextColor(Color.parseColor(corriendo ? "#86EFAC" : "#FFFFFF"));
+
+            btnDetener.setEnabled(corriendo);
+            btnDetener.setBackground(fondoRedondeado(corriendo ? "#DC2626" : "#7F1D1D", 8));
+            ponerIconoYTexto(btnDetener, crearIconoVectorial("STOP", corriendo ? "#FFFFFF" : "#FCA5A5", 14), "DETENER");
+            btnDetener.setTextColor(Color.parseColor(corriendo ? "#FFFFFF" : "#FCA5A5"));
+        } else {
+            boolean algunaDetenida = false;
+            boolean algunaCorriendo = false;
+            for (SesionBot s : activas) {
+                if (s.estaCorriendo()) algunaCorriendo = true;
+                else algunaDetenida = true;
+            }
+
+            btnIniciar.setEnabled(algunaDetenida);
+            btnIniciar.setBackground(fondoRedondeado(algunaDetenida ? "#16A34A" : "#14532D", 8));
+            ponerIconoYTexto(btnIniciar, crearIconoVectorial("PLAY", algunaDetenida ? "#FFFFFF" : "#86EFAC", 14), "INICIAR");
+            btnIniciar.setTextColor(Color.parseColor(algunaDetenida ? "#FFFFFF" : "#86EFAC"));
+
+            btnDetener.setEnabled(algunaCorriendo);
+            btnDetener.setBackground(fondoRedondeado(algunaCorriendo ? "#DC2626" : "#7F1D1D", 8));
+            ponerIconoYTexto(btnDetener, crearIconoVectorial("STOP", algunaCorriendo ? "#FFFFFF" : "#FCA5A5", 14), "DETENER");
+            btnDetener.setTextColor(Color.parseColor(algunaCorriendo ? "#FFFFFF" : "#FCA5A5"));
         }
     }
 
@@ -1293,6 +1387,7 @@ public class MainActivity extends Activity {
         }
 
         actualizarEstilosIndicadoresNeon();
+        actualizarBotonesMandoSegunSeleccion();
         sincronizarBarraUrlConSesionActiva();
 
         if (slotEnfocado >= 0 && slotEnfocado < MAX_CUENTAS_SIMULTANEAS) {
@@ -1493,7 +1588,7 @@ public class MainActivity extends Activity {
     }
 
     // =========================================================================================
-    // CONTROL DE RED INDIVIDUAL POR NAVEGADOR (SIN AFECTAR A LAS DEMÁS CUENTAS)
+    // CONTROL DE RED INDIVIDUAL POR NAVEGADOR
     // =========================================================================================
     @SuppressWarnings("deprecation")
     private boolean hayInternetDisponible() {
@@ -1555,10 +1650,6 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {}
     }
 
-    /**
-     * Corta y reconecta únicamente el flujo de carga del navegador de la cuenta indicada,
-     * sin tocar ni interrumpir la conexión de las otras cuentas.
-     */
     private void reiniciarConexionIndividual(final SesionBot s, final boolean esManual) {
         if (s == null || s.microCortePropio) return;
         s.microCortePropio = true;
@@ -1580,7 +1671,7 @@ public class MainActivity extends Activity {
                 } catch (Exception ignored) {}
             }
             s.microCortePropio = false;
-            if (esManual && botActivo && s.estadoActual == EstadoBot.CERRANDO_SESION) {
+            if (esManual && s.estaCorriendo() && s.estadoActual == EstadoBot.CERRANDO_SESION) {
                 s.accionEnCurso = false;
             }
             logCuenta(s, "[RED] Conexion interna restablecida.");
@@ -1602,13 +1693,13 @@ public class MainActivity extends Activity {
             webViewContainer.setVisibility(View.VISIBLE);
 
             if (consolaVisible) {
-                scrollConsola.setVisibility(View.VISIBLE);
+                consoleWrapper.setVisibility(View.VISIBLE);
                 LinearLayout.LayoutParams lpPanel = new LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, 0, 1.02f);
                 lpPanel.setMargins(dp(8), dp(2), dp(8), dp(4));
                 panelControlContainer.setLayoutParams(lpPanel);
             } else {
-                scrollConsola.setVisibility(View.GONE);
+                consoleWrapper.setVisibility(View.GONE);
                 LinearLayout.LayoutParams lpPanel = new LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 0f);
                 lpPanel.setMargins(dp(8), dp(2), dp(8), dp(4));
@@ -1623,7 +1714,7 @@ public class MainActivity extends Activity {
         } else if (modoVistaActual == 1) {
             panelControlContainer.setVisibility(View.VISIBLE);
             webViewContainer.setVisibility(View.GONE);
-            scrollConsola.setVisibility(consolaVisible ? View.VISIBLE : View.GONE);
+            consoleWrapper.setVisibility(consolaVisible ? View.VISIBLE : View.GONE);
 
             LinearLayout.LayoutParams lpPanel = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
@@ -1667,16 +1758,6 @@ public class MainActivity extends Activity {
         actualizarDistribucionAlturas();
     }
 
-    private void copiarLogPortapapeles() {
-        String logTxt = txtConsola.getText().toString().trim();
-        if (logTxt.isEmpty()) return;
-        ClipboardManager cb = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-        if (cb != null) {
-            cb.setPrimaryClip(ClipData.newPlainText("Log Vigilante BT", logTxt));
-            Toast.makeText(this, "Log copiado al portapapeles", Toast.LENGTH_SHORT).show();
-        }
-    }
-
     private TextView crearTexto(String texto, String colorHex, float sizeSp, boolean bold) {
         TextView tv = new TextView(this);
         tv.setText(texto);
@@ -1707,7 +1788,7 @@ public class MainActivity extends Activity {
     }
 
     // =========================================================================================
-    // GESTIÓN DE CUENTAS (SOLO MUESTRA CANTIDAD DE CUENTAS ACTIVAS ARRIBA, SIN NOMBRES)
+    // GESTIÓN DE CUENTAS Y BOTÓN DE OCULTAR CONTRASEÑA REPARADO
     // =========================================================================================
     private void togglePrivacidadUsuario() {
         usuarioOculto = !usuarioOculto;
@@ -1791,13 +1872,20 @@ public class MainActivity extends Activity {
         reorganizarVistasNavegadores();
     }
 
+    /**
+     * Alterna entre mostrar y ocultar el texto de un EditText usando TransformationMethod
+     * y TYPE_MASK_VARIATION para que funcione de forma infinita sin bloquearse en el segundo toque.
+     */
     private void toggleCampoOjo(EditText edt, Button btn) {
-        if ((edt.getInputType() & InputType.TYPE_TEXT_VARIATION_PASSWORD) != 0) {
+        boolean estaOculto = (edt.getTransformationMethod() instanceof PasswordTransformationMethod);
+        if (estaOculto) {
             edt.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+            edt.setTransformationMethod(HideReturnsTransformationMethod.getInstance());
             btn.setBackground(fondoRedondeado("#52525B", 6));
             ponerIconoYTexto(btn, crearIconoVectorial("EYE", "#F4F4F5", 14), "");
         } else {
             edt.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+            edt.setTransformationMethod(PasswordTransformationMethod.getInstance());
             btn.setBackground(fondoRedondeado("#27272A", 6));
             ponerIconoYTexto(btn, crearIconoVectorial("EYE_OFF", "#F4F4F5", 14), "");
         }
@@ -1815,14 +1903,14 @@ public class MainActivity extends Activity {
         layout.setBackgroundColor(Color.parseColor("#18181B"));
         scrollPopup.addView(layout);
 
-        TextView titulo = crearTexto("Gestion de Cuentas (Hasta 4 Simultaneas)", "#F4F4F5", 15, true);
+        TextView titulo = crearTexto("Gestión de Cuentas (Hasta 4 Simultáneas)", "#F4F4F5", 15, true);
         titulo.setPadding(0, 0, 0, dp(8));
         layout.addView(titulo);
 
         final JSONObject cuentasObj = obtenerCuentasGuardadas();
         final ArrayList<String> activasSeleccionadas = obtenerNombresCuentasActivasPrefs();
 
-        TextView subActivas = crearTexto("1. Marca las cuentas activas (Max. 4):", "#38BDF8", 11, true);
+        TextView subActivas = crearTexto("1. Marca las cuentas activas (Máx. 4):", "#38BDF8", 11, true);
         subActivas.setPadding(0, 0, 0, dp(4));
         layout.addView(subActivas);
 
@@ -1852,7 +1940,7 @@ public class MainActivity extends Activity {
                     if (isChecked) {
                         if (activasSeleccionadas.size() >= MAX_CUENTAS_SIMULTANEAS && !activasSeleccionadas.contains(usrKey)) {
                             buttonView.setChecked(false);
-                            Toast.makeText(this, "Maximo 4 cuentas simultaneas permitidas", Toast.LENGTH_SHORT).show();
+                            Toast.makeText(this, "Máximo 4 cuentas simultáneas permitidas", Toast.LENGTH_SHORT).show();
                         } else if (!activasSeleccionadas.contains(usrKey)) {
                             activasSeleccionadas.add(usrKey);
                         }
@@ -1863,7 +1951,7 @@ public class MainActivity extends Activity {
                 contenedorChecks.addView(cb);
             }
             if (!hayAlguna) {
-                TextView tvVacio = crearTexto("No hay cuentas guardadas todavia. Agrega una abajo.", "#A1A1AA", 11, false);
+                TextView tvVacio = crearTexto("No hay cuentas guardadas todavía. Agrega una abajo.", "#A1A1AA", 11, false);
                 contenedorChecks.addView(tvVacio);
             }
         };
@@ -1909,10 +1997,11 @@ public class MainActivity extends Activity {
         });
 
         final EditText edtCedula = new EditText(this);
-        edtCedula.setHint("Cedula");
+        edtCedula.setHint("Cédula");
         edtCedula.setHintTextColor(Color.parseColor("#94A3B8"));
         edtCedula.setTextColor(Color.parseColor("#F4F4F5"));
         edtCedula.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+        edtCedula.setTransformationMethod(HideReturnsTransformationMethod.getInstance());
         edtCedula.setBackground(fondoRedondeado("#27272A", 6));
         edtCedula.setPadding(dp(10), dp(6), dp(10), dp(6));
 
@@ -1936,6 +2025,7 @@ public class MainActivity extends Activity {
         edtUsuario.setHintTextColor(Color.parseColor("#94A3B8"));
         edtUsuario.setTextColor(Color.parseColor("#F4F4F5"));
         edtUsuario.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+        edtUsuario.setTransformationMethod(HideReturnsTransformationMethod.getInstance());
         edtUsuario.setBackground(fondoRedondeado("#27272A", 6));
         edtUsuario.setPadding(dp(10), dp(6), dp(10), dp(6));
 
@@ -1950,10 +2040,11 @@ public class MainActivity extends Activity {
         filaClv.setPadding(0, dp(4), 0, dp(8));
 
         final EditText edtClave = new EditText(this);
-        edtClave.setHint("Contrasena");
+        edtClave.setHint("Contraseña");
         edtClave.setHintTextColor(Color.parseColor("#94A3B8"));
         edtClave.setTextColor(Color.parseColor("#F4F4F5"));
         edtClave.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        edtClave.setTransformationMethod(PasswordTransformationMethod.getInstance());
         edtClave.setBackground(fondoRedondeado("#27272A", 6));
         edtClave.setPadding(dp(10), dp(6), dp(10), dp(6));
 
@@ -2018,7 +2109,7 @@ public class MainActivity extends Activity {
             String p = edtClave.getText().toString().trim();
             String t = tipoSeleccionado[0];
             if (u.isEmpty() || c.isEmpty() || p.isEmpty()) {
-                Toast.makeText(this, "Completa Cedula, Usuario y Contrasena", Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, "Completa Cédula, Usuario y Contraseña", Toast.LENGTH_SHORT).show();
                 return;
             }
             try {
@@ -2073,7 +2164,6 @@ public class MainActivity extends Activity {
 
     private void log(String msg) {
         String hora = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
-        // Limpieza total de cualquier carácter de emoji
         final String limpio = msg.replaceAll("[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]|[\\u2600-\\u27BF]", "").trim();
         runOnUiThread(() -> {
             txtConsola.append(hora + "  " + limpio + "\n");
@@ -2114,6 +2204,7 @@ public class MainActivity extends Activity {
             }
         }
         actualizarEstilosIndicadoresNeon();
+        actualizarBotonesMandoSegunSeleccion();
     }
 
     private String nombreCortoEstado(EstadoBot st) {
@@ -2141,52 +2232,72 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void iniciarBot() {
+    // =========================================================================================
+    // ENCENDIDO Y DETENCIÓN INDIVIDUAL O GLOBAL SEGÚN EL PANEL SELECCIONADO
+    // =========================================================================================
+    private void accionBotonIniciar() {
         ArrayList<SesionBot> activas = obtenerSesionesActivas();
         if (activas.isEmpty()) {
             log("[ERROR] Selecciona al menos 1 cuenta activa antes de iniciar.");
             mostrarPopupCuenta();
             return;
         }
-        botActivo = true;
-        yaAvisoApertura = false;
 
-        for (SesionBot s : activas) {
-            s.vueltaActual = 0;
-            s.intentoLogout = 0;
-            s.tiempoInicioSesionMs = 0;
-            s.compraCompletada = false;
-            cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
+        if (slotEnfocado >= 0 && slotEnfocado < MAX_CUENTAS_SIMULTANEAS && sesiones[slotEnfocado].activa) {
+            // Inicia únicamente la cuenta seleccionada
+            SesionBot s = sesiones[slotEnfocado];
+            iniciarSesionIndividual(s);
+            logCuenta(s, "[SISTEMA] Cuenta iniciada individualmente.");
+        } else {
+            // Modo Todas: inicia todas las cuentas activas que estén detenidas sin reiniciar las que ya están corriendo
+            int iniciadas = 0;
+            for (SesionBot s : activas) {
+                if (!s.estaCorriendo()) {
+                    iniciarSesionIndividual(s);
+                    iniciadas++;
+                }
+            }
+            log("[SISTEMA] Vigilante iniciado en " + iniciadas + " cuenta(s).");
         }
-
-        btnIniciar.setEnabled(false);
-        btnIniciar.setBackground(fondoRedondeado("#14532D", 8));
-        btnDetener.setEnabled(true);
-        btnDetener.setBackground(fondoRedondeado("#DC2626", 8));
-
-        reorganizarVistasNavegadores();
-        log("[SISTEMA] Vigilante iniciado con " + activas.size() + " cuenta(s) activa(s).");
-    }
-
-    private void detenerBot() {
-        botActivo = false;
-        for (int i = 0; i < MAX_CUENTAS_SIMULTANEAS; i++) {
-            cambiarEstado(sesiones[i], EstadoBot.DETENIDO);
-            sesiones[i].tiempoInicioSesionMs = 0;
-        }
-        lblReloginVal.setText(minutosRelogin + " min (--:--)");
-
-        btnIniciar.setEnabled(true);
-        btnIniciar.setBackground(fondoRedondeado("#16A34A", 8));
-        btnDetener.setEnabled(false);
-        btnDetener.setBackground(fondoRedondeado("#7F1D1D", 8));
-
         actualizarEstilosIndicadoresNeon();
-        log("[SISTEMA] Vigilante detenido.");
+        actualizarBotonesMandoSegunSeleccion();
     }
 
-    private void recargarManual() {
-        forzarRecargaCuentaSeleccionada();
+    private void iniciarSesionIndividual(SesionBot s) {
+        s.corriendo = true;
+        s.vueltaActual = 0;
+        s.intentoLogout = 0;
+        s.tiempoInicioSesionMs = 0;
+        s.compraCompletada = false;
+        cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
+    }
+
+    private void accionBotonDetener() {
+        ArrayList<SesionBot> activas = obtenerSesionesActivas();
+        if (slotEnfocado >= 0 && slotEnfocado < MAX_CUENTAS_SIMULTANEAS && sesiones[slotEnfocado].activa) {
+            // Detiene únicamente la cuenta seleccionada, dejando las demás funcionando
+            SesionBot s = sesiones[slotEnfocado];
+            detenerSesionIndividual(s);
+            logCuenta(s, "[SISTEMA] Cuenta detenida individualmente. Las demas siguen operando.");
+        } else {
+            // Modo Todas: detiene todas las cuentas
+            for (SesionBot s : activas) {
+                detenerSesionIndividual(s);
+            }
+            lblReloginVal.setText(minutosRelogin + " min (--:--)");
+            log("[SISTEMA] Todas las cuentas han sido detenidas.");
+        }
+        actualizarEstilosIndicadoresNeon();
+        actualizarBotonesMandoSegunSeleccion();
+    }
+
+    private void detenerSesionIndividual(SesionBot s) {
+        s.corriendo = false;
+        s.tiempoInicioSesionMs = 0;
+        if (s.webView != null) {
+            s.webView.stopLoading();
+        }
+        cambiarEstado(s, EstadoBot.DETENIDO);
     }
 
     private void evaluarJS(SesionBot s, String script, ValueCallback<String> callback) {
@@ -2198,20 +2309,30 @@ public class MainActivity extends Activity {
         handler.postDelayed(new Runnable() {
             @Override
             public void run() {
-                // Alterna el pulso neón verde para las cuentas encendidas
                 pulsoNeon = !pulsoNeon;
                 actualizarEstilosIndicadoresNeon();
 
                 ArrayList<SesionBot> activas = obtenerSesionesActivas();
                 for (SesionBot s : activas) {
                     aplicarZoomASesion(s);
+                    // Mantiene actualizada la URL real de cada cuenta incluso cuando está detenida
+                    if (!s.estaCorriendo() && s.webView != null) {
+                        evaluarJS(s, "return window.location.href;", raw -> {
+                            if (raw != null && !raw.equals("null")) {
+                                String cleanUrl = raw.replace("\"", "").trim();
+                                if (cleanUrl.startsWith("http")) {
+                                    actualizarUrlDeSesion(s, cleanUrl);
+                                }
+                            }
+                        });
+                    }
                 }
 
-                if (botActivo) {
+                if (hayAlgunaCuentaCorriendo()) {
                     verificarTiemposDeSesionIndependientes(activas);
                     if (hayInternetDisponible()) {
                         for (SesionBot s : activas) {
-                            if (!s.compraCompletada && !s.microCortePropio && s.estadoActual != EstadoBot.DETENIDO) {
+                            if (s.estaCorriendo() && !s.microCortePropio) {
                                 ejecutarPasoMaquinaEstados(s);
                             }
                         }
@@ -2221,23 +2342,21 @@ public class MainActivity extends Activity {
                             s.tiempoEstadoMs = ahora;
                         }
                     }
+                } else {
+                    lblReloginVal.setText(minutosRelogin + " min (--:--)");
                 }
                 handler.postDelayed(this, 600);
             }
         }, 600);
     }
 
-    /**
-     * Cada cuenta evalúa su propio tiempo de sesión y cierra su sesión de inmediato
-     * sin esperar a las demás cuentas.
-     */
     private void verificarTiemposDeSesionIndependientes(ArrayList<SesionBot> activas) {
         long ahora = System.currentTimeMillis();
         long totalSeg = minutosRelogin * 60L;
         long menorRestante = -1;
 
         for (SesionBot s : activas) {
-            if (s.compraCompletada || s.estadoActual == EstadoBot.DETENIDO) continue;
+            if (!s.estaCorriendo()) continue;
 
             if (s.tiempoInicioSesionMs > 0 && s.estadoActual == EstadoBot.VIGILANDO) {
                 long transcurridoSeg = (ahora - s.tiempoInicioSesionMs) / 1000;
@@ -2304,7 +2423,7 @@ public class MainActivity extends Activity {
                 "});";
 
         evaluarJS(sesion, jsInspector, raw -> {
-            if (!botActivo || raw == null || raw.equals("null")) return;
+            if (!sesion.estaCorriendo() || raw == null || raw.equals("null")) return;
             try {
                 String clean = raw;
                 if (clean.startsWith("\"") && clean.endsWith("\"")) {
@@ -2346,6 +2465,8 @@ public class MainActivity extends Activity {
             boolean visOrd, boolean visModalLogout, boolean hayInconv, boolean hayExito,
             boolean haySinCupo, boolean haySesionActivaErr
     ) {
+        if (!s.estaCorriendo()) return;
+
         String cedSafe = s.cedula.replace("\\", "\\\\").replace("'", "\\'");
         String usrSafe = s.usuario.replace("\\", "\\\\").replace("'", "\\'");
         String clvSafe = s.contrasena.replace("\\", "\\\\").replace("'", "\\'");
@@ -2631,6 +2752,7 @@ public class MainActivity extends Activity {
                     logCuenta(s, "[EXITO] ORDEN REGISTRADA CON EXITO");
                     sonarAlarma(true);
                     s.compraCompletada = true;
+                    s.corriendo = false;
                     cambiarEstado(s, EstadoBot.DETENIDO);
                     verificarSiTodasCompraron();
                     return;
@@ -2673,7 +2795,6 @@ public class MainActivity extends Activity {
                     ejecutarScriptLogout(s);
                 } else if (ahora - s.tiempoEstadoMs > 5200) {
                     if (s.intentoLogout % 2 == 0) {
-                        // Reconecta únicamente el navegador de esta cuenta sin tocar las demás
                         cambiarEstado(s, EstadoBot.REINICIANDO_RED);
                         reiniciarConexionIndividual(s, false);
                     } else {
@@ -2695,7 +2816,8 @@ public class MainActivity extends Activity {
             if (!s.compraCompletada) return;
         }
         log("[EXITO] TODAS LAS CUENTAS ACTIVAS COMPRARON CON EXITO");
-        detenerBot();
+        actualizarEstilosIndicadoresNeon();
+        actualizarBotonesMandoSegunSeleccion();
     }
 
     private void ejecutarScriptLogout(SesionBot s) {
