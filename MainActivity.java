@@ -12,8 +12,11 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.graphics.RadialGradient;
 import android.graphics.RectF;
+import android.graphics.Shader;
 import android.graphics.Typeface;
+import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.ClipDrawable;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
@@ -29,9 +32,13 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.InputType;
+import android.text.SpannableString;
+import android.text.Spanned;
+import android.text.style.ImageSpan;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
@@ -86,31 +93,33 @@ public class MainActivity extends Activity {
     private LinearLayout filaMosaicoSup, filaMosaicoInf;
 
     private EditText edtUrlBar;
-    private TextView btnChromeBack, btnChromeReload, btnChromeZoom, btnChromeNet;
+    private ImageView btnChromeBack, btnChromeReload, btnChromeNet, iconLock;
+    private TextView btnChromeZoom;
     private ProgressBar chromeProgressBar;
     private LinearLayout barraZoomDesplegable;
     private TextView lblZoomActualBarra;
 
-    private TextView badgeEstado, lblRefrescoVal, lblReloginVal, lblTimerRelogin, txtConsola;
+    private TextView badgeEstado, lblRefrescoVal, lblReloginVal, txtConsola;
     private ScrollView scrollConsola;
     private Button btnCuenta, btnOjoPrivacidad, btnIniciar, btnRecargar, btnDetener, btnFoldConsola;
     private Button btnVistaDividida, btnVistaPanel, btnVistaWeb;
-    private ProgressBar progressRelogin;
 
     private boolean usuarioOculto = false;
     private boolean consolaVisible = true;
     private int modoVistaActual = 0;
 
-    // -1 = Vista Mosaico (todas las activas a la vez), 0..3 = Pestaña individual C1..C4
+    // -1 = Vista Mosaico (todas las activas a la vez), 0..3 = Pestaña individual por usuario
     private int slotEnfocado = -1;
+    // Índice de la cuenta cuya URL se inspecciona actualmente cuando está en modo Mosaico
+    private int slotInspeccionadoUrl = 0;
 
     private int intervaloRefresco = 3;
     private int minutosRelogin = 10;
     private int nivelZoom = 70;
 
     private boolean botActivo = false;
+    private boolean pulsoNeon = false;
     private boolean yaAvisoApertura = false;
-    private boolean microCorteEnCurso = false;
     private boolean avisoSinInternetMostrado = false;
     private ConnectivityManager.NetworkCallback networkCallback;
 
@@ -132,13 +141,10 @@ public class MainActivity extends Activity {
         ESPERANDO_ESTABILIZAR_FORM,
         LLENANDO_COMPRA,
         COMPRANDO,
-        ESPERANDO_SINCRONIZAR_CIERRE,
         CERRANDO_SESION,
-        REINICIANDO_RED,
-        ESPERANDO_SINCRONIZAR_LOGIN
+        REINICIANDO_RED
     }
 
-    // Clase que representa cada una de las 4 instancias simultáneas
     private class SesionBot {
         final int slotIndex;
         boolean activa = false;
@@ -159,6 +165,7 @@ public class MainActivity extends Activity {
         long tiempoInicioSesionMs = 0;
         long tiempoEstadoMs = 0;
         boolean accionEnCurso = false;
+        boolean microCortePropio = false;
         int vueltaActual = 0;
         int intentoLogout = 0;
         boolean compraCompletada = false;
@@ -168,11 +175,15 @@ public class MainActivity extends Activity {
             this.slotIndex = idx;
         }
 
-        String etiquetaCorta() {
-            if (usuario.isEmpty()) return "C" + (slotIndex + 1);
-            if (usuarioOculto) return "C" + (slotIndex + 1) + ":****";
-            String u = usuario.length() > 8 ? usuario.substring(0, 8) : usuario;
-            return "C" + (slotIndex + 1) + ":" + u;
+        // Muestra únicamente el usuario, sin C1, C2, etc.
+        String nombreMostrado() {
+            if (usuario == null || usuario.isEmpty()) return "Sin cuenta";
+            if (usuarioOculto) return "********";
+            return usuario;
+        }
+
+        boolean estaCorriendo() {
+            return botActivo && activa && !compraCompletada && estadoActual != EstadoBot.DETENIDO;
         }
     }
 
@@ -181,6 +192,24 @@ public class MainActivity extends Activity {
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private SharedPreferences prefs;
+
+    // Span para alinear perfectamente los iconos vectoriales y puntos neón con el texto
+    private static class CenteredImageSpan extends ImageSpan {
+        CenteredImageSpan(Drawable d) {
+            super(d);
+        }
+
+        @Override
+        public void draw(Canvas canvas, CharSequence text, int start, int end, float x, int top, int y, int bottom, Paint paint) {
+            Drawable b = getDrawable();
+            canvas.save();
+            Paint.FontMetricsInt fm = paint.getFontMetricsInt();
+            int transY = y + (fm.descent + fm.ascent - b.getBounds().bottom) / 2;
+            canvas.translate(x, transY);
+            b.draw(canvas);
+            canvas.restore();
+        }
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -250,6 +279,240 @@ public class MainActivity extends Activity {
         gd.setCornerRadius(dp(radioDp));
         gd.setStroke(dp(grosorBordeDp), Color.parseColor(bordeHex));
         return gd;
+    }
+
+    // =========================================================================================
+    // MOTOR DE ICONOS VECTORIALES PROFESIONALES Y LUCES LED NEÓN (SIN EMOJIS)
+    // =========================================================================================
+    private Drawable crearCirculoNeon(boolean encendido, boolean faseBrillante, int sizeDp) {
+        int s = dp(sizeDp);
+        Bitmap bmp = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(bmp);
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        float cx = s / 2f;
+        float cy = s / 2f;
+        float rMax = s / 2f;
+
+        if (!encendido) {
+            // Círculo en Rojo Brillante Neón fijo
+            RadialGradient glow = new RadialGradient(
+                    cx, cy, rMax,
+                    new int[]{Color.parseColor("#FF1744"), Color.parseColor("#88FF1744"), Color.TRANSPARENT},
+                    new float[]{0.25f, 0.65f, 1.0f},
+                    Shader.TileMode.CLAMP
+            );
+            p.setShader(glow);
+            c.drawCircle(cx, cy, rMax, p);
+
+            p.setShader(null);
+            p.setColor(Color.parseColor("#FF1744"));
+            c.drawCircle(cx, cy, rMax * 0.52f, p);
+
+            p.setColor(Color.parseColor("#FF8A80"));
+            c.drawCircle(cx - rMax * 0.12f, cy - rMax * 0.12f, rMax * 0.16f, p);
+        } else {
+            // Círculo en Verde Neón Brillante Titilando
+            if (faseBrillante) {
+                RadialGradient glow = new RadialGradient(
+                        cx, cy, rMax,
+                        new int[]{Color.parseColor("#00FF66"), Color.parseColor("#9900FF66"), Color.TRANSPARENT},
+                        new float[]{0.30f, 0.72f, 1.0f},
+                        Shader.TileMode.CLAMP
+                );
+                p.setShader(glow);
+                c.drawCircle(cx, cy, rMax, p);
+
+                p.setShader(null);
+                p.setColor(Color.parseColor("#00FF66"));
+                c.drawCircle(cx, cy, rMax * 0.55f, p);
+
+                p.setColor(Color.parseColor("#CCFF90"));
+                c.drawCircle(cx - rMax * 0.12f, cy - rMax * 0.12f, rMax * 0.18f, p);
+            } else {
+                RadialGradient glowDim = new RadialGradient(
+                        cx, cy, rMax,
+                        new int[]{Color.parseColor("#1B5E20"), Color.parseColor("#3300E676"), Color.TRANSPARENT},
+                        new float[]{0.2f, 0.55f, 1.0f},
+                        Shader.TileMode.CLAMP
+                );
+                p.setShader(glowDim);
+                c.drawCircle(cx, cy, rMax * 0.85f, p);
+
+                p.setShader(null);
+                p.setColor(Color.parseColor("#00C853"));
+                p.setAlpha(115);
+                c.drawCircle(cx, cy, rMax * 0.44f, p);
+            }
+        }
+
+        BitmapDrawable bd = new BitmapDrawable(getResources(), bmp);
+        bd.setBounds(0, 0, s, s);
+        return bd;
+    }
+
+    private Drawable crearIconoVectorial(String tipo, String colorHex, int sizeDp) {
+        int s = dp(sizeDp);
+        Bitmap bmp = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(bmp);
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        int col = Color.parseColor(colorHex);
+        p.setColor(col);
+        float st = Math.max(2f, s * 0.11f);
+        p.setStrokeWidth(st);
+        p.setStrokeCap(Paint.Cap.ROUND);
+        p.setStrokeJoin(Paint.Join.ROUND);
+
+        switch (tipo) {
+            case "DIVIDIDO": {
+                p.setStyle(Paint.Style.STROKE);
+                RectF r = new RectF(s * 0.15f, s * 0.15f, s * 0.85f, s * 0.85f);
+                c.drawRoundRect(r, s * 0.14f, s * 0.14f, p);
+                c.drawLine(s * 0.15f, s * 0.5f, s * 0.85f, s * 0.5f, p);
+                break;
+            }
+            case "PANEL": {
+                p.setStyle(Paint.Style.STROKE);
+                c.drawLine(s * 0.15f, s * 0.32f, s * 0.85f, s * 0.32f, p);
+                c.drawLine(s * 0.15f, s * 0.68f, s * 0.85f, s * 0.68f, p);
+                p.setStyle(Paint.Style.FILL);
+                c.drawCircle(s * 0.38f, s * 0.32f, s * 0.13f, p);
+                c.drawCircle(s * 0.65f, s * 0.68f, s * 0.13f, p);
+                break;
+            }
+            case "GRID": {
+                p.setStyle(Paint.Style.STROKE);
+                float g1 = s * 0.15f, g2 = s * 0.44f, g3 = s * 0.56f, g4 = s * 0.85f;
+                c.drawRoundRect(new RectF(g1, g1, g2, g2), s * 0.06f, s * 0.06f, p);
+                c.drawRoundRect(new RectF(g3, g1, g4, g2), s * 0.06f, s * 0.06f, p);
+                c.drawRoundRect(new RectF(g1, g3, g2, g4), s * 0.06f, s * 0.06f, p);
+                c.drawRoundRect(new RectF(g3, g3, g4, g4), s * 0.06f, s * 0.06f, p);
+                break;
+            }
+            case "USERS": {
+                p.setStyle(Paint.Style.STROKE);
+                c.drawCircle(s * 0.38f, s * 0.34f, s * 0.15f, p);
+                Path arc1 = new Path();
+                arc1.addArc(new RectF(s * 0.14f, s * 0.55f, s * 0.62f, s * 0.95f), 180, 180);
+                c.drawPath(arc1, p);
+                c.drawCircle(s * 0.68f, s * 0.36f, s * 0.12f, p);
+                Path arc2 = new Path();
+                arc2.addArc(new RectF(s * 0.50f, s * 0.58f, s * 0.88f, s * 0.95f), 200, 160);
+                c.drawPath(arc2, p);
+                break;
+            }
+            case "EYE": {
+                p.setStyle(Paint.Style.STROKE);
+                Path eye = new Path();
+                eye.moveTo(s * 0.10f, s * 0.50f);
+                eye.quadTo(s * 0.50f, s * 0.15f, s * 0.90f, s * 0.50f);
+                eye.quadTo(s * 0.50f, s * 0.85f, s * 0.10f, s * 0.50f);
+                c.drawPath(eye, p);
+                p.setStyle(Paint.Style.FILL);
+                c.drawCircle(s * 0.50f, s * 0.50f, s * 0.14f, p);
+                break;
+            }
+            case "EYE_OFF": {
+                p.setStyle(Paint.Style.STROKE);
+                Path eye = new Path();
+                eye.moveTo(s * 0.10f, s * 0.50f);
+                eye.quadTo(s * 0.50f, s * 0.15f, s * 0.90f, s * 0.50f);
+                eye.quadTo(s * 0.50f, s * 0.85f, s * 0.10f, s * 0.50f);
+                c.drawPath(eye, p);
+                c.drawLine(s * 0.18f, s * 0.18f, s * 0.82f, s * 0.82f, p);
+                break;
+            }
+            case "PLAY": {
+                p.setStyle(Paint.Style.FILL);
+                Path play = new Path();
+                play.moveTo(s * 0.25f, s * 0.18f);
+                play.lineTo(s * 0.82f, s * 0.50f);
+                play.lineTo(s * 0.25f, s * 0.82f);
+                play.close();
+                c.drawPath(play, p);
+                break;
+            }
+            case "RELOAD": {
+                p.setStyle(Paint.Style.STROKE);
+                RectF oval = new RectF(s * 0.18f, s * 0.18f, s * 0.82f, s * 0.82f);
+                c.drawArc(oval, -35, 290, false, p);
+                Path arr = new Path();
+                arr.moveTo(s * 0.82f, s * 0.14f);
+                arr.lineTo(s * 0.82f, s * 0.38f);
+                arr.lineTo(s * 0.58f, s * 0.38f);
+                c.drawPath(arr, p);
+                break;
+            }
+            case "STOP": {
+                p.setStyle(Paint.Style.FILL);
+                RectF r = new RectF(s * 0.22f, s * 0.22f, s * 0.78f, s * 0.78f);
+                c.drawRoundRect(r, s * 0.12f, s * 0.12f, p);
+                break;
+            }
+            case "BACK": {
+                p.setStyle(Paint.Style.STROKE);
+                c.drawLine(s * 0.80f, s * 0.50f, s * 0.20f, s * 0.50f, p);
+                c.drawLine(s * 0.45f, s * 0.25f, s * 0.20f, s * 0.50f, p);
+                c.drawLine(s * 0.45f, s * 0.75f, s * 0.20f, s * 0.50f, p);
+                break;
+            }
+            case "LOCK": {
+                p.setStyle(Paint.Style.STROKE);
+                c.drawRoundRect(new RectF(s * 0.22f, s * 0.46f, s * 0.78f, s * 0.86f), s * 0.1f, s * 0.1f, p);
+                c.drawArc(new RectF(s * 0.32f, s * 0.16f, s * 0.68f, s * 0.56f), 180, 180, false, p);
+                break;
+            }
+            case "SIGNAL": {
+                p.setStyle(Paint.Style.FILL);
+                float wBar = s * 0.12f;
+                c.drawRoundRect(new RectF(s * 0.14f, s * 0.65f, s * 0.14f + wBar, s * 0.85f), 2f, 2f, p);
+                c.drawRoundRect(new RectF(s * 0.34f, s * 0.50f, s * 0.34f + wBar, s * 0.85f), 2f, 2f, p);
+                c.drawRoundRect(new RectF(s * 0.54f, s * 0.34f, s * 0.54f + wBar, s * 0.85f), 2f, 2f, p);
+                c.drawRoundRect(new RectF(s * 0.74f, s * 0.18f, s * 0.74f + wBar, s * 0.85f), 2f, 2f, p);
+                break;
+            }
+            case "PLUS": {
+                p.setStyle(Paint.Style.STROKE);
+                c.drawLine(s * 0.50f, s * 0.20f, s * 0.50f, s * 0.80f, p);
+                c.drawLine(s * 0.20f, s * 0.50f, s * 0.80f, s * 0.50f, p);
+                break;
+            }
+            case "MINUS": {
+                p.setStyle(Paint.Style.STROKE);
+                c.drawLine(s * 0.20f, s * 0.50f, s * 0.80f, s * 0.50f, p);
+                break;
+            }
+            case "CLOSE": {
+                p.setStyle(Paint.Style.STROKE);
+                c.drawLine(s * 0.25f, s * 0.25f, s * 0.75f, s * 0.75f, p);
+                c.drawLine(s * 0.75f, s * 0.25f, s * 0.25f, s * 0.75f, p);
+                break;
+            }
+            case "CHECK": {
+                p.setStyle(Paint.Style.STROKE);
+                Path chk = new Path();
+                chk.moveTo(s * 0.18f, s * 0.52f);
+                chk.lineTo(s * 0.42f, s * 0.76f);
+                chk.lineTo(s * 0.82f, s * 0.26f);
+                c.drawPath(chk, p);
+                break;
+            }
+        }
+
+        BitmapDrawable bd = new BitmapDrawable(getResources(), bmp);
+        bd.setBounds(0, 0, s, s);
+        return bd;
+    }
+
+    private void ponerIconoYTexto(TextView tv, Drawable icono, String texto) {
+        if (texto == null || texto.isEmpty()) {
+            SpannableString ss = new SpannableString(" ");
+            ss.setSpan(new CenteredImageSpan(icono), 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            tv.setText(ss);
+            return;
+        }
+        SpannableString ss = new SpannableString("  " + texto);
+        ss.setSpan(new CenteredImageSpan(icono), 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        tv.setText(ss);
     }
 
     private Bitmap crearLogoTransparenteBT() {
@@ -329,7 +592,7 @@ public class MainActivity extends Activity {
         topBar.addView(lblTitulo, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         badgeEstado = new TextView(this);
-        badgeEstado.setText("🔴 APAGADO");
+        ponerIconoYTexto(badgeEstado, crearCirculoNeon(false, false, 10), "APAGADO");
         badgeEstado.setTextColor(Color.parseColor("#FCA5A5"));
         badgeEstado.setTextSize(11);
         badgeEstado.setTypeface(null, Typeface.BOLD);
@@ -339,14 +602,14 @@ public class MainActivity extends Activity {
         topBar.addView(badgeEstado);
         root.addView(topBar);
 
-        // Selector de Vista
+        // Selector de Vista con Iconos Vectoriales
         LinearLayout viewBar = new LinearLayout(this);
         viewBar.setOrientation(LinearLayout.HORIZONTAL);
         viewBar.setPadding(dp(12), dp(2), dp(12), dp(6));
 
-        btnVistaDividida = crearBoton("📱 Dividido", "#0284C7", "#FFFFFF", 11, () -> cambiarVista(0));
-        btnVistaPanel = crearBoton("🎛️ Solo Panel", "#27272A", "#A1A1AA", 11, () -> cambiarVista(1));
-        btnVistaWeb = crearBoton("🌐 Solo Banco", "#27272A", "#A1A1AA", 11, () -> cambiarVista(2));
+        btnVistaDividida = crearBotonConIcono("DIVIDIDO", "Dividido", "#0284C7", "#FFFFFF", 11, () -> cambiarVista(0));
+        btnVistaPanel = crearBotonConIcono("PANEL", "Solo Panel", "#27272A", "#A1A1AA", 11, () -> cambiarVista(1));
+        btnVistaWeb = crearBotonConIcono("GRID", "Solo Banco", "#27272A", "#A1A1AA", 11, () -> cambiarVista(2));
 
         LinearLayout.LayoutParams lpViewBtn = new LinearLayout.LayoutParams(0, dp(32), 1f);
         lpViewBtn.setMargins(dp(2), 0, dp(2), 0);
@@ -361,21 +624,21 @@ public class MainActivity extends Activity {
         panelControlContainer.setPadding(dp(12), dp(10), dp(12), dp(8));
         panelControlContainer.setBackground(fondoRedondeado("#18181B", 14));
 
-        // Botón Cuentas (1 a 4) + Ojo
+        // Botón Cuentas Activas (Solo muestra cantidad, sin los nombres) + Ojo
         LinearLayout filaCuenta = new LinearLayout(this);
         filaCuenta.setOrientation(LinearLayout.HORIZONTAL);
         filaCuenta.setGravity(Gravity.CENTER_VERTICAL);
 
-        btnCuenta = crearBoton("👥 Cuentas Simultáneas (0/4)", "#27272A", "#F4F4F5", 12, this::mostrarPopupCuenta);
+        btnCuenta = crearBotonConIcono("USERS", "0 Cuentas Activas", "#27272A", "#F4F4F5", 12, this::mostrarPopupCuenta);
         LinearLayout.LayoutParams lpBtnCuenta = new LinearLayout.LayoutParams(0, dp(38), 1f);
         lpBtnCuenta.setMargins(0, 0, dp(6), 0);
         filaCuenta.addView(btnCuenta, lpBtnCuenta);
 
-        btnOjoPrivacidad = crearBoton("👁", "#27272A", "#F4F4F5", 13, this::togglePrivacidadUsuario);
+        btnOjoPrivacidad = crearBotonConIcono("EYE", "", "#27272A", "#F4F4F5", 13, this::togglePrivacidadUsuario);
         filaCuenta.addView(btnOjoPrivacidad, new LinearLayout.LayoutParams(dp(42), dp(38)));
         panelControlContainer.addView(filaCuenta);
 
-        // Tarjeta de Tiempos
+        // Tarjeta de Tiempos (Sin Cierre Sincronizado porque cada cuenta sale de forma independiente)
         LinearLayout cardTiempos = new LinearLayout(this);
         cardTiempos.setOrientation(LinearLayout.VERTICAL);
         cardTiempos.setPadding(dp(10), dp(8), dp(10), dp(8));
@@ -403,53 +666,40 @@ public class MainActivity extends Activity {
         });
         filaRef.addView(tRef, new LinearLayout.LayoutParams(dp(125), ViewGroup.LayoutParams.WRAP_CONTENT));
         filaRef.addView(sldRef, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        filaRef.addView(lblRefrescoVal, new LinearLayout.LayoutParams(dp(45), ViewGroup.LayoutParams.WRAP_CONTENT));
+        filaRef.addView(lblRefrescoVal, new LinearLayout.LayoutParams(dp(75), ViewGroup.LayoutParams.WRAP_CONTENT));
         cardTiempos.addView(filaRef);
 
         LinearLayout filaRel = new LinearLayout(this);
         filaRel.setGravity(Gravity.CENTER_VERTICAL);
+        filaRel.setPadding(0, dp(4), 0, 0);
         TextView tRel = crearTexto("Reinicio Sesión:", "#F4F4F5", 11, true);
         SeekBar sldRel = new SeekBar(this);
         sldRel.setMax(OPCIONES_MINUTOS.length - 1);
         sldRel.setProgress(3);
-        lblReloginVal = crearTexto("10 min", "#F4F4F5", 11, true);
+        lblReloginVal = crearTexto("10 min (--:--)", "#F4F4F5", 10.5f, true);
         lblReloginVal.setGravity(Gravity.END);
         sldRel.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                 minutosRelogin = OPCIONES_MINUTOS[progress];
-                lblReloginVal.setText(minutosRelogin + " min");
+                lblReloginVal.setText(minutosRelogin + " min (--:--)");
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) {}
             @Override public void onStopTrackingTouch(SeekBar seekBar) {}
         });
         filaRel.addView(tRel, new LinearLayout.LayoutParams(dp(125), ViewGroup.LayoutParams.WRAP_CONTENT));
         filaRel.addView(sldRel, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        filaRel.addView(lblReloginVal, new LinearLayout.LayoutParams(dp(45), ViewGroup.LayoutParams.WRAP_CONTENT));
+        filaRel.addView(lblReloginVal, new LinearLayout.LayoutParams(dp(75), ViewGroup.LayoutParams.WRAP_CONTENT));
         cardTiempos.addView(filaRel);
-
-        LinearLayout filaProg = new LinearLayout(this);
-        filaProg.setGravity(Gravity.CENTER_VERTICAL);
-        filaProg.setPadding(0, dp(4), 0, 0);
-        TextView tProg = crearTexto("Cierre Sincronizado:", "#A1A1AA", 10, true);
-        progressRelogin = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
-        progressRelogin.setMax(100);
-        progressRelogin.setProgress(0);
-        lblTimerRelogin = crearTexto("--:--", "#38BDF8", 10, true);
-        lblTimerRelogin.setGravity(Gravity.END);
-        filaProg.addView(tProg, new LinearLayout.LayoutParams(dp(125), ViewGroup.LayoutParams.WRAP_CONTENT));
-        filaProg.addView(progressRelogin, new LinearLayout.LayoutParams(0, dp(10), 1f));
-        filaProg.addView(lblTimerRelogin, new LinearLayout.LayoutParams(dp(52), ViewGroup.LayoutParams.WRAP_CONTENT));
-        cardTiempos.addView(filaProg);
 
         panelControlContainer.addView(cardTiempos, lpCard);
 
-        // Botones INICIAR | RECARGAR | DETENER
+        // Botones INICIAR | RECARGAR | DETENER con Iconos Vectoriales
         LinearLayout filaBotones = new LinearLayout(this);
         filaBotones.setOrientation(LinearLayout.HORIZONTAL);
-        btnIniciar = crearBoton("▶ INICIAR", "#16A34A", "#FFFFFF", 12, this::iniciarBot);
-        btnRecargar = crearBoton("🔄 RECARGAR", "#0284C7", "#FFFFFF", 12, this::recargarManual);
-        btnDetener = crearBoton("⬛ DETENER", "#7F1D1D", "#FCA5A5", 12, this::detenerBot);
+        btnIniciar = crearBotonConIcono("PLAY", "INICIAR", "#16A34A", "#FFFFFF", 12, this::iniciarBot);
+        btnRecargar = crearBotonConIcono("RELOAD", "RECARGAR", "#0284C7", "#FFFFFF", 12, this::recargarManual);
+        btnDetener = crearBotonConIcono("STOP", "DETENER", "#7F1D1D", "#FCA5A5", 12, this::detenerBot);
         btnDetener.setEnabled(false);
 
         LinearLayout.LayoutParams lpBtnMando = new LinearLayout.LayoutParams(0, dp(38), 1f);
@@ -498,27 +748,27 @@ public class MainActivity extends Activity {
 
         root.addView(panelControlContainer);
 
-        // 3. NAVEGADOR MULTI-CUENTA ESTILO GOOGLE CHROME
+        // 3. NAVEGADOR MULTI-CUENTA
         webViewContainer = new LinearLayout(this);
         webViewContainer.setOrientation(LinearLayout.VERTICAL);
         webViewContainer.setBackground(fondoRedondeadoConBorde("#202124", "#2E3035", 12, 1));
         webViewContainer.setPadding(dp(2), dp(2), dp(2), dp(2));
 
-        // Barra de Pestañas Multi-Cuenta (⊞ Todas | C1 | C2 | C3 | C4)
+        // Barra de Pestañas Multi-Cuenta (Solo usuarios con círculo neón, sin C1/C2)
         barraPestanasMulti = new LinearLayout(this);
         barraPestanasMulti.setOrientation(LinearLayout.HORIZONTAL);
         barraPestanasMulti.setGravity(Gravity.CENTER_VERTICAL);
         barraPestanasMulti.setPadding(dp(4), dp(3), dp(4), dp(1));
         barraPestanasMulti.setBackgroundColor(Color.parseColor("#18191C"));
 
-        btnTabMosaico = crearBoton("⊞ Todas", "#0284C7", "#FFFFFF", 10, () -> cambiarSlotEnfocado(-1));
+        btnTabMosaico = crearBotonConIcono("GRID", "Todas", "#0284C7", "#FFFFFF", 10, () -> cambiarSlotEnfocado(-1));
         LinearLayout.LayoutParams lpTabM = new LinearLayout.LayoutParams(0, dp(26), 1.15f);
         lpTabM.setMargins(dp(2), 0, dp(2), 0);
         barraPestanasMulti.addView(btnTabMosaico, lpTabM);
 
         for (int i = 0; i < MAX_CUENTAS_SIMULTANEAS; i++) {
             final int idx = i;
-            Button bTab = crearBoton("C" + (i + 1), "#27272A", "#A1A1AA", 10, () -> cambiarSlotEnfocado(idx));
+            Button bTab = crearBoton("", "#27272A", "#9CA3AF", 10, () -> cambiarSlotEnfocado(idx));
             sesiones[i].btnTabSelector = bTab;
             LinearLayout.LayoutParams lpT = new LinearLayout.LayoutParams(0, dp(26), 1f);
             lpT.setMargins(dp(2), 0, dp(2), 0);
@@ -527,25 +777,26 @@ public class MainActivity extends Activity {
         webViewContainer.addView(barraPestanasMulti, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        // Cabecera Omnibox estilo Chrome
+        // Cabecera Omnibox con URL independiente por cuenta
         LinearLayout chromeToolbar = new LinearLayout(this);
         chromeToolbar.setOrientation(LinearLayout.HORIZONTAL);
         chromeToolbar.setGravity(Gravity.CENTER_VERTICAL);
         chromeToolbar.setPadding(dp(4), dp(4), dp(4), dp(4));
         chromeToolbar.setBackground(fondoRedondeado("#202124", 10));
 
-        btnChromeBack = crearIconoChrome("←", () -> {
-            for (SesionBot s : obtenerSesionesObjetivoBarra()) {
-                if (s.webView != null) {
-                    s.webView.stopLoading();
-                    if (s.webView.canGoBack()) s.webView.goBack();
+        btnChromeBack = crearBotonIconoNav("BACK", () -> {
+            SesionBot obj = obtenerSesionControlUrl();
+            if (obj != null && obj.webView != null) {
+                obj.webView.stopLoading();
+                if (obj.webView.canGoBack()) {
+                    obj.webView.goBack();
+                    logCuenta(obj, "[NAV] Retrocediendo a la pagina anterior...");
                 }
             }
-            log("◀ Regresando página anterior...");
         });
         chromeToolbar.addView(btnChromeBack, new LinearLayout.LayoutParams(dp(32), dp(32)));
 
-        btnChromeReload = crearIconoChrome("↻", this::forzarRecargaEstiloChrome);
+        btnChromeReload = crearBotonIconoNav("RELOAD", this::forzarRecargaCuentaSeleccionada);
         chromeToolbar.addView(btnChromeReload, new LinearLayout.LayoutParams(dp(32), dp(32)));
 
         LinearLayout omniboxPill = new LinearLayout(this);
@@ -556,11 +807,11 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams lpOmnibox = new LinearLayout.LayoutParams(0, dp(32), 1f);
         lpOmnibox.setMargins(dp(4), 0, dp(4), 0);
 
-        TextView iconLock = new TextView(this);
-        iconLock.setText("🔒");
-        iconLock.setTextSize(10);
-        iconLock.setPadding(0, 0, dp(6), 0);
-        omniboxPill.addView(iconLock);
+        iconLock = new ImageView(this);
+        iconLock.setImageDrawable(crearIconoVectorial("LOCK", "#9AA0A6", 13));
+        LinearLayout.LayoutParams lpLock = new LinearLayout.LayoutParams(dp(14), dp(14));
+        lpLock.setMargins(0, 0, dp(6), 0);
+        omniboxPill.addView(iconLock, lpLock);
 
         edtUrlBar = new EditText(this);
         edtUrlBar.setSingleLine(true);
@@ -596,7 +847,12 @@ public class MainActivity extends Activity {
 
         chromeToolbar.addView(omniboxPill, lpOmnibox);
 
-        btnChromeNet = crearIconoChrome("📶", () -> reiniciarConexionInternaWebView(true));
+        btnChromeNet = crearBotonIconoNav("SIGNAL", () -> {
+            SesionBot obj = obtenerSesionControlUrl();
+            if (obj != null) {
+                reiniciarConexionIndividual(obj, true);
+            }
+        });
         chromeToolbar.addView(btnChromeNet, new LinearLayout.LayoutParams(dp(32), dp(32)));
 
         webViewContainer.addView(chromeToolbar, new LinearLayout.LayoutParams(
@@ -610,10 +866,10 @@ public class MainActivity extends Activity {
         barraZoomDesplegable.setBackgroundColor(Color.parseColor("#28292C"));
         barraZoomDesplegable.setVisibility(View.GONE);
 
-        Button btnZMenos = crearBoton("➖ Alejar", "#3C4043", "#E8EAED", 11, () -> cambiarZoomWeb(-10));
+        Button btnZMenos = crearBotonConIcono("MINUS", "Alejar", "#3C4043", "#E8EAED", 11, () -> cambiarZoomWeb(-10));
         lblZoomActualBarra = crearTexto("Zoom: " + nivelZoom + "%", "#8AB4F8", 11, true);
         lblZoomActualBarra.setGravity(Gravity.CENTER);
-        Button btnZMas = crearBoton("➕ Acercar", "#3C4043", "#E8EAED", 11, () -> cambiarZoomWeb(10));
+        Button btnZMas = crearBotonConIcono("PLUS", "Acercar", "#3C4043", "#E8EAED", 11, () -> cambiarZoomWeb(10));
         Button btnZReset = crearBoton("70%", "#0284C7", "#FFFFFF", 10, () -> {
             nivelZoom = 70;
             cambiarZoomWeb(0);
@@ -629,7 +885,7 @@ public class MainActivity extends Activity {
         webViewContainer.addView(barraZoomDesplegable, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        // Línea azul de carga estilo Chrome
+        // Línea azul de carga
         chromeProgressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         chromeProgressBar.setMax(100);
         chromeProgressBar.setProgress(0);
@@ -643,7 +899,7 @@ public class MainActivity extends Activity {
         webViewContainer.addView(chromeProgressBar, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(3)));
 
-        // Escenario que aloja las 4 vistas simultáneas sin pausar ninguna
+        // Escenario que aloja las 4 vistas simultáneas
         escenarioMultiWeb = new FrameLayout(this);
         escenarioMultiWeb.setBackgroundColor(Color.parseColor("#18181B"));
 
@@ -671,7 +927,7 @@ public class MainActivity extends Activity {
 
         frameRoot.addView(root);
 
-        // 4. PANTALLA DE ENTRADA EN GRIS OSCURO (#18181B) CON EL GIF TRANSPARENTE
+        // 4. PANTALLA DE ENTRADA EN GRIS OSCURO (#18181B)
         LinearLayout splashOverlay = new LinearLayout(this);
         splashOverlay.setOrientation(LinearLayout.VERTICAL);
         splashOverlay.setGravity(Gravity.CENTER);
@@ -764,11 +1020,7 @@ public class MainActivity extends Activity {
         }, 3000);
     }
 
-    /**
-     * Inicializa los 4 navegadores independientes con perfil aislado (Multi-Profile)
-     * para que puedan operar hasta 4 cuentas al mismo tiempo sin cruzar sesiones.
-     */
-    @SuppressLint("SetJavaScriptEnabled")
+    @SuppressLint({"SetJavaScriptEnabled", "ClickableViewAccessibility"})
     private void inicializarLosCuatroNavegadores() {
         for (int i = 0; i < MAX_CUENTAS_SIMULTANEAS; i++) {
             final SesionBot sesion = sesiones[i];
@@ -782,11 +1034,14 @@ public class MainActivity extends Activity {
             headerMini.setOrientation(LinearLayout.HORIZONTAL);
             headerMini.setGravity(Gravity.CENTER_VERTICAL);
             headerMini.setBackgroundColor(Color.parseColor("#27272A"));
-            headerMini.setPadding(dp(6), dp(2), dp(6), dp(2));
-            headerMini.setOnClickListener(v -> cambiarSlotEnfocado(sesion.slotIndex));
+            headerMini.setPadding(dp(6), dp(3), dp(6), dp(3));
+            headerMini.setOnClickListener(v -> {
+                slotInspeccionadoUrl = sesion.slotIndex;
+                cambiarSlotEnfocado(sesion.slotIndex);
+            });
 
-            TextView lblTit = crearTexto("C" + (i + 1) + ": Sin cuenta", "#38BDF8", 10, true);
-            TextView lblEst = crearTexto("DETENIDO", "#A1A1AA", 9, true);
+            TextView lblTit = crearTexto("Sin cuenta", "#9CA3AF", 10.5f, true);
+            TextView lblEst = crearTexto("DETENIDO", "#9CA3AF", 9, true);
             lblEst.setGravity(Gravity.END);
 
             headerMini.addView(lblTit, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
@@ -795,7 +1050,17 @@ public class MainActivity extends Activity {
             WebView wv = new WebView(this);
             wv.setBackgroundColor(Color.parseColor("#18181B"));
 
-            // Asignar perfil aislado si AndroidX WebKit Multi-Profile está disponible
+            // Al tocar cualquier navegador en vista mosaico, la barra de URL pasa a mostrar/controlar esa cuenta
+            wv.setOnTouchListener((View v, MotionEvent event) -> {
+                if (event.getAction() == MotionEvent.ACTION_DOWN) {
+                    if (slotInspeccionadoUrl != sesion.slotIndex) {
+                        slotInspeccionadoUrl = sesion.slotIndex;
+                        sincronizarBarraUrlConSesionActiva();
+                    }
+                }
+                return false;
+            });
+
             configurarPerfilAisladoWebView(wv, i);
 
             WebSettings ws = wv.getSettings();
@@ -819,15 +1084,14 @@ public class MainActivity extends Activity {
                 @Override
                 public void onProgressChanged(WebView view, int newProgress) {
                     sesion.progresoWeb = newProgress;
-                    if (slotEnfocado == sesion.slotIndex || (slotEnfocado == -1 && sesion.slotIndex == 0)) {
-                        if (chromeProgressBar != null) {
-                            if (newProgress < 100) {
-                                chromeProgressBar.setVisibility(View.VISIBLE);
-                                chromeProgressBar.setProgress(Math.max(12, newProgress));
-                            } else {
-                                chromeProgressBar.setProgress(100);
-                                handler.postDelayed(() -> chromeProgressBar.setVisibility(View.GONE), 220);
-                            }
+                    SesionBot obj = obtenerSesionControlUrl();
+                    if (obj != null && obj.slotIndex == sesion.slotIndex && chromeProgressBar != null) {
+                        if (newProgress < 100) {
+                            chromeProgressBar.setVisibility(View.VISIBLE);
+                            chromeProgressBar.setProgress(Math.max(12, newProgress));
+                        } else {
+                            chromeProgressBar.setProgress(100);
+                            handler.postDelayed(() -> chromeProgressBar.setVisibility(View.GONE), 220);
                         }
                     }
                     if (newProgress >= 55) {
@@ -840,23 +1104,20 @@ public class MainActivity extends Activity {
                 @Override
                 public void onPageStarted(WebView view, String url, Bitmap favicon) {
                     super.onPageStarted(view, url, favicon);
-                    if (url != null && url.startsWith("http")) {
-                        sesion.ultimaUrlValida = url;
-                        if ((slotEnfocado == sesion.slotIndex || slotEnfocado == -1) && !edtUrlBar.hasFocus()) {
-                            edtUrlBar.setText(url);
-                        }
-                    }
+                    actualizarUrlDeSesion(sesion, url);
+                }
+
+                @Override
+                public void doUpdateVisitedHistory(WebView view, String url, boolean isReload) {
+                    super.doUpdateVisitedHistory(view, url, isReload);
+                    // Detecta cambios de URL tipo SPA (/lg, /int, etc.) en tiempo real
+                    actualizarUrlDeSesion(sesion, url);
                 }
 
                 @Override
                 public void onPageFinished(WebView view, String url) {
                     super.onPageFinished(view, url);
-                    if (url != null && url.startsWith("http")) {
-                        sesion.ultimaUrlValida = url;
-                        if ((slotEnfocado == sesion.slotIndex || slotEnfocado == -1) && !edtUrlBar.hasFocus()) {
-                            edtUrlBar.setText(url);
-                        }
-                    }
+                    actualizarUrlDeSesion(sesion, url);
                     aplicarZoomASesion(sesion);
                 }
 
@@ -890,13 +1151,43 @@ public class MainActivity extends Activity {
 
         edtUrlBar.setText(URL_LOGIN);
         reorganizarVistasNavegadores();
-        log("[SISTEMA] Motor Multi-Cuenta (hasta 4 simultáneas) listo.");
+        log("[SISTEMA] Motor Multi-Cuenta listo.");
     }
 
-    /**
-     * Aísla cada WebView en su propio perfil independiente (Cookies y Storage propios)
-     * mediante AndroidX WebKit Multi-Profile cuando está presente en la compilación.
-     */
+    private void actualizarUrlDeSesion(SesionBot sesion, String url) {
+        if (url != null && url.startsWith("http")) {
+            sesion.ultimaUrlValida = url;
+            SesionBot obj = obtenerSesionControlUrl();
+            if (obj != null && obj.slotIndex == sesion.slotIndex && !edtUrlBar.hasFocus()) {
+                edtUrlBar.setText(url);
+            }
+        }
+    }
+
+    private SesionBot obtenerSesionControlUrl() {
+        if (slotEnfocado >= 0 && slotEnfocado < MAX_CUENTAS_SIMULTANEAS) {
+            return sesiones[slotEnfocado];
+        }
+        if (slotInspeccionadoUrl >= 0 && slotInspeccionadoUrl < MAX_CUENTAS_SIMULTANEAS && sesiones[slotInspeccionadoUrl].activa) {
+            return sesiones[slotInspeccionadoUrl];
+        }
+        ArrayList<SesionBot> activas = obtenerSesionesActivas();
+        if (!activas.isEmpty()) return activas.get(0);
+        return sesiones[0];
+    }
+
+    private void sincronizarBarraUrlConSesionActiva() {
+        SesionBot obj = obtenerSesionControlUrl();
+        if (obj != null && !edtUrlBar.hasFocus()) {
+            String urlVivo = (obj.webView != null && obj.webView.getUrl() != null && obj.webView.getUrl().startsWith("http"))
+                    ? obj.webView.getUrl() : obj.ultimaUrlValida;
+            if (urlVivo != null) {
+                edtUrlBar.setText(urlVivo);
+            }
+        }
+        actualizarEstilosIndicadoresNeon();
+    }
+
     private void configurarPerfilAisladoWebView(WebView wv, int slotIdx) {
         try {
             Class<?> featureClass = Class.forName("androidx.webkit.WebViewFeature");
@@ -939,9 +1230,55 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * Reorganiza el escenario para ver todas las cuentas activas simultáneamente (Mosaico)
-     * o enfocar una pestaña individual sin pausar las demás en segundo plano.
+     * Actualiza en tiempo real los círculos neón (rojo fijo si está detenido / verde neón titilando si está encendido)
+     * y cambia el color del usuario a gris (#9CA3AF) o verde (#4ADE80) sin mostrar C1, C2, etc.
      */
+    private void actualizarEstilosIndicadoresNeon() {
+        ArrayList<SesionBot> activas = obtenerSesionesActivas();
+        int cantActivas = activas.isEmpty() ? 1 : activas.size();
+
+        // Badge global arriba a la derecha
+        if (botActivo) {
+            ponerIconoYTexto(badgeEstado, crearCirculoNeon(true, pulsoNeon, 10), "VIGILANDO (" + activas.size() + ")");
+            badgeEstado.setTextColor(Color.parseColor("#4ADE80"));
+            badgeEstado.setBackground(fondoRedondeado("#14532D", 8));
+        } else {
+            ponerIconoYTexto(badgeEstado, crearCirculoNeon(false, false, 10), "APAGADO");
+            badgeEstado.setTextColor(Color.parseColor("#FCA5A5"));
+            badgeEstado.setBackground(fondoRedondeado("#450A0A", 8));
+        }
+
+        // Pestaña Todas
+        ponerIconoYTexto(btnTabMosaico, crearIconoVectorial("GRID", slotEnfocado == -1 ? "#FFFFFF" : "#A1A1AA", 12), "Todas (" + cantActivas + ")");
+        btnTabMosaico.setBackground(fondoRedondeado(slotEnfocado == -1 ? "#0284C7" : "#27272A", 6));
+        btnTabMosaico.setTextColor(Color.parseColor(slotEnfocado == -1 ? "#FFFFFF" : "#A1A1AA"));
+
+        for (int i = 0; i < MAX_CUENTAS_SIMULTANEAS; i++) {
+            SesionBot s = sesiones[i];
+            boolean corriendo = s.estaCorriendo();
+            Drawable dotNeon = crearCirculoNeon(corriendo, pulsoNeon, 10);
+            String colorTextoUsuario = corriendo ? "#4ADE80" : "#9CA3AF";
+            String nombre = s.nombreMostrado();
+
+            // 1. Cabecera mini de cada tarjeta de banco: (Círculo Neón) usuario
+            ponerIconoYTexto(s.lblTituloMini, dotNeon, nombre);
+            s.lblTituloMini.setTextColor(Color.parseColor(colorTextoUsuario));
+
+            // 2. Pestaña sobre la barra de URL: (Círculo Neón) usuario
+            Drawable dotTab = crearCirculoNeon(corriendo, pulsoNeon, 9);
+            ponerIconoYTexto(s.btnTabSelector, dotTab, nombre);
+            s.btnTabSelector.setTextColor(Color.parseColor(colorTextoUsuario));
+            s.btnTabSelector.setVisibility(s.activa || (activas.isEmpty() && i == 0) ? View.VISIBLE : View.GONE);
+
+            boolean tabSeleccionada = (slotEnfocado == i);
+            if (tabSeleccionada) {
+                s.btnTabSelector.setBackground(fondoRedondeadoConBorde("#1E293B", "#0284C7", 6, 1));
+            } else {
+                s.btnTabSelector.setBackground(fondoRedondeado("#27272A", 6));
+            }
+        }
+    }
+
     private void reorganizarVistasNavegadores() {
         filaMosaicoSup.removeAllViews();
         filaMosaicoInf.removeAllViews();
@@ -955,23 +1292,10 @@ public class MainActivity extends Activity {
             activas.add(sesiones[0]);
         }
 
-        // Actualizar estilo de los botones de pestañas arriba
-        btnTabMosaico.setText("⊞ Todas (" + activas.size() + ")");
-        btnTabMosaico.setBackground(fondoRedondeado(slotEnfocado == -1 ? "#0284C7" : "#27272A", 6));
-        btnTabMosaico.setTextColor(Color.parseColor(slotEnfocado == -1 ? "#FFFFFF" : "#A1A1AA"));
-
-        for (int i = 0; i < MAX_CUENTAS_SIMULTANEAS; i++) {
-            SesionBot s = sesiones[i];
-            s.lblTituloMini.setText(s.etiquetaCorta());
-            s.btnTabSelector.setText(s.etiquetaCorta());
-            s.btnTabSelector.setVisibility(s.activa || i == 0 ? View.VISIBLE : View.GONE);
-            boolean sel = (slotEnfocado == i);
-            s.btnTabSelector.setBackground(fondoRedondeado(sel ? "#0284C7" : "#27272A", 6));
-            s.btnTabSelector.setTextColor(Color.parseColor(sel ? "#FFFFFF" : "#E4E4E7"));
-        }
+        actualizarEstilosIndicadoresNeon();
+        sincronizarBarraUrlConSesionActiva();
 
         if (slotEnfocado >= 0 && slotEnfocado < MAX_CUENTAS_SIMULTANEAS) {
-            // Modo Pestaña Individual: las demás siguen visibles detrás (1x1 px) para que Android no las pause
             filaMosaicoSup.setVisibility(View.VISIBLE);
             filaMosaicoInf.setVisibility(View.GONE);
             for (SesionBot s : activas) {
@@ -980,9 +1304,6 @@ public class MainActivity extends Activity {
                     LinearLayout.LayoutParams lpFull = new LinearLayout.LayoutParams(
                             0, ViewGroup.LayoutParams.MATCH_PARENT, 1f);
                     filaMosaicoSup.addView(s.tarjetaCompleta, lpFull);
-                    if (s.ultimaUrlValida != null && !edtUrlBar.hasFocus()) {
-                        edtUrlBar.setText(s.ultimaUrlValida);
-                    }
                 } else {
                     LinearLayout.LayoutParams lpBg = new LinearLayout.LayoutParams(1, 1);
                     filaMosaicoSup.addView(s.tarjetaCompleta, lpBg);
@@ -991,7 +1312,6 @@ public class MainActivity extends Activity {
             return;
         }
 
-        // Modo Mosaico Simultáneo (1, 2, 3 o 4 cuentas en pantalla al mismo tiempo)
         int n = activas.size();
         if (n == 1) {
             filaMosaicoSup.setVisibility(View.VISIBLE);
@@ -1052,6 +1372,9 @@ public class MainActivity extends Activity {
 
     private void cambiarSlotEnfocado(int nuevoSlot) {
         slotEnfocado = nuevoSlot;
+        if (nuevoSlot >= 0) {
+            slotInspeccionadoUrl = nuevoSlot;
+        }
         reorganizarVistasNavegadores();
     }
 
@@ -1065,31 +1388,17 @@ public class MainActivity extends Activity {
         return lista;
     }
 
-    private ArrayList<SesionBot> obtenerSesionesObjetivoBarra() {
-        ArrayList<SesionBot> lista = new ArrayList<>();
-        if (slotEnfocado >= 0 && slotEnfocado < MAX_CUENTAS_SIMULTANEAS) {
-            lista.add(sesiones[slotEnfocado]);
-        } else {
-            lista.addAll(obtenerSesionesActivas());
-            if (lista.isEmpty()) lista.add(sesiones[0]);
-        }
-        return lista;
-    }
-
-    private TextView crearIconoChrome(String simbolo, Runnable accion) {
-        TextView tv = new TextView(this);
-        tv.setText(simbolo);
-        tv.setTextColor(Color.parseColor("#E8EAED"));
-        tv.setTextSize(17);
-        tv.setTypeface(null, Typeface.BOLD);
-        tv.setGravity(Gravity.CENTER);
-        tv.setBackground(fondoRedondeado("#202124", 16));
-        tv.setOnClickListener(v -> {
-            tv.setBackground(fondoRedondeado("#3C4043", 16));
-            handler.postDelayed(() -> tv.setBackground(fondoRedondeado("#202124", 16)), 180);
+    private ImageView crearBotonIconoNav(String tipoIcono, Runnable accion) {
+        ImageView iv = new ImageView(this);
+        iv.setScaleType(ImageView.ScaleType.CENTER);
+        iv.setImageDrawable(crearIconoVectorial(tipoIcono, "#E8EAED", 16));
+        iv.setBackground(fondoRedondeado("#202124", 16));
+        iv.setOnClickListener(v -> {
+            iv.setBackground(fondoRedondeado("#3C4043", 16));
+            handler.postDelayed(() -> iv.setBackground(fondoRedondeado("#202124", 16)), 180);
             if (accion != null) accion.run();
         });
-        return tv;
+        return iv;
     }
 
     private void toggleBarraZoomChrome() {
@@ -1100,26 +1409,36 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void forzarRecargaEstiloChrome() {
+    private void forzarRecargaCuentaSeleccionada() {
         if (!hayInternetDisponible()) {
-            log("⏸️ Sin internet en el teléfono. Las páginas se mantienen quietas sin recargar.");
+            log("[RED] Sin internet en el telefono. Las paginas se mantienen quietas.");
             return;
         }
         chromeProgressBar.setVisibility(View.VISIBLE);
         chromeProgressBar.setProgress(18);
-        for (SesionBot s : obtenerSesionesObjetivoBarra()) {
-            if (s.webView != null) {
-                s.webView.stopLoading();
-                String urlActual = s.webView.getUrl();
-                if (urlActual == null || urlActual.isEmpty() || urlActual.startsWith("about:") || urlActual.startsWith("chrome")) {
-                    urlActual = (s.ultimaUrlValida != null && !s.ultimaUrlValida.isEmpty()) ? s.ultimaUrlValida : URL_LOGIN;
-                    s.webView.loadUrl(urlActual);
-                } else {
-                    s.webView.reload();
-                }
+
+        if (slotEnfocado >= 0) {
+            recargarSesionIndividual(sesiones[slotEnfocado]);
+            logCuenta(sesiones[slotEnfocado], "[NAV] Recargando pagina de la cuenta...");
+        } else {
+            for (SesionBot s : obtenerSesionesActivas()) {
+                recargarSesionIndividual(s);
+            }
+            log("[NAV] Recargando todas las cuentas activas...");
+        }
+    }
+
+    private void recargarSesionIndividual(SesionBot s) {
+        if (s != null && s.webView != null) {
+            s.webView.stopLoading();
+            String urlActual = s.webView.getUrl();
+            if (urlActual == null || urlActual.isEmpty() || urlActual.startsWith("about:") || urlActual.startsWith("chrome")) {
+                urlActual = (s.ultimaUrlValida != null && !s.ultimaUrlValida.isEmpty()) ? s.ultimaUrlValida : URL_LOGIN;
+                s.webView.loadUrl(urlActual);
+            } else {
+                s.webView.reload();
             }
         }
-        log("🔄 Recargando vista activa...");
     }
 
     private void cambiarZoomWeb(int delta) {
@@ -1130,7 +1449,7 @@ public class MainActivity extends Activity {
         for (int i = 0; i < MAX_CUENTAS_SIMULTANEAS; i++) {
             aplicarZoomASesion(sesiones[i]);
         }
-        log("🔍 Zoom ajustado en todas las cuentas a: " + nivelZoom + "%");
+        log("[ZOOM] Zoom ajustado a: " + nivelZoom + "%");
     }
 
     private void aplicarZoomASesion(SesionBot s) {
@@ -1158,23 +1477,23 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {}
         edtUrlBar.clearFocus();
         if (!hayInternetDisponible()) {
-            log("⏸️ No hay conexión a internet.");
+            log("[RED] No hay conexion a internet.");
             return;
         }
         chromeProgressBar.setVisibility(View.VISIBLE);
         chromeProgressBar.setProgress(15);
-        for (SesionBot s : obtenerSesionesObjetivoBarra()) {
-            s.ultimaUrlValida = raw;
-            if (s.webView != null) {
-                s.webView.stopLoading();
-                s.webView.loadUrl(raw);
-            }
+
+        SesionBot obj = obtenerSesionControlUrl();
+        if (obj != null && obj.webView != null) {
+            obj.ultimaUrlValida = raw;
+            obj.webView.stopLoading();
+            obj.webView.loadUrl(raw);
+            logCuenta(obj, "[NAV] Navegando a: " + raw);
         }
-        log("🌐 Navegando a: " + raw);
     }
 
     // =========================================================================================
-    // CONTROL INTERNO DE RED DEL NAVEGADOR (CERO PERMISOS DE WI-FI / PÁGINA SIEMPRE QUIETA)
+    // CONTROL DE RED INDIVIDUAL POR NAVEGADOR (SIN AFECTAR A LAS DEMÁS CUENTAS)
     // =========================================================================================
     @SuppressWarnings("deprecation")
     private boolean hayInternetDisponible() {
@@ -1212,7 +1531,7 @@ public class MainActivity extends Activity {
                         }
                         if (!avisoSinInternetMostrado) {
                             avisoSinInternetMostrado = true;
-                            log("⏸️ [RED] Internet desconectado. Todas las cuentas congeladas en su sitio sin error.");
+                            log("[RED] Internet desconectado. Cuentas en espera sin error.");
                         }
                     });
                 }
@@ -1222,7 +1541,7 @@ public class MainActivity extends Activity {
                     runOnUiThread(() -> {
                         if (avisoSinInternetMostrado) {
                             avisoSinInternetMostrado = false;
-                            log("📶 [RED] Internet detectado nuevamente. Retomando todas las cuentas...");
+                            log("[RED] Internet restablecido. Retomando vigilancia...");
                             long ahora = System.currentTimeMillis();
                             for (int i = 0; i < MAX_CUENTAS_SIMULTANEAS; i++) {
                                 sesiones[i].tiempoEstadoMs = ahora;
@@ -1237,42 +1556,35 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * Corta y reconecta internamente el flujo de red de los navegadores activos sin pedir permisos
-     * de Wi-Fi y manteniendo todas las páginas quietas en pantalla.
+     * Corta y reconecta únicamente el flujo de carga del navegador de la cuenta indicada,
+     * sin tocar ni interrumpir la conexión de las otras cuentas.
      */
-    private void reiniciarConexionInternaWebView(boolean esManual) {
-        if (microCorteEnCurso) return;
-        microCorteEnCurso = true;
-        log("📶 Cortando y reconectando red interna en los navegadores activos (sin permisos)...");
+    private void reiniciarConexionIndividual(final SesionBot s, final boolean esManual) {
+        if (s == null || s.microCortePropio) return;
+        s.microCortePropio = true;
+        logCuenta(s, "[RED] Reiniciando conexion interna solo para esta cuenta...");
 
-        for (int i = 0; i < MAX_CUENTAS_SIMULTANEAS; i++) {
-            WebView wv = sesiones[i].webView;
-            if (wv != null) {
-                try {
-                    wv.stopLoading();
-                    wv.getSettings().setBlockNetworkLoads(true);
-                    wv.setNetworkAvailable(false);
-                    evaluarJS(sesiones[i], "if(window.stop){try{window.stop();}catch(e){}}", null);
-                } catch (Exception ignored) {}
-            }
+        final WebView wv = s.webView;
+        if (wv != null) {
+            try {
+                wv.stopLoading();
+                wv.getSettings().setBlockNetworkLoads(true);
+                evaluarJS(s, "if(window.stop){try{window.stop();}catch(e){}}", null);
+            } catch (Exception ignored) {}
         }
 
         handler.postDelayed(() -> {
-            for (int i = 0; i < MAX_CUENTAS_SIMULTANEAS; i++) {
-                WebView wv = sesiones[i].webView;
-                if (wv != null) {
-                    try {
-                        wv.getSettings().setBlockNetworkLoads(false);
-                        wv.setNetworkAvailable(true);
-                    } catch (Exception ignored) {}
-                }
-                if (esManual && botActivo && sesiones[i].estadoActual == EstadoBot.CERRANDO_SESION) {
-                    sesiones[i].accionEnCurso = false;
-                }
+            if (wv != null) {
+                try {
+                    wv.getSettings().setBlockNetworkLoads(false);
+                } catch (Exception ignored) {}
             }
-            microCorteEnCurso = false;
-            log("✅ Red interna reconectada en todas las cuentas.");
-        }, 1500);
+            s.microCortePropio = false;
+            if (esManual && botActivo && s.estadoActual == EstadoBot.CERRANDO_SESION) {
+                s.accionEnCurso = false;
+            }
+            logCuenta(s, "[RED] Conexion interna restablecida.");
+        }, 1400);
     }
 
     private void mantenerPaginaQuietaSinError(WebView view) {
@@ -1342,6 +1654,16 @@ public class MainActivity extends Activity {
         btnVistaDividida.setBackground(fondoRedondeado(modo == 0 ? "#0284C7" : "#27272A", 8));
         btnVistaPanel.setBackground(fondoRedondeado(modo == 1 ? "#0284C7" : "#27272A", 8));
         btnVistaWeb.setBackground(fondoRedondeado(modo == 2 ? "#0284C7" : "#27272A", 8));
+
+        ponerIconoYTexto(btnVistaDividida, crearIconoVectorial("DIVIDIDO", modo == 0 ? "#FFFFFF" : "#A1A1AA", 13), "Dividido");
+        btnVistaDividida.setTextColor(Color.parseColor(modo == 0 ? "#FFFFFF" : "#A1A1AA"));
+
+        ponerIconoYTexto(btnVistaPanel, crearIconoVectorial("PANEL", modo == 1 ? "#FFFFFF" : "#A1A1AA", 13), "Solo Panel");
+        btnVistaPanel.setTextColor(Color.parseColor(modo == 1 ? "#FFFFFF" : "#A1A1AA"));
+
+        ponerIconoYTexto(btnVistaWeb, crearIconoVectorial("GRID", modo == 2 ? "#FFFFFF" : "#A1A1AA", 13), "Solo Banco");
+        btnVistaWeb.setTextColor(Color.parseColor(modo == 2 ? "#FFFFFF" : "#A1A1AA"));
+
         actualizarDistribucionAlturas();
     }
 
@@ -1355,7 +1677,7 @@ public class MainActivity extends Activity {
         }
     }
 
-    private TextView crearTexto(String texto, String colorHex, int sizeSp, boolean bold) {
+    private TextView crearTexto(String texto, String colorHex, float sizeSp, boolean bold) {
         TextView tv = new TextView(this);
         tv.setText(texto);
         tv.setTextColor(Color.parseColor(colorHex));
@@ -1371,44 +1693,41 @@ public class MainActivity extends Activity {
         b.setTextColor(Color.parseColor(fgHex));
         b.setTextSize(sizeSp);
         b.setTypeface(null, Typeface.BOLD);
-        b.setPadding(dp(2), 0, dp(2), 0);
+        b.setPadding(dp(4), 0, dp(4), 0);
         b.setBackground(fondoRedondeado(bgHex, 8));
         b.setOnClickListener(v -> { if (accion != null) accion.run(); });
         return b;
     }
 
+    private Button crearBotonConIcono(String tipoIcono, String texto, String bgHex, String fgHex, int sizeSp, Runnable accion) {
+        Button b = crearBoton("", bgHex, fgHex, sizeSp, accion);
+        Drawable d = crearIconoVectorial(tipoIcono, fgHex, 14);
+        ponerIconoYTexto(b, d, texto);
+        return b;
+    }
+
     // =========================================================================================
-    // GESTIÓN DE HASTA 4 CUENTAS SIMULTÁNEAS
+    // GESTIÓN DE CUENTAS (SOLO MUESTRA CANTIDAD DE CUENTAS ACTIVAS ARRIBA, SIN NOMBRES)
     // =========================================================================================
     private void togglePrivacidadUsuario() {
         usuarioOculto = !usuarioOculto;
         actualizarTextoBotonUsuario();
-        reorganizarVistasNavegadores();
+        actualizarEstilosIndicadoresNeon();
     }
 
     private void actualizarTextoBotonUsuario() {
         ArrayList<SesionBot> activas = obtenerSesionesActivas();
-        if (activas.isEmpty()) {
-            btnCuenta.setText("👥 Agregar / Elegir Cuentas (0/4)");
-            btnOjoPrivacidad.setText("👁");
-            return;
-        }
-        if (usuarioOculto) {
-            btnCuenta.setText("👥 " + activas.size() + " Cuentas Activas (*********)");
-            btnOjoPrivacidad.setText("🔒");
-        } else if (activas.size() == 1) {
-            btnCuenta.setText("👤 1 Activa: " + activas.get(0).usuario);
-            btnOjoPrivacidad.setText("👁");
+        int n = activas.size();
+        String textoCont;
+        if (n == 0) {
+            textoCont = "0 Cuentas Activas";
+        } else if (n == 1) {
+            textoCont = "1 Cuenta Activa";
         } else {
-            StringBuilder sb = new StringBuilder();
-            sb.append("👥 ").append(activas.size()).append(" Activas: ");
-            for (int i = 0; i < activas.size(); i++) {
-                if (i > 0) sb.append(", ");
-                sb.append(activas.get(i).usuario);
-            }
-            btnCuenta.setText(sb.toString());
-            btnOjoPrivacidad.setText("👁");
+            textoCont = n + " Cuentas Activas";
         }
+        ponerIconoYTexto(btnCuenta, crearIconoVectorial("USERS", "#38BDF8", 15), textoCont);
+        ponerIconoYTexto(btnOjoPrivacidad, crearIconoVectorial(usuarioOculto ? "EYE_OFF" : "EYE", "#F4F4F5", 15), "");
     }
 
     private JSONObject obtenerCuentasGuardadas() {
@@ -1476,9 +1795,11 @@ public class MainActivity extends Activity {
         if ((edt.getInputType() & InputType.TYPE_TEXT_VARIATION_PASSWORD) != 0) {
             edt.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
             btn.setBackground(fondoRedondeado("#52525B", 6));
+            ponerIconoYTexto(btn, crearIconoVectorial("EYE", "#F4F4F5", 14), "");
         } else {
             edt.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
             btn.setBackground(fondoRedondeado("#27272A", 6));
+            ponerIconoYTexto(btn, crearIconoVectorial("EYE_OFF", "#F4F4F5", 14), "");
         }
         edt.setSelection(edt.getText().length());
     }
@@ -1494,15 +1815,14 @@ public class MainActivity extends Activity {
         layout.setBackgroundColor(Color.parseColor("#18181B"));
         scrollPopup.addView(layout);
 
-        TextView titulo = crearTexto("Gestión de Cuentas (Hasta 4 Simultáneas)", "#F4F4F5", 15, true);
+        TextView titulo = crearTexto("Gestion de Cuentas (Hasta 4 Simultaneas)", "#F4F4F5", 15, true);
         titulo.setPadding(0, 0, 0, dp(8));
         layout.addView(titulo);
 
         final JSONObject cuentasObj = obtenerCuentasGuardadas();
         final ArrayList<String> activasSeleccionadas = obtenerNombresCuentasActivasPrefs();
 
-        // SECCIÓN 1: Casillas para marcar de 1 a 4 cuentas simultáneas
-        TextView subActivas = crearTexto("1. Marca las cuentas que comprarán al mismo tiempo (Máx. 4):", "#38BDF8", 11, true);
+        TextView subActivas = crearTexto("1. Marca las cuentas activas (Max. 4):", "#38BDF8", 11, true);
         subActivas.setPadding(0, 0, 0, dp(4));
         layout.addView(subActivas);
 
@@ -1532,7 +1852,7 @@ public class MainActivity extends Activity {
                     if (isChecked) {
                         if (activasSeleccionadas.size() >= MAX_CUENTAS_SIMULTANEAS && !activasSeleccionadas.contains(usrKey)) {
                             buttonView.setChecked(false);
-                            Toast.makeText(this, "Máximo 4 cuentas simultáneas permitidas", Toast.LENGTH_SHORT).show();
+                            Toast.makeText(this, "Maximo 4 cuentas simultaneas permitidas", Toast.LENGTH_SHORT).show();
                         } else if (!activasSeleccionadas.contains(usrKey)) {
                             activasSeleccionadas.add(usrKey);
                         }
@@ -1543,27 +1863,26 @@ public class MainActivity extends Activity {
                 contenedorChecks.addView(cb);
             }
             if (!hayAlguna) {
-                TextView tvVacio = crearTexto("No hay cuentas guardadas todavía. Agrega una abajo.", "#A1A1AA", 11, false);
+                TextView tvVacio = crearTexto("No hay cuentas guardadas todavia. Agrega una abajo.", "#A1A1AA", 11, false);
                 contenedorChecks.addView(tvVacio);
             }
         };
         refrescarListaCheckboxes[0].run();
 
-        // SECCIÓN 2: Crear o Editar Cuenta
-        TextView subEditor = crearTexto("2. Agregar nueva cuenta o editar existente:", "#38BDF8", 11, true);
+        TextView subEditor = crearTexto("2. Agregar Cuenta o Editar Existente:", "#38BDF8", 11, true);
         subEditor.setPadding(0, dp(10), 0, dp(4));
         layout.addView(subEditor);
 
         final ArrayList<String> listaNombres = new ArrayList<>();
         final Runnable actualizarSelectorNombres = () -> {
             listaNombres.clear();
-            listaNombres.add("(Agregar Nueva)");
+            listaNombres.add("Agregar Cuenta");
             Iterator<String> keys = cuentasObj.keys();
             while (keys.hasNext()) { listaNombres.add(keys.next()); }
         };
         actualizarSelectorNombres.run();
 
-        final String[] cuentaSeleccionada = {"(Agregar Nueva)"};
+        final String[] cuentaSeleccionada = {"Agregar Cuenta"};
         final String[] tipoSeleccionado = {"V"};
 
         LinearLayout filaSel = new LinearLayout(this);
@@ -1590,14 +1909,14 @@ public class MainActivity extends Activity {
         });
 
         final EditText edtCedula = new EditText(this);
-        edtCedula.setHint("Cédula");
+        edtCedula.setHint("Cedula");
         edtCedula.setHintTextColor(Color.parseColor("#94A3B8"));
         edtCedula.setTextColor(Color.parseColor("#F4F4F5"));
         edtCedula.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
         edtCedula.setBackground(fondoRedondeado("#27272A", 6));
         edtCedula.setPadding(dp(10), dp(6), dp(10), dp(6));
 
-        final Button btnOjoCed = crearBoton("👁", "#52525B", "#F4F4F5", 12, null);
+        final Button btnOjoCed = crearBotonConIcono("EYE", "", "#52525B", "#F4F4F5", 12, null);
         btnOjoCed.setOnClickListener(v -> toggleCampoOjo(edtCedula, btnOjoCed));
 
         LinearLayout.LayoutParams lpTipo = new LinearLayout.LayoutParams(dp(58), dp(38));
@@ -1620,7 +1939,7 @@ public class MainActivity extends Activity {
         edtUsuario.setBackground(fondoRedondeado("#27272A", 6));
         edtUsuario.setPadding(dp(10), dp(6), dp(10), dp(6));
 
-        final Button btnOjoUsr = crearBoton("👁", "#52525B", "#F4F4F5", 12, null);
+        final Button btnOjoUsr = crearBotonConIcono("EYE", "", "#52525B", "#F4F4F5", 12, null);
         btnOjoUsr.setOnClickListener(v -> toggleCampoOjo(edtUsuario, btnOjoUsr));
 
         filaUsr.addView(edtUsuario, lpEdt);
@@ -1631,14 +1950,14 @@ public class MainActivity extends Activity {
         filaClv.setPadding(0, dp(4), 0, dp(8));
 
         final EditText edtClave = new EditText(this);
-        edtClave.setHint("Contraseña");
+        edtClave.setHint("Contrasena");
         edtClave.setHintTextColor(Color.parseColor("#94A3B8"));
         edtClave.setTextColor(Color.parseColor("#F4F4F5"));
         edtClave.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         edtClave.setBackground(fondoRedondeado("#27272A", 6));
         edtClave.setPadding(dp(10), dp(6), dp(10), dp(6));
 
-        final Button btnOjoClv = crearBoton("👁", "#27272A", "#F4F4F5", 12, null);
+        final Button btnOjoClv = crearBotonConIcono("EYE_OFF", "", "#27272A", "#F4F4F5", 12, null);
         btnOjoClv.setOnClickListener(v -> toggleCampoOjo(edtClave, btnOjoClv));
 
         filaClv.addView(edtClave, lpEdt);
@@ -1648,12 +1967,12 @@ public class MainActivity extends Activity {
             actualizarSelectorNombres.run();
             String[] items = listaNombres.toArray(new String[0]);
             new AlertDialog.Builder(this)
-                    .setTitle("Seleccionar Cuenta para Editar")
+                    .setTitle("Seleccionar Cuenta")
                     .setItems(items, (d, which) -> {
                         String sel = items[which];
                         cuentaSeleccionada[0] = sel;
                         btnSelectCuenta.setText(sel + "  ▼");
-                        if (sel.equals("(Agregar Nueva)")) {
+                        if (sel.equals("Agregar Cuenta")) {
                             edtCedula.setText(""); edtUsuario.setText(""); edtClave.setText("");
                         } else {
                             JSONObject dat = cuentasObj.optJSONObject(sel);
@@ -1671,15 +1990,15 @@ public class MainActivity extends Activity {
         builder.setView(scrollPopup);
         final AlertDialog dialog = builder.create();
 
-        Button btnEliminar = crearBoton("🗑", "#7F1D1D", "#FCA5A5", 13, () -> {
+        Button btnEliminar = crearBotonConIcono("CLOSE", "", "#27272A", "#A1A1AA", 13, () -> {
             String sel = cuentaSeleccionada[0];
-            if (!sel.equals("(Agregar Nueva)") && cuentasObj.has(sel)) {
+            if (!sel.equals("Agregar Cuenta") && cuentasObj.has(sel)) {
                 cuentasObj.remove(sel);
                 activasSeleccionadas.remove(sel);
                 prefs.edit().putString("cuentas_json", cuentasObj.toString()).apply();
                 guardarNombresCuentasActivasPrefs(activasSeleccionadas);
-                cuentaSeleccionada[0] = "(Agregar Nueva)";
-                btnSelectCuenta.setText("(Agregar Nueva)  ▼");
+                cuentaSeleccionada[0] = "Agregar Cuenta";
+                btnSelectCuenta.setText("Agregar Cuenta  ▼");
                 edtCedula.setText(""); edtUsuario.setText(""); edtClave.setText("");
                 refrescarListaCheckboxes[0].run();
                 cargarCuentasActivasGuardadas();
@@ -1693,13 +2012,13 @@ public class MainActivity extends Activity {
         layout.addView(filaUsr);
         layout.addView(filaClv);
 
-        Button btnGuardarCuenta = crearBoton("➕ Guardar Cuenta en la Lista", "#3F3F46", "#FFFFFF", 12, () -> {
+        Button btnGuardarCuenta = crearBotonConIcono("PLUS", "Guardar Cuenta en la Lista", "#3F3F46", "#FFFFFF", 12, () -> {
             String u = edtUsuario.getText().toString().trim();
             String c = edtCedula.getText().toString().trim();
             String p = edtClave.getText().toString().trim();
             String t = tipoSeleccionado[0];
             if (u.isEmpty() || c.isEmpty() || p.isEmpty()) {
-                Toast.makeText(this, "Completa Cédula, Usuario y Contraseña", Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, "Completa Cedula, Usuario y Contrasena", Toast.LENGTH_SHORT).show();
                 return;
             }
             try {
@@ -1715,8 +2034,8 @@ public class MainActivity extends Activity {
                 prefs.edit().putString("cuentas_json", cuentasObj.toString()).putString("ultima_cuenta", u).apply();
                 guardarNombresCuentasActivasPrefs(activasSeleccionadas);
                 edtCedula.setText(""); edtUsuario.setText(""); edtClave.setText("");
-                cuentaSeleccionada[0] = "(Agregar Nueva)";
-                btnSelectCuenta.setText("(Agregar Nueva)  ▼");
+                cuentaSeleccionada[0] = "Agregar Cuenta";
+                btnSelectCuenta.setText("Agregar Cuenta  ▼");
                 refrescarListaCheckboxes[0].run();
                 Toast.makeText(this, "Cuenta guardada: " + u, Toast.LENGTH_SHORT).show();
             } catch (Exception ignored) {}
@@ -1725,8 +2044,7 @@ public class MainActivity extends Activity {
         lpBtnAdd.setMargins(0, 0, 0, dp(8));
         layout.addView(btnGuardarCuenta, lpBtnAdd);
 
-        Button btnAplicar = crearBoton("✅ Aplicar Cuentas Seleccionadas", "#0284C7", "#FFFFFF", 13, () -> {
-            // Si el usuario escribió una cuenta en los campos y dio directo a Aplicar, la guarda también
+        Button btnAplicar = crearBotonConIcono("CHECK", "Aplicar Cuentas Seleccionadas", "#0284C7", "#FFFFFF", 13, () -> {
             String uPend = edtUsuario.getText().toString().trim();
             String cPend = edtCedula.getText().toString().trim();
             String pPend = edtClave.getText().toString().trim();
@@ -1746,7 +2064,7 @@ public class MainActivity extends Activity {
             }
             guardarNombresCuentasActivasPrefs(activasSeleccionadas);
             cargarCuentasActivasGuardadas();
-            log("[SISTEMA] Cuentas activas configuradas: " + activasSeleccionadas.size() + " simultánea(s).");
+            log("[SISTEMA] Cuentas activas configuradas: " + activasSeleccionadas.size());
             dialog.dismiss();
         });
         layout.addView(btnAplicar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42)));
@@ -1755,14 +2073,16 @@ public class MainActivity extends Activity {
 
     private void log(String msg) {
         String hora = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
+        // Limpieza total de cualquier carácter de emoji
+        final String limpio = msg.replaceAll("[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]|[\\u2600-\\u27BF]", "").trim();
         runOnUiThread(() -> {
-            txtConsola.append(hora + "  " + msg + "\n");
+            txtConsola.append(hora + "  " + limpio + "\n");
             scrollConsola.post(() -> scrollConsola.fullScroll(View.FOCUS_DOWN));
         });
     }
 
     private void logCuenta(SesionBot s, String msg) {
-        log("[" + s.etiquetaCorta() + "] " + msg);
+        log("[" + s.nombreMostrado() + "] " + msg);
     }
 
     private void sonarAlarma(boolean exito) {
@@ -1785,14 +2105,15 @@ public class MainActivity extends Activity {
         s.accionEnCurso = false;
         if (s.lblEstadoMini != null) {
             s.lblEstadoMini.setText(nombreCortoEstado(nuevoEstado));
-            if (nuevoEstado == EstadoBot.ESPERANDO_SINCRONIZAR_CIERRE || nuevoEstado == EstadoBot.ESPERANDO_SINCRONIZAR_LOGIN) {
-                s.lblEstadoMini.setTextColor(Color.parseColor("#FACC15"));
+            if (nuevoEstado == EstadoBot.DETENIDO) {
+                s.lblEstadoMini.setTextColor(Color.parseColor("#9CA3AF"));
             } else if (nuevoEstado == EstadoBot.VIGILANDO || nuevoEstado == EstadoBot.COMPRANDO) {
                 s.lblEstadoMini.setTextColor(Color.parseColor("#4ADE80"));
             } else {
                 s.lblEstadoMini.setTextColor(Color.parseColor("#38BDF8"));
             }
         }
+        actualizarEstilosIndicadoresNeon();
     }
 
     private String nombreCortoEstado(EstadoBot st) {
@@ -1806,7 +2127,7 @@ public class MainActivity extends Activity {
             case ENVIANDO_FASE2: return "CLAVE";
             case ESPERANDO_CARGA_INICIO:
             case ESPERANDO_ESTABILIZAR_INICIO: return "ENTRANDO";
-            case NAVEGANDO_MENU: return "MENÚ";
+            case NAVEGANDO_MENU: return "MENU";
             case VIGILANDO: return "VIGILANDO";
             case ESPERANDO_FORM_INTENTO1: return "INTENTO 1";
             case LIMPIANDO_PANTALLA: return "LIMPIANDO";
@@ -1814,10 +2135,8 @@ public class MainActivity extends Activity {
             case ESPERANDO_ESTABILIZAR_FORM:
             case LLENANDO_COMPRA:
             case COMPRANDO: return "COMPRANDO";
-            case ESPERANDO_SINCRONIZAR_CIERRE: return "⏳ ESPERANDO OTRAS";
             case CERRANDO_SESION: return "SALIENDO";
-            case REINICIANDO_RED: return "RED INTERNA";
-            case ESPERANDO_SINCRONIZAR_LOGIN: return "⏳ LISTA LOGIN";
+            case REINICIANDO_RED: return "RECONECTANDO";
             default: return "";
         }
     }
@@ -1825,7 +2144,7 @@ public class MainActivity extends Activity {
     private void iniciarBot() {
         ArrayList<SesionBot> activas = obtenerSesionesActivas();
         if (activas.isEmpty()) {
-            log("⚠️ [ERROR] Selecciona al menos 1 cuenta activa antes de iniciar.");
+            log("[ERROR] Selecciona al menos 1 cuenta activa antes de iniciar.");
             mostrarPopupCuenta();
             return;
         }
@@ -1840,16 +2159,13 @@ public class MainActivity extends Activity {
             cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
         }
 
-        badgeEstado.setText("⬛ VIGILANDO (" + activas.size() + ")");
-        badgeEstado.setTextColor(Color.parseColor("#86EFAC"));
-        badgeEstado.setBackground(fondoRedondeado("#14532D", 8));
         btnIniciar.setEnabled(false);
         btnIniciar.setBackground(fondoRedondeado("#14532D", 8));
         btnDetener.setEnabled(true);
         btnDetener.setBackground(fondoRedondeado("#DC2626", 8));
 
         reorganizarVistasNavegadores();
-        log("=== VIGILANTE INICIADO CON " + activas.size() + " CUENTA(S) SIMULTÁNEA(S) ===");
+        log("[SISTEMA] Vigilante iniciado con " + activas.size() + " cuenta(s) activa(s).");
     }
 
     private void detenerBot() {
@@ -1858,23 +2174,19 @@ public class MainActivity extends Activity {
             cambiarEstado(sesiones[i], EstadoBot.DETENIDO);
             sesiones[i].tiempoInicioSesionMs = 0;
         }
-        progressRelogin.setProgress(0);
-        lblTimerRelogin.setText("--:--");
+        lblReloginVal.setText(minutosRelogin + " min (--:--)");
 
-        badgeEstado.setText("🔴 APAGADO");
-        badgeEstado.setTextColor(Color.parseColor("#FCA5A5"));
-        badgeEstado.setBackground(fondoRedondeado("#450A0A", 8));
         btnIniciar.setEnabled(true);
         btnIniciar.setBackground(fondoRedondeado("#16A34A", 8));
         btnDetener.setEnabled(false);
         btnDetener.setBackground(fondoRedondeado("#7F1D1D", 8));
 
-        log("=== VIGILANTE DETENIDO ===");
+        actualizarEstilosIndicadoresNeon();
+        log("[SISTEMA] Vigilante detenido.");
     }
 
     private void recargarManual() {
-        log("🔄 [MANUAL] Refrescando páginas activas...");
-        forzarRecargaEstiloChrome();
+        forzarRecargaCuentaSeleccionada();
     }
 
     private void evaluarJS(SesionBot s, String script, ValueCallback<String> callback) {
@@ -1886,21 +2198,24 @@ public class MainActivity extends Activity {
         handler.postDelayed(new Runnable() {
             @Override
             public void run() {
+                // Alterna el pulso neón verde para las cuentas encendidas
+                pulsoNeon = !pulsoNeon;
+                actualizarEstilosIndicadoresNeon();
+
                 ArrayList<SesionBot> activas = obtenerSesionesActivas();
                 for (SesionBot s : activas) {
                     aplicarZoomASesion(s);
                 }
 
                 if (botActivo) {
-                    actualizarBarraProgresoRelogin(activas);
-                    if (!microCorteEnCurso && hayInternetDisponible()) {
+                    verificarTiemposDeSesionIndependientes(activas);
+                    if (hayInternetDisponible()) {
                         for (SesionBot s : activas) {
-                            if (!s.compraCompletada && s.estadoActual != EstadoBot.DETENIDO) {
+                            if (!s.compraCompletada && !s.microCortePropio && s.estadoActual != EstadoBot.DETENIDO) {
                                 ejecutarPasoMaquinaEstados(s);
                             }
                         }
-                        verificarBarrerasSincronizadas(activas);
-                    } else if (!hayInternetDisponible()) {
+                    } else {
                         long ahora = System.currentTimeMillis();
                         for (SesionBot s : activas) {
                             s.tiempoEstadoMs = ahora;
@@ -1913,134 +2228,37 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * Calcula el tiempo de sesión de cada cuenta activa. Cuando a una cuenta se le cumple el tiempo,
-     * no cierra sesión sola: se pone en ESPERANDO_SINCRONIZAR_CIERRE hasta que las demás también lleguen.
+     * Cada cuenta evalúa su propio tiempo de sesión y cierra su sesión de inmediato
+     * sin esperar a las demás cuentas.
      */
-    private void actualizarBarraProgresoRelogin(ArrayList<SesionBot> activas) {
+    private void verificarTiemposDeSesionIndependientes(ArrayList<SesionBot> activas) {
         long ahora = System.currentTimeMillis();
         long totalSeg = minutosRelogin * 60L;
-        long maxTranscurridoSeg = 0;
-        int cuentasEnEsperaCierre = 0;
-        int cuentasOperando = 0;
+        long menorRestante = -1;
 
         for (SesionBot s : activas) {
             if (s.compraCompletada || s.estadoActual == EstadoBot.DETENIDO) continue;
-            cuentasOperando++;
-
-            if (s.estadoActual == EstadoBot.ESPERANDO_SINCRONIZAR_CIERRE) {
-                cuentasEnEsperaCierre++;
-            }
 
             if (s.tiempoInicioSesionMs > 0 && s.estadoActual == EstadoBot.VIGILANDO) {
                 long transcurridoSeg = (ahora - s.tiempoInicioSesionMs) / 1000;
-                if (transcurridoSeg > maxTranscurridoSeg) {
-                    maxTranscurridoSeg = transcurridoSeg;
+                long restante = Math.max(0, totalSeg - transcurridoSeg);
+                if (menorRestante == -1 || restante < menorRestante) {
+                    menorRestante = restante;
                 }
                 if (transcurridoSeg >= totalSeg) {
-                    logCuenta(s, "⏰ Tiempo cumplido. Esperando a las demás cuentas para cerrar sesión todas juntas...");
-                    cambiarEstado(s, EstadoBot.ESPERANDO_SINCRONIZAR_CIERRE);
-                    cuentasEnEsperaCierre++;
-                }
-            }
-        }
-
-        if (cuentasEnEsperaCierre > 0 && cuentasEnEsperaCierre < cuentasOperando) {
-            progressRelogin.setProgress(100);
-            lblTimerRelogin.setText("SYNC " + cuentasEnEsperaCierre + "/" + cuentasOperando);
-        } else if (maxTranscurridoSeg > 0) {
-            int prog = (int) Math.min(100, (maxTranscurridoSeg * 100) / totalSeg);
-            progressRelogin.setProgress(prog);
-            long restante = Math.max(0, totalSeg - maxTranscurridoSeg);
-            long mins = restante / 60;
-            long secs = restante % 60;
-            lblTimerRelogin.setText(String.format(Locale.getDefault(), "%02d:%02d", mins, secs));
-        }
-    }
-
-    /**
-     * BARRERA DE SINCRONIZACIÓN:
-     * 1) Cuando una cuenta llega a ESPERANDO_SINCRONIZAR_CIERRE, espera sin tocar el botón de salir
-     *    hasta que TODAS las demás cuentas con sesión abierta también lleguen al cierre.
-     *    En ese instante, todas disparan CERRANDO_SESION exactamente al mismo tiempo.
-     * 2) Al terminar de cerrar sesión, esperan en ESPERANDO_SINCRONIZAR_LOGIN a que todas hayan salido
-     *    para iniciar el nuevo ciclo juntas.
-     */
-    private void verificarBarrerasSincronizadas(ArrayList<SesionBot> activas) {
-        ArrayList<SesionBot> operativas = new ArrayList<>();
-        for (SesionBot s : activas) {
-            if (!s.compraCompletada && s.estadoActual != EstadoBot.DETENIDO) {
-                operativas.add(s);
-            }
-        }
-        if (operativas.isEmpty()) return;
-
-        // 1. Verificar barrera de Cierre de Sesión simultáneo
-        boolean hayAlgunaEsperandoCierre = false;
-        boolean todasListasParaCerrar = true;
-
-        for (SesionBot s : operativas) {
-            if (s.estadoActual == EstadoBot.ESPERANDO_SINCRONIZAR_CIERRE) {
-                hayAlgunaEsperandoCierre = true;
-            } else if (s.estadoActual == EstadoBot.CARGANDO_LOGIN
-                    || s.estadoActual == EstadoBot.ESPERANDO_ESTABILIZAR_LOGIN
-                    || s.estadoActual == EstadoBot.ESPERANDO_SINCRONIZAR_LOGIN) {
-                // Esta cuenta ya está afuera en el login, no impide el cierre de las que están adentro
-            } else {
-                todasListasParaCerrar = false;
-            }
-        }
-
-        if (hayAlgunaEsperandoCierre && todasListasParaCerrar) {
-            log("🔒 [SINCRONIZADO] ¡Todas las cuentas listas! Dando clic en Cerrar Sesión simultáneamente...");
-            for (SesionBot s : operativas) {
-                if (s.estadoActual == EstadoBot.ESPERANDO_SINCRONIZAR_CIERRE) {
+                    logCuenta(s, "[SESION] Tiempo de sesion cumplido. Cerrando sesion de forma independiente...");
                     s.intentoLogout = 0;
                     cambiarEstado(s, EstadoBot.CERRANDO_SESION);
                 }
             }
         }
 
-        // 2. Verificar si alguna cuenta en CERRANDO_SESION necesita el micro-corte interno de red
-        long ahora = System.currentTimeMillis();
-        boolean algunaNecesitaCorteRed = false;
-        for (SesionBot s : operativas) {
-            if (s.estadoActual == EstadoBot.CERRANDO_SESION
-                    && s.accionEnCurso
-                    && (ahora - s.tiempoEstadoMs > 5500)
-                    && (s.intentoLogout % 2 == 0)) {
-                algunaNecesitaCorteRed = true;
-                break;
-            }
-        }
-        if (algunaNecesitaCorteRed) {
-            log("⚠️ Cuenta(s) colgada(s) cerrando sesión. Ejecutando corte/reconexión interna sincronizada...");
-            for (SesionBot s : operativas) {
-                if (s.estadoActual == EstadoBot.CERRANDO_SESION) {
-                    cambiarEstado(s, EstadoBot.REINICIANDO_RED);
-                }
-            }
-            reiniciarConexionInternaWebView(false);
-        }
-
-        // 3. Verificar barrera de reingreso en Login después de cerrar sesión
-        boolean hayAlgunaEsperandoLogin = false;
-        boolean hayAlgunaTodaviaSaliendo = false;
-        for (SesionBot s : operativas) {
-            if (s.estadoActual == EstadoBot.ESPERANDO_SINCRONIZAR_LOGIN) {
-                hayAlgunaEsperandoLogin = true;
-            }
-            if (s.estadoActual == EstadoBot.CERRANDO_SESION || s.estadoActual == EstadoBot.REINICIANDO_RED) {
-                hayAlgunaTodaviaSaliendo = true;
-            }
-        }
-
-        if (hayAlgunaEsperandoLogin && !hayAlgunaTodaviaSaliendo) {
-            log("🚀 [SINCRONIZADO] Todas las cuentas cerraron sesión. Iniciando login simultáneo...");
-            for (SesionBot s : operativas) {
-                if (s.estadoActual == EstadoBot.ESPERANDO_SINCRONIZAR_LOGIN) {
-                    cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_LOGIN);
-                }
-            }
+        if (menorRestante >= 0) {
+            long mins = menorRestante / 60;
+            long secs = menorRestante % 60;
+            lblReloginVal.setText(String.format(Locale.getDefault(), "%d min (%02d:%02d)", minutosRelogin, mins, secs));
+        } else {
+            lblReloginVal.setText(minutosRelogin + " min (--:--)");
         }
     }
 
@@ -2072,6 +2290,7 @@ public class MainActivity extends Activity {
                 "var sinCupo = bodyTxt.indexOf('no hay asignación disponible') !== -1;" +
                 "var sesionActivaErr = (bodyTxt.indexOf('sesión activa') !== -1 || bodyTxt.indexOf('sesion activa') !== -1 || bodyTxt.indexOf('posee una sesión') !== -1);" +
                 "return JSON.stringify({" +
+                "  url: window.location.href," +
                 "  ready: ready," +
                 "  cargando: cargandoTxt," +
                 "  doc: !!(doc && usr && doc.offsetWidth > 0 && usr.offsetWidth > 0 && !cargandoTxt)," +
@@ -2092,6 +2311,11 @@ public class MainActivity extends Activity {
                     clean = clean.substring(1, clean.length() - 1).replace("\\\"", "\"");
                 }
                 JSONObject st = new JSONObject(clean);
+                String liveUrl = st.optString("url", "");
+                if (!liveUrl.isEmpty()) {
+                    actualizarUrlDeSesion(sesion, liveUrl);
+                }
+
                 boolean nav100 = (sesion.progresoWeb >= 100);
                 boolean ready = st.optBoolean("ready") && nav100;
                 boolean cargando = st.optBoolean("cargando");
@@ -2130,29 +2354,29 @@ public class MainActivity extends Activity {
 
             case CARGANDO_LOGIN:
                 if (paginaCompleta && visMonto) {
-                    logCuenta(s, "✅ Formulario detectado en pantalla. Estabilizando 2s...");
+                    logCuenta(s, "[OK] Formulario detectado en pantalla. Estabilizando 2s...");
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_FORM);
                     return;
                 }
                 if (paginaCompleta && visInicioCompleto) {
                     s.tiempoInicioSesionMs = ahora;
-                    logCuenta(s, "✅ Página de inicio detectada. Estabilizando 2s...");
+                    logCuenta(s, "[OK] Pagina de inicio detectada. Estabilizando 2s...");
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_INICIO);
                     return;
                 }
                 if (paginaCompleta && visPass) {
-                    logCuenta(s, "✅ Pantalla de contraseña cargada. Estabilizando 2s...");
+                    logCuenta(s, "[OK] Pantalla de contrasena cargada. Estabilizando 2s...");
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_PASS);
                     return;
                 }
                 if (paginaCompleta && visDoc) {
-                    logCuenta(s, "✅ Login cargado completo. Esperando 2s para estabilizar...");
+                    logCuenta(s, "[OK] Login cargado completo. Esperando 2s para estabilizar...");
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_LOGIN);
                     return;
                 }
                 if (ahora - s.tiempoEstadoMs > 25000) {
                     s.tiempoEstadoMs = ahora;
-                    logCuenta(s, "⏳ Esperando carga completa del login...");
+                    logCuenta(s, "[INFO] Esperando carga completa del login...");
                     s.webView.stopLoading();
                     s.webView.loadUrl(URL_LOGIN);
                 }
@@ -2171,7 +2395,7 @@ public class MainActivity extends Activity {
             case ENVIANDO_FASE1:
                 if (!s.accionEnCurso) {
                     s.accionEnCurso = true;
-                    logCuenta(s, "👉 [FASE 1] Escribiendo Cédula y Usuario...");
+                    logCuenta(s, "[FASE 1] Escribiendo Cedula y Usuario...");
                     String jsFase1 =
                             "var sel = document.querySelector('#tipodocben');" +
                             "if(sel) { for(var i=0; i<sel.options.length; i++) { if(sel.options[i].text.trim().toUpperCase() === '" + s.tipoDoc + "') { sel.selectedIndex = i; break; } } sel.dispatchEvent(new Event('change', {bubbles:true})); }" +
@@ -2201,12 +2425,12 @@ public class MainActivity extends Activity {
 
             case ESPERANDO_CARGA_PASS:
                 if (paginaCompleta && visPass) {
-                    logCuenta(s, "✅ Fase 2 cargada completa. Esperando 2s para estabilizar...");
+                    logCuenta(s, "[OK] Fase 2 cargada. Esperando 2s para estabilizar...");
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_PASS);
                     return;
                 }
                 if (ahora - s.tiempoEstadoMs > 18000 && paginaCompleta && visDoc) {
-                    logCuenta(s, "⚠️ No avanzó a contraseña. Reintentando Fase 1...");
+                    logCuenta(s, "[INFO] No avanzo a contrasena. Reintentando Fase 1...");
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_LOGIN);
                 }
                 break;
@@ -2224,7 +2448,7 @@ public class MainActivity extends Activity {
             case ENVIANDO_FASE2:
                 if (!s.accionEnCurso) {
                     s.accionEnCurso = true;
-                    logCuenta(s, "👉 [FASE 2] Escribiendo Contraseña y enviando...");
+                    logCuenta(s, "[FASE 2] Escribiendo Contrasena y enviando...");
                     String jsFase2 =
                             "var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;" +
                             "var p = document.querySelector('#password');" +
@@ -2241,7 +2465,7 @@ public class MainActivity extends Activity {
                             "  });" +
                             "}";
                     evaluarJS(s, jsFase2, null);
-                    logCuenta(s, "⏳ Esperando carga de Inicio completa...");
+                    logCuenta(s, "[INFO] Esperando carga de Inicio completa...");
                     cambiarEstado(s, EstadoBot.ESPERANDO_CARGA_INICIO);
                 }
                 break;
@@ -2249,18 +2473,18 @@ public class MainActivity extends Activity {
             case ESPERANDO_CARGA_INICIO:
                 if (paginaCompleta && visInicioCompleto) {
                     s.tiempoInicioSesionMs = ahora;
-                    logCuenta(s, "🎉 ¡Inicio cargado al 100%! Estabilizando 2s...");
+                    logCuenta(s, "[OK] Inicio cargado al 100%. Estabilizando 2s...");
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_INICIO);
                     return;
                 }
                 if (haySesionActivaErr) {
-                    logCuenta(s, "⚠️ El banco indica sesión activa. Esperando 5s y reintentando...");
+                    logCuenta(s, "[ALERTA] El banco indica sesion activa. Reintentando...");
                     s.tiempoEstadoMs = ahora;
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_LOGIN);
                     return;
                 }
                 if (ahora - s.tiempoEstadoMs > 10000 && paginaCompleta && visDoc) {
-                    logCuenta(s, "⚠️ Regresó al login. Reintentando...");
+                    logCuenta(s, "[INFO] Regreso al login. Reintentando...");
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_LOGIN);
                 }
                 break;
@@ -2273,13 +2497,13 @@ public class MainActivity extends Activity {
 
             case NAVEGANDO_MENU:
                 if (paginaCompleta && visTablaInt) {
-                    logCuenta(s, "[OK] Sección de Intervención cargada. Vigilando...");
+                    logCuenta(s, "[OK] Seccion de Intervencion cargada. Vigilando...");
                     cambiarEstado(s, EstadoBot.VIGILANDO);
                     return;
                 }
                 if (!s.accionEnCurso) {
                     s.accionEnCurso = true;
-                    logCuenta(s, "📍 Abriendo Operaciones Divisas -> Intervención...");
+                    logCuenta(s, "[MENU] Abriendo Operaciones Divisas -> Intervencion...");
                     irAIntervencionJS(s);
                 } else if (ahora - s.tiempoEstadoMs > 8000 && paginaCompleta) {
                     s.tiempoEstadoMs = ahora;
@@ -2289,19 +2513,19 @@ public class MainActivity extends Activity {
 
             case VIGILANDO:
                 if (paginaCompleta && visDoc) {
-                    logCuenta(s, "⚠️ Sesión cerrada detectada. Reingresando...");
+                    logCuenta(s, "[SESION] Sesion cerrada detectada. Reingresando...");
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_LOGIN);
                     return;
                 }
                 if (paginaCompleta && visMonto) {
-                    logCuenta(s, "✅ Formulario detectado abierto. Estabilizando 2s...");
+                    logCuenta(s, "[OK] Formulario detectado abierto. Estabilizando 2s...");
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_FORM);
                     return;
                 }
                 if (paginaCompleta && visOrd) {
-                    logCuenta(s, "🔔 !!! BOTÓN ORDINARIA DETECTADO !!!");
+                    logCuenta(s, "[ALERTA] BOTON ORDINARIA DETECTADO");
                     if (!yaAvisoApertura) { yaAvisoApertura = true; sonarAlarma(false); }
-                    logCuenta(s, "👉 Intento 1: Dando clic en Ordinaria...");
+                    logCuenta(s, "[ACCION] Intento 1: Dando clic en Ordinaria...");
                     clicarOrdinariaJS(s);
                     cambiarEstado(s, EstadoBot.ESPERANDO_FORM_INTENTO1);
                     return;
@@ -2309,19 +2533,19 @@ public class MainActivity extends Activity {
                 if (paginaCompleta && (ahora - s.tiempoEstadoMs >= intervaloRefresco * 1000L)) {
                     s.tiempoEstadoMs = ahora;
                     s.vueltaActual++;
-                    logCuenta(s, "[vuelta " + s.vueltaActual + "] Sin botón. Refrescando Intervención...");
+                    logCuenta(s, "[Vuelta " + s.vueltaActual + "] Refrescando Intervencion...");
                     irAIntervencionJS(s);
                 }
                 break;
 
             case ESPERANDO_FORM_INTENTO1:
                 if (paginaCompleta && visMonto && !hayInconv) {
-                    logCuenta(s, "✅ ¡Formulario cargado en Intento 1! Estabilizando 2s...");
+                    logCuenta(s, "[OK] Formulario cargado en Intento 1. Estabilizando 2s...");
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_FORM);
                     return;
                 }
                 if (hayInconv || (paginaCompleta && ahora - s.tiempoEstadoMs > 4500)) {
-                    logCuenta(s, "⚠️ Error o pantalla en blanco en Intento 1. Limpiando por menú...");
+                    logCuenta(s, "[AVISO] Error en Intento 1. Limpiando vista para Intento 2...");
                     irAIntervencionJS(s);
                     cambiarEstado(s, EstadoBot.LIMPIANDO_PANTALLA);
                 }
@@ -2329,7 +2553,7 @@ public class MainActivity extends Activity {
 
             case LIMPIANDO_PANTALLA:
                 if (paginaCompleta && visTablaInt && (ahora - s.tiempoEstadoMs >= 2500)) {
-                    logCuenta(s, "👉 Intento 2: Dando clic en Ordinaria tras limpiar vista...");
+                    logCuenta(s, "[ACCION] Intento 2: Dando clic en Ordinaria...");
                     clicarOrdinariaJS(s);
                     cambiarEstado(s, EstadoBot.ESPERANDO_FORM_INTENTO2);
                 } else if (ahora - s.tiempoEstadoMs > 10000) {
@@ -2340,14 +2564,15 @@ public class MainActivity extends Activity {
 
             case ESPERANDO_FORM_INTENTO2:
                 if (paginaCompleta && visMonto && !hayInconv) {
-                    logCuenta(s, "✅ ¡Formulario cargado en Intento 2! Estabilizando 2s...");
+                    logCuenta(s, "[OK] Formulario cargado en Intento 2. Estabilizando 2s...");
                     sonarAlarma(false);
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_FORM);
                     return;
                 }
                 if (hayInconv || (paginaCompleta && ahora - s.tiempoEstadoMs > 5000)) {
-                    logCuenta(s, "❌ Ambos intentos con error. Esperando a las demás cuentas para cerrar sesión juntas...");
-                    cambiarEstado(s, EstadoBot.ESPERANDO_SINCRONIZAR_CIERRE);
+                    logCuenta(s, "[ERROR] Ambos intentos fallaron. Cerrando sesion de esta cuenta...");
+                    s.intentoLogout = 0;
+                    cambiarEstado(s, EstadoBot.CERRANDO_SESION);
                 }
                 break;
 
@@ -2360,7 +2585,7 @@ public class MainActivity extends Activity {
             case LLENANDO_COMPRA:
                 if (!s.accionEnCurso) {
                     s.accionEnCurso = true;
-                    logCuenta(s, "📝 Rellenando formulario y fijando monto exacto de 300,00$...");
+                    logCuenta(s, "[COMPRA] Rellenando formulario con monto 300,00...");
                     String jsCompra =
                             "var d = document.querySelector('#desde'); if(d && d.options.length > 1) { d.selectedIndex = 1; d.dispatchEvent(new Event('change', {bubbles:true})); }" +
                             "var h = document.querySelector('#hasta'); if(h && h.options.length > 1) { h.selectedIndex = 1; h.dispatchEvent(new Event('change', {bubbles:true})); }" +
@@ -2403,7 +2628,7 @@ public class MainActivity extends Activity {
 
             case COMPRANDO:
                 if (hayExito) {
-                    logCuenta(s, "🎉 ¡ORDEN MONTADA Y REGISTRADA CON ÉXITO!");
+                    logCuenta(s, "[EXITO] ORDEN REGISTRADA CON EXITO");
                     sonarAlarma(true);
                     s.compraCompletada = true;
                     cambiarEstado(s, EstadoBot.DETENIDO);
@@ -2411,42 +2636,29 @@ public class MainActivity extends Activity {
                     return;
                 }
                 if (haySinCupo) {
-                    logCuenta(s, "⚠️ Sin asignación disponible en este intento.");
+                    logCuenta(s, "[AVISO] Sin asignacion disponible en este intento.");
                     cambiarEstado(s, EstadoBot.VIGILANDO);
                     return;
                 }
                 if (hayInconv) {
-                    logCuenta(s, "⚠️ El banco indicó 'No podemos procesar su solicitud'. Reintentando...");
+                    logCuenta(s, "[AVISO] El banco indico inconvenientes. Reintentando...");
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_FORM);
                     return;
                 }
                 if (ahora - s.tiempoEstadoMs > 10000) {
-                    logCuenta(s, "✅ Orden procesada. Retomando vigilancia...");
+                    logCuenta(s, "[OK] Orden procesada. Retomando vigilancia...");
                     sonarAlarma(true);
                     cambiarEstado(s, EstadoBot.VIGILANDO);
                 }
                 break;
 
-            case ESPERANDO_SINCRONIZAR_CIERRE:
-                // Si el banco cerró la sesión por su cuenta mientras esperaba, queda lista en login
-                if (paginaCompleta && (visDoc || visPass)) {
-                    cambiarEstado(s, EstadoBot.ESPERANDO_SINCRONIZAR_LOGIN);
-                    return;
-                }
-                // Si mientras espera se abre el formulario milagrosamente, lo aprovecha
-                if (paginaCompleta && visMonto && !hayInconv) {
-                    logCuenta(s, "✅ Formulario abrió mientras esperaba. Comprando...");
-                    cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_FORM);
-                }
-                break;
-
             case CERRANDO_SESION:
                 if (paginaCompleta && (visDoc || visPass)) {
-                    logCuenta(s, "✅ Sesión cerrada correctamente. Esperando al resto en el Login...");
+                    logCuenta(s, "[SESION] Sesion cerrada correctamente. Reingresando...");
                     if (!visDoc) {
                         s.webView.loadUrl(URL_LOGIN);
                     }
-                    cambiarEstado(s, EstadoBot.ESPERANDO_SINCRONIZAR_LOGIN);
+                    cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
                     return;
                 }
                 if (!s.accionEnCurso) {
@@ -2454,26 +2666,25 @@ public class MainActivity extends Activity {
                     s.intentoLogout++;
                     s.tiempoEstadoMs = ahora;
                     if (visModalLogout) {
-                        logCuenta(s, "🔒 Confirmando botón 'Sí' en ¿Deseas cerrar tu sesión? (Intento #" + s.intentoLogout + ")...");
+                        logCuenta(s, "[SESION] Confirmando cierre de sesion (Intento #" + s.intentoLogout + ")...");
                     } else {
-                        logCuenta(s, "🔒 Intento #" + s.intentoLogout + " de cerrar sesión...");
+                        logCuenta(s, "[SESION] Cerrando sesion (Intento #" + s.intentoLogout + ")...");
                     }
                     ejecutarScriptLogout(s);
-                } else if (ahora - s.tiempoEstadoMs > 4800 && s.intentoLogout % 2 == 1) {
-                    s.accionEnCurso = false;
+                } else if (ahora - s.tiempoEstadoMs > 5200) {
+                    if (s.intentoLogout % 2 == 0) {
+                        // Reconecta únicamente el navegador de esta cuenta sin tocar las demás
+                        cambiarEstado(s, EstadoBot.REINICIANDO_RED);
+                        reiniciarConexionIndividual(s, false);
+                    } else {
+                        s.accionEnCurso = false;
+                    }
                 }
                 break;
 
             case REINICIANDO_RED:
-                if (!microCorteEnCurso && (ahora - s.tiempoEstadoMs >= 2000)) {
-                    logCuenta(s, "🔄 Red interna restablecida. Dando clic en Cerrar Sesión / Sí nuevamente...");
+                if (!s.microCortePropio && (ahora - s.tiempoEstadoMs >= 1600)) {
                     cambiarEstado(s, EstadoBot.CERRANDO_SESION);
-                }
-                break;
-
-            case ESPERANDO_SINCRONIZAR_LOGIN:
-                if (!visDoc && paginaCompleta) {
-                    s.webView.loadUrl(URL_LOGIN);
                 }
                 break;
         }
@@ -2483,7 +2694,7 @@ public class MainActivity extends Activity {
         for (SesionBot s : obtenerSesionesActivas()) {
             if (!s.compraCompletada) return;
         }
-        log("🏆 ¡TODAS LAS CUENTAS ACTIVAS COMPRARON CON ÉXITO!");
+        log("[EXITO] TODAS LAS CUENTAS ACTIVAS COMPRARON CON EXITO");
         detenerBot();
     }
 
