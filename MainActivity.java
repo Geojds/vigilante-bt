@@ -50,7 +50,6 @@ import android.webkit.ValueCallback;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
-import android.webkit.WebStorage;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
@@ -99,12 +98,19 @@ public class MainActivity extends Activity {
     private TextView lblHistBig, lblHistSub, lblAjustesBig, lblAjustesSub;
     private TextView lblTRef, lblTRel, lblRefrescoVal, lblReloginVal;
     private LinearLayout cardTiempos, cardTemaAjustes, cardAlertasAjustes;
-    private TextView lblSubTema, lblSubAlertas;
-    private TextView lblItemOrd, lblItemCompra, lblItemVib;
+    private TextView lblSubTema, lblDescTema, lblSubAlertas, lblDescAlertas;
 
-    // Botones de Ajustes
-    private Button btnTemaOscuro, btnTemaClaro, btnTemaZafiro;
-    private Button btnToggleOrd, btnToggleCompra, btnToggleVib, btnProbarChiChing;
+    // Tarjetas de vista previa de los 3 temas (Oscuro | Azul Zafiro | Claro)
+    private LinearLayout cardPrevOscuro, cardPrevZafiro, cardPrevClaro;
+    private ImageView imgPrevOscuro, imgPrevZafiro, imgPrevClaro;
+    private TextView txtPrevOscuro, txtPrevZafiro, txtPrevClaro;
+
+    // Sub-paneles separados de Alertas y Vibración
+    private LinearLayout panelItemOrd, panelItemCompra, panelItemVib;
+    private TextView lblItemOrd, lblDescItemOrd;
+    private TextView lblItemCompra, lblDescItemCompra;
+    private TextView lblItemVib, lblDescItemVib;
+    private Button btnToggleOrd, btnToggleCompra, btnToggleVib;
 
     // Contenedor de motores en tamaño real detrás del fondo
     private LinearLayout filaMotoresSup, filaMotoresInf;
@@ -124,8 +130,7 @@ public class MainActivity extends Activity {
     private int pestanaInferiorActual = 0;
     private int filtroHistorialSlot = -1;
 
-    // Ajustes guardados
-    // 0 = Oscuro, 1 = Claro, 2 = Azul Zafiro
+    // Ajustes guardados: 0 = Oscuro, 1 = Azul Zafiro, 2 = Claro
     private int temaActual = 0;
     private boolean alertaOrdinariaActiva = true;
     private boolean alertaCompraActiva = true;
@@ -277,7 +282,7 @@ public class MainActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         prefs = getSharedPreferences("VigilanteBTPrefs", Context.MODE_PRIVATE);
 
-        temaActual = prefs.getInt("tema_app", 0);
+        temaActual = prefs.getInt("tema_app_v2", 0);
         alertaOrdinariaActiva = prefs.getBoolean("alerta_ord", true);
         alertaCompraActiva = prefs.getBoolean("alerta_compra", true);
         vibracionActiva = prefs.getBoolean("vibracion_app", true);
@@ -336,46 +341,94 @@ public class MainActivity extends Activity {
     }
 
     // =========================================================================================
-    // PALETA DE COLORES SEGÚN EL TEMA (0 = OSCURO, 1 = CLARO, 2 = AZUL ZAFIRO)
+    // PALETA DE COLORES POR TEMA (0 = OSCURO, 1 = AZUL ZAFIRO, 2 = CLARO)
     // =========================================================================================
     private String colFondoApp() {
-        if (temaActual == 1) return "#F1F5F9";
-        if (temaActual == 2) return "#070D19";
-        return "#0F1115";
+        if (temaActual == 1) return "#081226"; // Azul Zafiro Real profundo
+        if (temaActual == 2) return "#F1F5F9"; // Claro
+        return "#0F1115";                      // Oscuro
     }
 
     private String colFondoTarjeta() {
-        if (temaActual == 1) return "#FFFFFF";
-        if (temaActual == 2) return "#0F172A";
-        return "#18181B";
+        if (temaActual == 1) return "#102142"; // Tarjeta Zafiro iluminada
+        if (temaActual == 2) return "#FFFFFF"; // Tarjeta Blanca
+        return "#18181B";                      // Tarjeta Oscura
+    }
+
+    private String colFondoSubPanel() {
+        if (temaActual == 1) return "#162C56"; // Sub-panel Zafiro
+        if (temaActual == 2) return "#F8FAFC"; // Sub-panel Claro
+        return "#202227";                      // Sub-panel Oscuro
     }
 
     private String colBordeTarjeta() {
-        if (temaActual == 1) return "#CBD5E1";
-        if (temaActual == 2) return "#1E293B";
-        return "#27272A";
+        if (temaActual == 1) return "#2563EB"; // Borde Zafiro Brillante
+        if (temaActual == 2) return "#CBD5E1"; // Borde Claro
+        return "#27272A";                      // Borde Oscuro
+    }
+
+    private String colAcentoTema() {
+        if (temaActual == 1) return "#4F46E5"; // Índigo / Zafiro Eléctrico
+        if (temaActual == 2) return "#0284C7"; // Azul Día
+        return "#0284C7";                      // Azul Vigilante
+    }
+
+    private String colBordeAcentoTema() {
+        if (temaActual == 1) return "#38BDF8"; // Cian Zafiro
+        if (temaActual == 2) return "#0369A1";
+        return "#38BDF8";
+    }
+
+    private String colBotonIniciarActivo() {
+        if (temaActual == 1) return "#0D9488"; // Verde Esmeralda-Zafiro
+        if (temaActual == 2) return "#16A34A";
+        return "#16A34A";
+    }
+
+    private String colBotonIniciarInactivo() {
+        if (temaActual == 1) return "#134E4A";
+        if (temaActual == 2) return "#DCFCE7";
+        return "#14532D";
+    }
+
+    private String colBotonDetenerActivo() {
+        if (temaActual == 1) return "#E11D48"; // Carmesí Zafiro
+        if (temaActual == 2) return "#DC2626";
+        return "#DC2626";
+    }
+
+    private String colBotonDetenerInactivo() {
+        if (temaActual == 1) return "#4C0519";
+        if (temaActual == 2) return "#FEE2E2";
+        return "#7F1D1D";
     }
 
     private String colTextoPrimario() {
-        if (temaActual == 1) return "#0F172A";
-        if (temaActual == 2) return "#F8FAFC";
+        if (temaActual == 2) return "#0F172A";
+        if (temaActual == 1) return "#F8FAFC";
         return "#F4F4F5";
     }
 
     private String colTextoSecundario() {
-        if (temaActual == 1) return "#475569";
-        if (temaActual == 2) return "#94A3B8";
+        if (temaActual == 2) return "#475569";
+        if (temaActual == 1) return "#93C5FD";
         return "#A1A1AA";
     }
 
     private String colFondoConsola() {
-        if (temaActual == 1) return "#0F172A";
-        if (temaActual == 2) return "#050914";
+        if (temaActual == 2) return "#F8FAFC";
+        if (temaActual == 1) return "#060D1D";
         return "#0F1115";
     }
 
+    private String colTextoConsola() {
+        if (temaActual == 2) return "#0F172A";
+        if (temaActual == 1) return "#7DD3FC";
+        return "#E4E4E7";
+    }
+
     // =========================================================================================
-    // SONIDOS DIFERENCIADOS ("CHI-CHING" CAJA REGISTRADORA vs ALERTA ORDINARIA) + VIBRACIÓN
+    // SONIDO REALISTA DE CAJA REGISTRADORA ("CHA-CHING!" 1 SOLA VEZ) + ALERTA ORDINARIA
     // =========================================================================================
     private void vibrarDispositivo(boolean esCompraExitosa) {
         if (!vibracionActiva) return;
@@ -391,12 +444,12 @@ public class MainActivity extends Activity {
                 if (vib != null && vib.hasVibrator()) {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         if (esCompraExitosa) {
-                            vib.vibrate(VibrationEffect.createWaveform(new long[]{0, 120, 80, 220}, -1));
+                            vib.vibrate(VibrationEffect.createWaveform(new long[]{0, 90, 60, 180}, -1));
                         } else {
-                            vib.vibrate(VibrationEffect.createOneShot(140, VibrationEffect.DEFAULT_AMPLITUDE));
+                            vib.vibrate(VibrationEffect.createOneShot(130, VibrationEffect.DEFAULT_AMPLITUDE));
                         }
                     } else {
-                        vib.vibrate(esCompraExitosa ? 320 : 140);
+                        vib.vibrate(esCompraExitosa ? 260 : 130);
                     }
                 }
             } catch (Exception ignored) {}
@@ -404,7 +457,7 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * Sonido cuando sale el botón de Ordinaria (Radar de 3 pitidos rápidos).
+     * Sonido cuando aparece el botón de Ordinaria.
      */
     private void sonarAlertaOrdinaria() {
         vibrarDispositivo(false);
@@ -412,9 +465,9 @@ public class MainActivity extends Activity {
         new Thread(() -> {
             try {
                 ToneGenerator tg = new ToneGenerator(AudioManager.STREAM_ALARM, 100);
-                for (int i = 0; i < 3; i++) {
-                    tg.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 190);
-                    Thread.sleep(260);
+                for (int i = 0; i < 2; i++) {
+                    tg.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 180);
+                    Thread.sleep(240);
                 }
                 tg.release();
             } catch (Exception ignored) {}
@@ -422,7 +475,7 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * Sonido "Chi-Ching!" de Caja Registradora / Carrito de Compra (Sintetizador PCM cristalino).
+     * Sonido "Cha-Ching!" de Caja Registradora (Suena 1 sola vez: resorte mecánico + monedas + campana).
      */
     private void sonarAlertaCompraExitosa() {
         vibrarDispositivo(true);
@@ -430,63 +483,162 @@ public class MainActivity extends Activity {
         new Thread(() -> {
             try {
                 int sampleRate = 44100;
-                int durMs = 780;
+                int durMs = 680;
                 int numSamples = (sampleRate * durMs) / 1000;
                 short[] buffer = new short[numSamples];
 
-                for (int repeat = 0; repeat < 2; repeat++) {
-                    for (int i = 0; i < numSamples; i++) {
-                        double t = (double) i / sampleRate;
-                        double val = 0;
-                        if (t < 0.095) {
-                            // "Chi-" (Golpe metálico corto de apertura de caja)
-                            double env = Math.exp(-t * 38.0);
-                            val = 0.55 * Math.sin(2.0 * Math.PI * 2093.0 * t)
-                                    + 0.30 * Math.sin(2.0 * Math.PI * 4186.0 * t)
-                                    + 0.15 * Math.sin(2.0 * Math.PI * 6279.0 * t);
-                            val *= env;
-                        } else {
-                            // "-Ching!" (Campana cristalina aguda de caja registradora)
-                            double t2 = t - 0.095;
-                            double env2 = Math.exp(-t2 * 5.2);
-                            val = 0.55 * Math.sin(2.0 * Math.PI * 2637.0 * t2)
-                                    + 0.30 * Math.sin(2.0 * Math.PI * 5274.0 * t2)
-                                    + 0.15 * Math.sin(2.0 * Math.PI * 3136.0 * t2);
-                            val *= env2;
-                        }
-                        int pcm = (int) (val * 28000);
-                        if (pcm > 32767) pcm = 32767;
-                        if (pcm < -32768) pcm = -32768;
-                        buffer[i] = (short) pcm;
+                java.util.Random rng = new java.util.Random(777);
+                for (int i = 0; i < numSamples; i++) {
+                    double t = (double) i / sampleRate;
+                    double val = 0;
+
+                    if (t < 0.085) {
+                        // Fase 1: "Cha-" (Resorte mecánico del cajón de dinero y choque de monedas)
+                        double envCha = Math.exp(-t * 42.0);
+                        double noise = (rng.nextDouble() * 2.0 - 1.0) * 0.45;
+                        doublelever = 0.40 * Math.sin(2.0 * Math.PI * 1480.0 * t)
+                                + 0.35 * Math.sin(2.0 * Math.PI * 2960.0 * t);
+                        val = (noise + doublelever) * envCha;
+                    } else if (t >= 0.085 && t < 0.115) {
+                        // Breve golpe de martillo sobre la campana (con tintineo de moneda)
+                        double tc = t - 0.085;
+                        val = 0.65 * Math.sin(2.0 * Math.PI * 3520.0 * tc) * Math.exp(-tc * 55.0);
+                    } else {
+                        // Fase 2: "-Ching!" (Campana clásica aguda de caja registradora con armónicos de bronce)
+                        double tb = t - 0.115;
+                        double envBell = Math.exp(-tb * 5.8);
+                        double envShimmer = Math.exp(-tb * 14.0);
+                        val = 0.52 * Math.sin(2.0 * Math.PI * 2637.0 * tb) * envBell
+                                + 0.28 * Math.sin(2.0 * Math.PI * 5274.0 * tb) * envBell
+                                + 0.14 * Math.sin(2.0 * Math.PI * 6380.0 * tb) * envShimmer
+                                + 0.10 * Math.sin(2.0 * Math.PI * 7911.0 * tb) * envShimmer;
                     }
 
-                    AudioTrack track;
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                        track = new AudioTrack.Builder()
-                                .setAudioAttributes(new AudioAttributes.Builder()
-                                        .setUsage(AudioAttributes.USAGE_ALARM)
-                                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                                        .build())
-                                .setAudioFormat(new AudioFormat.Builder()
-                                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                                        .setSampleRate(sampleRate)
-                                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                                        .build())
-                                .setBufferSizeInBytes(buffer.length * 2)
-                                .setTransferMode(AudioTrack.MODE_STATIC)
-                                .build();
-                    } else {
-                        track = new AudioTrack(AudioManager.STREAM_ALARM, sampleRate,
-                                AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT,
-                                buffer.length * 2, AudioTrack.MODE_STATIC);
-                    }
-                    track.write(buffer, 0, buffer.length);
-                    track.play();
-                    Thread.sleep(durMs + 90);
-                    track.release();
+                    int pcm = (int) (val * 29500);
+                    if (pcm > 32767) pcm = 32767;
+                    if (pcm < -32768) pcm = -32768;
+                    buffer[i] = (short) pcm;
                 }
+
+                AudioTrack track;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    track = new AudioTrack.Builder()
+                            .setAudioAttributes(new AudioAttributes.Builder()
+                                    .setUsage(AudioAttributes.USAGE_ALARM)
+                                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                                    .build())
+                            .setAudioFormat(new AudioFormat.Builder()
+                                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                                    .setSampleRate(sampleRate)
+                                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                                    .build())
+                            .setBufferSizeInBytes(buffer.length * 2)
+                            .setTransferMode(AudioTrack.MODE_STATIC)
+                            .build();
+                } else {
+                    track = new AudioTrack(AudioManager.STREAM_ALARM, sampleRate,
+                            AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT,
+                            buffer.length * 2, AudioTrack.MODE_STATIC);
+                }
+                track.write(buffer, 0, buffer.length);
+                track.play();
+                Thread.sleep(durMs + 60);
+                track.release();
             } catch (Exception ignored) {}
         }).start();
+    }
+
+    // =========================================================================================
+    // GENERADOR DE IMÁGENES DE VISTA PREVIA DE TEMAS (OSCURO | AZUL ZAFIRO | CLARO)
+    // =========================================================================================
+    private Bitmap crearImagenPreviewTema(int tipoTema, boolean seleccionado) {
+        int w = dp(92);
+        int h = dp(86);
+        Bitmap bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(bmp);
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+        String bgHex = (tipoTema == 0) ? "#121318" : (tipoTema == 1 ? "#0A1936" : "#F1F5F9");
+        String cardHex = (tipoTema == 0) ? "#1E2028" : (tipoTema == 1 ? "#152C5B" : "#FFFFFF");
+        String bar1Hex = (tipoTema == 0) ? "#E4E4E7" : (tipoTema == 1 ? "#E2E8F0" : "#334155");
+        String pillGreen = (tipoTema == 0) ? "#34D399" : (tipoTema == 1 ? "#38BDF8" : "#0284C7");
+        String pillAccent = (tipoTema == 0) ? "#818CF8" : (tipoTema == 1 ? "#6366F1" : "#94A3B8");
+
+        // Fondo de la miniatura
+        p.setStyle(Paint.Style.FILL);
+        p.setColor(Color.parseColor(bgHex));
+        c.drawRoundRect(new RectF(0, 0, w, h), dp(12), dp(12), p);
+
+        // Si es Azul Zafiro, dibuja puntos estrellados y destello zafiro como en la imagen de referencia
+        if (tipoTema == 1) {
+            Paint pGlow = new Paint(Paint.ANTI_ALIAS_FLAG);
+            RadialGradient rg = new RadialGradient(w * 0.75f, h * 0.25f, w * 0.6f,
+                    new int[]{Color.parseColor("#4438BDF8"), Color.TRANSPARENT}, null, Shader.TileMode.CLAMP);
+            pGlow.setShader(rg);
+            c.drawRoundRect(new RectF(0, 0, w, h), dp(12), dp(12), pGlow);
+
+            p.setColor(Color.parseColor("#93C5FD"));
+            c.drawCircle(w * 0.80f, h * 0.20f, dp(1), p);
+            c.drawCircle(w * 0.65f, h * 0.14f, dp(1), p);
+            c.drawCircle(w * 0.85f, h * 0.48f, dp(1), p);
+            c.drawCircle(w * 0.72f, h * 0.65f, dp(1), p);
+        }
+
+        // Mini bloques internos simulando las barras y tarjetas de la app
+        p.setColor(Color.parseColor(cardHex));
+        c.drawRoundRect(new RectF(dp(8), dp(10), w - dp(8), h - dp(18)), dp(8), dp(8), p);
+
+        // Punto de estado superior izquierdo + barra de título
+        p.setColor(Color.parseColor(pillAccent));
+        c.drawCircle(dp(15), dp(19), dp(3), p);
+        p.setColor(Color.parseColor(bar1Hex));
+        c.drawRoundRect(new RectF(dp(22), dp(16), w * 0.62f, dp(22)), dp(3), dp(3), p);
+
+        // Segunda barra (verde/cian)
+        p.setColor(Color.parseColor(pillGreen));
+        c.drawRoundRect(new RectF(dp(13), dp(29), w * 0.56f, dp(36)), dp(3), dp(3), p);
+
+        // Tercera barra
+        p.setColor(Color.parseColor(bar1Hex));
+        p.setAlpha(180);
+        c.drawRoundRect(new RectF(dp(13), dp(42), w * 0.50f, dp(47)), dp(2), dp(2), p);
+        p.setAlpha(255);
+
+        // Cuarta barra con punto
+        p.setColor(Color.parseColor(pillAccent));
+        c.drawCircle(dp(15), dp(56), dp(2), p);
+        c.drawRoundRect(new RectF(dp(20), dp(53), w * 0.54f, dp(59)), dp(3), dp(3), p);
+
+        // Puntos inferiores simulando la barra flotante
+        for (int i = 0; i < 4; i++) {
+            p.setColor(i == 0 ? Color.parseColor(pillGreen) : Color.parseColor(bar1Hex));
+            p.setAlpha(i == 0 ? 255 : 100);
+            float cx = dp(20) + i * dp(16);
+            c.drawCircle(cx, h - dp(9), dp(2), p);
+        }
+        p.setAlpha(255);
+
+        // Círculo con check arriba a la derecha cuando el tema está seleccionado
+        if (seleccionado) {
+            float rChk = dp(8);
+            float cx = w - dp(12);
+            float cy = dp(12);
+            p.setColor(Color.parseColor(tipoTema == 1 ? "#38BDF8" : "#6366F1"));
+            c.drawCircle(cx, cy, rChk, p);
+
+            p.setStyle(Paint.Style.STROKE);
+            p.setColor(Color.WHITE);
+            p.setStrokeWidth(dp(2));
+            p.setStrokeCap(Paint.Cap.ROUND);
+            p.setStrokeJoin(Paint.Join.ROUND);
+            Path chk = new Path();
+            chk.moveTo(cx - dp(3), cy);
+            chk.lineTo(cx - dp(1), cy + dp(3));
+            chk.lineTo(cx + dp(4), cy - dp(3));
+            c.drawPath(chk, p);
+        }
+
+        return bmp;
     }
 
     // =========================================================================================
@@ -773,7 +925,7 @@ public class MainActivity extends Activity {
         mainVertical.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        // 1. CABECERA SUPERIOR FIJA
+        // 1. CABECERA SUPERIOR FIJA (El recuadro APAGADO solo se muestra en Cuentas)
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
@@ -907,7 +1059,7 @@ public class MainActivity extends Activity {
         cardTiempos.addView(filaRel);
         contenidoScrollCuentas.addView(cardTiempos, lpCardT);
 
-        // Botones Globales: "Iniciar todas" y "Detener todas" (Pausa sin cerrar sesión)
+        // Botones Globales: "Iniciar todas" y "Detener todas"
         LinearLayout filaBotonesGlobales = new LinearLayout(this);
         filaBotonesGlobales.setOrientation(LinearLayout.HORIZONTAL);
         LinearLayout.LayoutParams lpFilaGlob = new LinearLayout.LayoutParams(
@@ -987,7 +1139,7 @@ public class MainActivity extends Activity {
         mainVertical.addView(vistaHistorialContainer, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        // 4. VISTA 3: "AJUSTES" (TEMAS + SONIDOS Y VIBRACIÓN)
+        // 4. VISTA 3: "AJUSTES" (CON IMÁGENES DE EJEMPLO DE TEMA Y PANELES SEPARADOS GRANDES)
         vistaAjustesScroll = new ScrollView(this);
         vistaAjustesScroll.setFillViewport(true);
         vistaAjustesScroll.setVerticalScrollBarEnabled(false);
@@ -998,98 +1150,161 @@ public class MainActivity extends Activity {
         contenidoAjustes.setPadding(dp(14), dp(6), dp(14), dp(95));
 
         lblAjustesBig = crearTexto("Ajustes", "#F4F4F5", 21f, true);
-        lblAjustesSub = crearTexto("Personaliza la apariencia, sonidos de alerta y vibración del bot.", "#A1A1AA", 11f, false);
+        lblAjustesSub = crearTexto("Personaliza la apariencia, alertas y vibración del bot.", "#A1A1AA", 11f, false);
         lblAjustesSub.setPadding(0, dp(2), 0, dp(12));
         contenidoAjustes.addView(lblAjustesBig);
         contenidoAjustes.addView(lblAjustesSub);
 
-        // Tarjeta de Tema Visual
+        // Tarjeta 1: Apariencia con las 3 tarjetas de vista previa (Oscuro | Azul Zafiro | Claro)
         cardTemaAjustes = new LinearLayout(this);
         cardTemaAjustes.setOrientation(LinearLayout.VERTICAL);
-        cardTemaAjustes.setPadding(dp(14), dp(12), dp(14), dp(12));
-        cardTemaAjustes.setBackground(fondoRedondeadoConBorde("#18181B", "#27272A", 14, 1));
+        cardTemaAjustes.setPadding(dp(14), dp(14), dp(14), dp(14));
+        cardTemaAjustes.setBackground(fondoRedondeadoConBorde("#18181B", "#27272A", 16, 1));
         LinearLayout.LayoutParams lpCardAj = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lpCardAj.setMargins(0, 0, 0, dp(12));
+        lpCardAj.setMargins(0, 0, 0, dp(14));
 
-        lblSubTema = crearTexto("Tema de la aplicación", "#38BDF8", 13f, true);
-        lblSubTema.setPadding(0, 0, 0, dp(8));
+        lblSubTema = crearTexto("Apariencia", "#F4F4F5", 15f, true);
+        lblDescTema = crearTexto("Oscuro es el predeterminado; Azul Zafiro resalta la identidad del bot.", "#A1A1AA", 11f, false);
+        lblDescTema.setPadding(0, dp(2), 0, dp(12));
         cardTemaAjustes.addView(lblSubTema);
+        cardTemaAjustes.addView(lblDescTema);
 
-        LinearLayout filaTemas = new LinearLayout(this);
-        filaTemas.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout filaTarjetasTema = new LinearLayout(this);
+        filaTarjetasTema.setOrientation(LinearLayout.HORIZONTAL);
 
-        btnTemaOscuro = crearBoton("Oscuro", "#0284C7", "#FFFFFF", 11, () -> cambiarTema(0));
-        btnTemaClaro = crearBoton("Claro", "#27272A", "#A1A1AA", 11, () -> cambiarTema(1));
-        btnTemaZafiro = crearBoton("Azul Zafiro", "#27272A", "#A1A1AA", 11, () -> cambiarTema(2));
+        // Tarjeta Izquierda: Oscuro (0)
+        cardPrevOscuro = new LinearLayout(this);
+        cardPrevOscuro.setOrientation(LinearLayout.VERTICAL);
+        cardPrevOscuro.setGravity(Gravity.CENTER_HORIZONTAL);
+        cardPrevOscuro.setPadding(dp(6), dp(8), dp(6), dp(8));
+        imgPrevOscuro = new ImageView(this);
+        imgPrevOscuro.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        txtPrevOscuro = crearTexto("Oscuro", "#F4F4F5", 11.5f, true);
+        txtPrevOscuro.setGravity(Gravity.CENTER);
+        txtPrevOscuro.setPadding(0, dp(6), 0, 0);
+        cardPrevOscuro.addView(imgPrevOscuro, new LinearLayout.LayoutParams(dp(86), dp(80)));
+        cardPrevOscuro.addView(txtPrevOscuro);
+        cardPrevOscuro.setOnClickListener(v -> cambiarTema(0));
 
-        LinearLayout.LayoutParams lpBtnTema = new LinearLayout.LayoutParams(0, dp(36), 1f);
-        lpBtnTema.setMargins(dp(3), 0, dp(3), 0);
-        filaTemas.addView(btnTemaOscuro, lpBtnTema);
-        filaTemas.addView(btnTemaClaro, lpBtnTema);
-        filaTemas.addView(btnTemaZafiro, lpBtnTema);
-        cardTemaAjustes.addView(filaTemas);
+        // Tarjeta Medio: Azul Zafiro (1)
+        cardPrevZafiro = new LinearLayout(this);
+        cardPrevZafiro.setOrientation(LinearLayout.VERTICAL);
+        cardPrevZafiro.setGravity(Gravity.CENTER_HORIZONTAL);
+        cardPrevZafiro.setPadding(dp(6), dp(8), dp(6), dp(8));
+        imgPrevZafiro = new ImageView(this);
+        imgPrevZafiro.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        txtPrevZafiro = crearTexto("Azul Zafiro", "#F4F4F5", 11.5f, true);
+        txtPrevZafiro.setGravity(Gravity.CENTER);
+        txtPrevZafiro.setPadding(0, dp(6), 0, 0);
+        cardPrevZafiro.addView(imgPrevZafiro, new LinearLayout.LayoutParams(dp(86), dp(80)));
+        cardPrevZafiro.addView(txtPrevZafiro);
+        cardPrevZafiro.setOnClickListener(v -> cambiarTema(1));
+
+        // Tarjeta Derecha: Claro (2)
+        cardPrevClaro = new LinearLayout(this);
+        cardPrevClaro.setOrientation(LinearLayout.VERTICAL);
+        cardPrevClaro.setGravity(Gravity.CENTER_HORIZONTAL);
+        cardPrevClaro.setPadding(dp(6), dp(8), dp(6), dp(8));
+        imgPrevClaro = new ImageView(this);
+        imgPrevClaro.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        txtPrevClaro = crearTexto("Claro", "#F4F4F5", 11.5f, true);
+        txtPrevClaro.setGravity(Gravity.CENTER);
+        txtPrevClaro.setPadding(0, dp(6), 0, 0);
+        cardPrevClaro.addView(imgPrevClaro, new LinearLayout.LayoutParams(dp(86), dp(80)));
+        cardPrevClaro.addView(txtPrevClaro);
+        cardPrevClaro.setOnClickListener(v -> cambiarTema(2));
+
+        LinearLayout.LayoutParams lpPrevCard = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        lpPrevCard.setMargins(dp(4), 0, dp(4), 0);
+        filaTarjetasTema.addView(cardPrevOscuro, lpPrevCard);
+        filaTarjetasTema.addView(cardPrevZafiro, lpPrevCard);
+        filaTarjetasTema.addView(cardPrevClaro, lpPrevCard);
+
+        cardTemaAjustes.addView(filaTarjetasTema);
         contenidoAjustes.addView(cardTemaAjustes, lpCardAj);
 
-        // Tarjeta de Sonidos y Vibración
+        // Tarjeta 2: "Alertas y Vibración" con paneles separados grandes
         cardAlertasAjustes = new LinearLayout(this);
         cardAlertasAjustes.setOrientation(LinearLayout.VERTICAL);
-        cardAlertasAjustes.setPadding(dp(14), dp(12), dp(14), dp(12));
-        cardAlertasAjustes.setBackground(fondoRedondeadoConBorde("#18181B", "#27272A", 14, 1));
+        cardAlertasAjustes.setPadding(dp(14), dp(14), dp(14), dp(14));
+        cardAlertasAjustes.setBackground(fondoRedondeadoConBorde("#18181B", "#27272A", 16, 1));
 
-        lblSubAlertas = crearTexto("Sonidos y Vibración", "#38BDF8", 13f, true);
-        lblSubAlertas.setPadding(0, 0, 0, dp(8));
+        lblSubAlertas = crearTexto("Alertas y Vibración", "#F4F4F5", 15f, true);
+        lblDescAlertas = crearTexto("Avisos sonoros y vibración mientras el bot opera.", "#A1A1AA", 11f, false);
+        lblDescAlertas.setPadding(0, dp(2), 0, dp(12));
         cardAlertasAjustes.addView(lblSubAlertas);
+        cardAlertasAjustes.addView(lblDescAlertas);
 
-        // Fila 1: Alerta de Ordinaria
-        LinearLayout filaOrd = new LinearLayout(this);
-        filaOrd.setGravity(Gravity.CENTER_VERTICAL);
-        filaOrd.setPadding(0, dp(6), 0, dp(6));
-        lblItemOrd = crearTexto("Alerta de Ordinaria (Sonido botón)", "#F4F4F5", 12f, true);
+        LinearLayout.LayoutParams lpSubPanel = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lpSubPanel.setMargins(0, 0, 0, dp(10));
+
+        // Panel Separado 1: Alerta de Ordinaria
+        panelItemOrd = new LinearLayout(this);
+        panelItemOrd.setOrientation(LinearLayout.HORIZONTAL);
+        panelItemOrd.setGravity(Gravity.CENTER_VERTICAL);
+        panelItemOrd.setPadding(dp(14), dp(12), dp(12), dp(12));
+        LinearLayout colTxtOrd = new LinearLayout(this);
+        colTxtOrd.setOrientation(LinearLayout.VERTICAL);
+        lblItemOrd = crearTexto("Alerta de Ordinaria", "#F4F4F5", 13.5f, true);
+        lblDescItemOrd = crearTexto("Sonido de aviso cuando aparece el botón de Ordinaria.", "#A1A1AA", 10.5f, false);
+        lblDescItemOrd.setPadding(0, dp(2), dp(8), 0);
+        colTxtOrd.addView(lblItemOrd);
+        colTxtOrd.addView(lblDescItemOrd);
         btnToggleOrd = crearBoton("", "#14532D", "#4ADE80", 10, () -> {
             alertaOrdinariaActiva = !alertaOrdinariaActiva;
             prefs.edit().putBoolean("alerta_ord", alertaOrdinariaActiva).apply();
             actualizarBotonesAjustes();
             if (alertaOrdinariaActiva) sonarAlertaOrdinaria();
         });
-        filaOrd.addView(lblItemOrd, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        filaOrd.addView(btnToggleOrd, new LinearLayout.LayoutParams(dp(98), dp(32)));
-        cardAlertasAjustes.addView(filaOrd);
+        panelItemOrd.addView(colTxtOrd, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        panelItemOrd.addView(btnToggleOrd, new LinearLayout.LayoutParams(dp(96), dp(34)));
+        cardAlertasAjustes.addView(panelItemOrd, lpSubPanel);
 
-        // Fila 2: Alerta Compra Exitosa (Chi-Ching)
-        LinearLayout filaComp = new LinearLayout(this);
-        filaComp.setGravity(Gravity.CENTER_VERTICAL);
-        filaComp.setPadding(0, dp(6), 0, dp(6));
-        lblItemCompra = crearTexto("Alerta Compra Exitosa (Caja Chi-Ching)", "#F4F4F5", 12f, true);
+        // Panel Separado 2: Alerta Compra Exitosa
+        panelItemCompra = new LinearLayout(this);
+        panelItemCompra.setOrientation(LinearLayout.HORIZONTAL);
+        panelItemCompra.setGravity(Gravity.CENTER_VERTICAL);
+        panelItemCompra.setPadding(dp(14), dp(12), dp(12), dp(12));
+        LinearLayout colTxtCompra = new LinearLayout(this);
+        colTxtCompra.setOrientation(LinearLayout.VERTICAL);
+        lblItemCompra = crearTexto("Alerta Compra Exitosa", "#F4F4F5", 13.5f, true);
+        lblDescItemCompra = crearTexto("Sonido de caja registradora al completarse una orden.", "#A1A1AA", 10.5f, false);
+        lblDescItemCompra.setPadding(0, dp(2), dp(8), 0);
+        colTxtCompra.addView(lblItemCompra);
+        colTxtCompra.addView(lblDescItemCompra);
         btnToggleCompra = crearBoton("", "#14532D", "#4ADE80", 10, () -> {
             alertaCompraActiva = !alertaCompraActiva;
             prefs.edit().putBoolean("alerta_compra", alertaCompraActiva).apply();
             actualizarBotonesAjustes();
             if (alertaCompraActiva) sonarAlertaCompraExitosa();
         });
-        filaComp.addView(lblItemCompra, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        filaComp.addView(btnToggleCompra, new LinearLayout.LayoutParams(dp(98), dp(32)));
-        cardAlertasAjustes.addView(filaComp);
+        panelItemCompra.addView(colTxtCompra, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        panelItemCompra.addView(btnToggleCompra, new LinearLayout.LayoutParams(dp(96), dp(34)));
+        cardAlertasAjustes.addView(panelItemCompra, lpSubPanel);
 
-        // Fila 3: Vibración del Dispositivo
-        LinearLayout filaVib = new LinearLayout(this);
-        filaVib.setGravity(Gravity.CENTER_VERTICAL);
-        filaVib.setPadding(0, dp(6), 0, dp(10));
-        lblItemVib = crearTexto("Vibración del Dispositivo", "#F4F4F5", 12f, true);
+        // Panel Separado 3: Vibración del Dispositivo
+        panelItemVib = new LinearLayout(this);
+        panelItemVib.setOrientation(LinearLayout.HORIZONTAL);
+        panelItemVib.setGravity(Gravity.CENTER_VERTICAL);
+        panelItemVib.setPadding(dp(14), dp(12), dp(12), dp(12));
+        LinearLayout colTxtVib = new LinearLayout(this);
+        colTxtVib.setOrientation(LinearLayout.VERTICAL);
+        lblItemVib = crearTexto("Vibración del Dispositivo", "#F4F4F5", 13.5f, true);
+        lblDescItemVib = crearTexto("Vibración breve junto a los avisos de Ordinaria y compra.", "#A1A1AA", 10.5f, false);
+        lblDescItemVib.setPadding(0, dp(2), dp(8), 0);
+        colTxtVib.addView(lblItemVib);
+        colTxtVib.addView(lblDescItemVib);
         btnToggleVib = crearBoton("", "#14532D", "#4ADE80", 10, () -> {
             vibracionActiva = !vibracionActiva;
             prefs.edit().putBoolean("vibracion_app", vibracionActiva).apply();
             actualizarBotonesAjustes();
             if (vibracionActiva) vibrarDispositivo(false);
         });
-        filaVib.addView(lblItemVib, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        filaVib.addView(btnToggleVib, new LinearLayout.LayoutParams(dp(98), dp(32)));
-        cardAlertasAjustes.addView(filaVib);
-
-        // Botón para probar el sonido de Caja Registradora ("Chi-Ching")
-        btnProbarChiChing = crearBotonConIcono("CHECK", "Probar sonido de Compra (Chi-Ching)", "#0284C7", "#FFFFFF", 11, this::sonarAlertaCompraExitosa);
-        cardAlertasAjustes.addView(btnProbarChiChing, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(36)));
+        panelItemVib.addView(colTxtVib, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        panelItemVib.addView(btnToggleVib, new LinearLayout.LayoutParams(dp(96), dp(34)));
+        cardAlertasAjustes.addView(panelItemVib);
 
         contenidoAjustes.addView(cardAlertasAjustes, lpCardAj);
         vistaAjustesScroll.addView(contenidoAjustes);
@@ -1098,7 +1313,7 @@ public class MainActivity extends Activity {
 
         frameRoot.addView(mainVertical);
 
-        // 5. BARRA FLOTANTE INFERIOR MÁS PEQUEÑA Y COMPACTA ("Cuentas" | "Historial" | "Ajustes")
+        // 5. BARRA FLOTANTE INFERIOR COMPACTA ("Cuentas" | "Historial" | "Ajustes")
         barraFlotante = new LinearLayout(this);
         barraFlotante.setOrientation(LinearLayout.HORIZONTAL);
         barraFlotante.setGravity(Gravity.CENTER);
@@ -1158,9 +1373,6 @@ public class MainActivity extends Activity {
                 Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
         lpFloating.setMargins(0, 0, 0, dp(12));
         frameRoot.addView(barraFlotante, lpFloating);
-
-        actualizarBotonesAjustes();
-        actualizarEstiloBarraFlotante();
 
         // 6. PANTALLA DE ENTRADA EN GRIS OSCURO (#18181B)
         LinearLayout splashOverlay = new LinearLayout(this);
@@ -1259,16 +1471,18 @@ public class MainActivity extends Activity {
 
     private void cambiarTema(int nuevoTema) {
         temaActual = nuevoTema;
-        prefs.edit().putInt("tema_app", nuevoTema).apply();
+        prefs.edit().putInt("tema_app_v2", nuevoTema).apply();
         aplicarTemaVisual();
     }
 
     private void aplicarTemaVisual() {
         String bgApp = colFondoApp();
         String bgCard = colFondoTarjeta();
+        String bgSub = colFondoSubPanel();
         String borderCard = colBordeTarjeta();
         String txtPri = colTextoPrimario();
         String txtSec = colTextoSecundario();
+        String acento = colAcentoTema();
 
         getWindow().setStatusBarColor(Color.parseColor(bgApp));
         getWindow().setNavigationBarColor(Color.parseColor(bgApp));
@@ -1288,46 +1502,100 @@ public class MainActivity extends Activity {
         if (lblRefrescoVal != null) lblRefrescoVal.setTextColor(Color.parseColor(txtPri));
         if (lblReloginVal != null) lblReloginVal.setTextColor(Color.parseColor(txtPri));
 
+        if (lblSubTema != null) lblSubTema.setTextColor(Color.parseColor(txtPri));
+        if (lblDescTema != null) lblDescTema.setTextColor(Color.parseColor(txtSec));
+        if (lblSubAlertas != null) lblSubAlertas.setTextColor(Color.parseColor(txtPri));
+        if (lblDescAlertas != null) lblDescAlertas.setTextColor(Color.parseColor(txtSec));
+
         if (lblItemOrd != null) lblItemOrd.setTextColor(Color.parseColor(txtPri));
+        if (lblDescItemOrd != null) lblDescItemOrd.setTextColor(Color.parseColor(txtSec));
         if (lblItemCompra != null) lblItemCompra.setTextColor(Color.parseColor(txtPri));
+        if (lblDescItemCompra != null) lblDescItemCompra.setTextColor(Color.parseColor(txtSec));
         if (lblItemVib != null) lblItemVib.setTextColor(Color.parseColor(txtPri));
+        if (lblDescItemVib != null) lblDescItemVib.setTextColor(Color.parseColor(txtSec));
+
+        if (btnNuevaCuenta != null) {
+            btnNuevaCuenta.setBackground(fondoRedondeado(acento, 8));
+            ponerIconoYTexto(btnNuevaCuenta, crearIconoVectorial("PLUS", "#FFFFFF", 14), "Nueva");
+            btnNuevaCuenta.setTextColor(Color.WHITE);
+        }
+
+        if (btnLimpiarHist != null) {
+            btnLimpiarHist.setBackground(fondoRedondeadoConBorde(bgSub, borderCard, 8, 1));
+            btnLimpiarHist.setTextColor(Color.parseColor(txtPri));
+        }
 
         if (cardTiempos != null) cardTiempos.setBackground(fondoRedondeadoConBorde(bgCard, borderCard, 12, 1));
-        if (cardTemaAjustes != null) cardTemaAjustes.setBackground(fondoRedondeadoConBorde(bgCard, borderCard, 14, 1));
-        if (cardAlertasAjustes != null) cardAlertasAjustes.setBackground(fondoRedondeadoConBorde(bgCard, borderCard, 14, 1));
+        if (cardTemaAjustes != null) cardTemaAjustes.setBackground(fondoRedondeadoConBorde(bgCard, borderCard, 16, 1));
+        if (cardAlertasAjustes != null) cardAlertasAjustes.setBackground(fondoRedondeadoConBorde(bgCard, borderCard, 16, 1));
+
+        if (panelItemOrd != null) panelItemOrd.setBackground(fondoRedondeadoConBorde(bgSub, borderCard, 14, 1));
+        if (panelItemCompra != null) panelItemCompra.setBackground(fondoRedondeadoConBorde(bgSub, borderCard, 14, 1));
+        if (panelItemVib != null) panelItemVib.setBackground(fondoRedondeadoConBorde(bgSub, borderCard, 14, 1));
 
         if (scrollHistorialConsola != null) {
             scrollHistorialConsola.setBackground(fondoRedondeadoConBorde(colFondoConsola(), borderCard, 12, 1));
+        }
+        if (txtHistorialConsola != null) {
+            txtHistorialConsola.setTextColor(Color.parseColor(colTextoConsola()));
         }
 
         if (barraFlotante != null) {
             barraFlotante.setBackground(fondoRedondeadoConBorde(bgCard, borderCard, 24, 1));
         }
 
+        actualizarTarjetasPreviewTema();
         actualizarBotonesAjustes();
         actualizarEstiloBarraFlotante();
+        actualizarResumenYBotonesGlobales();
+        if (pestanaInferiorActual == 1) {
+            reconstruirFiltrosHistorial();
+        }
         for (SesionBot s : obtenerSesionesRegistradas()) {
             actualizarVisualTarjeta(s);
         }
     }
 
+    private void actualizarTarjetasPreviewTema() {
+        if (imgPrevOscuro == null) return;
+        imgPrevOscuro.setImageBitmap(crearImagenPreviewTema(0, temaActual == 0));
+        imgPrevZafiro.setImageBitmap(crearImagenPreviewTema(1, temaActual == 1));
+        imgPrevClaro.setImageBitmap(crearImagenPreviewTema(2, temaActual == 2));
+
+        String bgSub = colFondoSubPanel();
+        String borderInact = colBordeTarjeta();
+        String txtPri = colTextoPrimario();
+        String txtSec = colTextoSecundario();
+
+        // Estilo Oscuro (Izquierda)
+        if (temaActual == 0) {
+            cardPrevOscuro.setBackground(fondoRedondeadoConBorde("#1E1B4B", "#6366F1", 14, 2));
+            txtPrevOscuro.setTextColor(Color.parseColor("#FFFFFF"));
+        } else {
+            cardPrevOscuro.setBackground(fondoRedondeadoConBorde(bgSub, borderInact, 14, 1));
+            txtPrevOscuro.setTextColor(Color.parseColor(txtSec));
+        }
+
+        // Estilo Azul Zafiro (Medio)
+        if (temaActual == 1) {
+            cardPrevZafiro.setBackground(fondoRedondeadoConBorde("#172554", "#38BDF8", 14, 2));
+            txtPrevZafiro.setTextColor(Color.parseColor("#38BDF8"));
+        } else {
+            cardPrevZafiro.setBackground(fondoRedondeadoConBorde(bgSub, borderInact, 14, 1));
+            txtPrevZafiro.setTextColor(Color.parseColor(txtSec));
+        }
+
+        // Estilo Claro (Derecha)
+        if (temaActual == 2) {
+            cardPrevClaro.setBackground(fondoRedondeadoConBorde("#E0F2FE", "#0284C7", 14, 2));
+            txtPrevClaro.setTextColor(Color.parseColor(txtPri));
+        } else {
+            cardPrevClaro.setBackground(fondoRedondeadoConBorde(bgSub, borderInact, 14, 1));
+            txtPrevClaro.setTextColor(Color.parseColor(txtSec));
+        }
+    }
+
     private void actualizarBotonesAjustes() {
-        String bgInactivo = (temaActual == 1) ? "#E2E8F0" : "#27272A";
-        String txtInactivo = (temaActual == 1) ? "#475569" : "#A1A1AA";
-
-        if (btnTemaOscuro != null) {
-            btnTemaOscuro.setBackground(fondoRedondeado(temaActual == 0 ? "#0284C7" : bgInactivo, 8));
-            btnTemaOscuro.setTextColor(Color.parseColor(temaActual == 0 ? "#FFFFFF" : txtInactivo));
-        }
-        if (btnTemaClaro != null) {
-            btnTemaClaro.setBackground(fondoRedondeado(temaActual == 1 ? "#0284C7" : bgInactivo, 8));
-            btnTemaClaro.setTextColor(Color.parseColor(temaActual == 1 ? "#FFFFFF" : txtInactivo));
-        }
-        if (btnTemaZafiro != null) {
-            btnTemaZafiro.setBackground(fondoRedondeado(temaActual == 2 ? "#0284C7" : bgInactivo, 8));
-            btnTemaZafiro.setTextColor(Color.parseColor(temaActual == 2 ? "#FFFFFF" : txtInactivo));
-        }
-
         configurarBotonInterruptor(btnToggleOrd, alertaOrdinariaActiva);
         configurarBotonInterruptor(btnToggleCompra, alertaCompraActiva);
         configurarBotonInterruptor(btnToggleVib, vibracionActiva);
@@ -1337,12 +1605,25 @@ public class MainActivity extends Activity {
         if (b == null) return;
         if (activo) {
             b.setText("ACTIVADO");
-            b.setTextColor(Color.parseColor("#4ADE80"));
-            b.setBackground(fondoRedondeadoConBorde("#14532D", "#22C55E", 8, 1));
+            if (temaActual == 1) {
+                b.setTextColor(Color.parseColor("#38BDF8"));
+                b.setBackground(fondoRedondeadoConBorde("#1E3A8A", "#38BDF8", 10, 1));
+            } else if (temaActual == 2) {
+                b.setTextColor(Color.parseColor("#FFFFFF"));
+                b.setBackground(fondoRedondeadoConBorde("#0284C7", "#0369A1", 10, 1));
+            } else {
+                b.setTextColor(Color.parseColor("#4ADE80"));
+                b.setBackground(fondoRedondeadoConBorde("#14532D", "#22C55E", 10, 1));
+            }
         } else {
             b.setText("DESACTIVADO");
-            b.setTextColor(Color.parseColor("#FCA5A5"));
-            b.setBackground(fondoRedondeadoConBorde("#450A0A", "#EF4444", 8, 1));
+            if (temaActual == 2) {
+                b.setTextColor(Color.parseColor("#64748B"));
+                b.setBackground(fondoRedondeadoConBorde("#E2E8F0", "#CBD5E1", 10, 1));
+            } else {
+                b.setTextColor(Color.parseColor("#FCA5A5"));
+                b.setBackground(fondoRedondeadoConBorde("#450A0A", "#EF4444", 10, 1));
+            }
         }
     }
 
@@ -1359,6 +1640,11 @@ public class MainActivity extends Activity {
         vistaHistorialContainer.setVisibility(nuevaPestana == 1 ? View.VISIBLE : View.GONE);
         vistaAjustesScroll.setVisibility(nuevaPestana == 2 ? View.VISIBLE : View.GONE);
 
+        // El recuadro de APAGADO / VIGILANDO solo se muestra en el panel de Cuentas
+        if (badgeEstadoGlobal != null) {
+            badgeEstadoGlobal.setVisibility(nuevaPestana == 0 ? View.VISIBLE : View.GONE);
+        }
+
         if (nuevaPestana == 1) {
             reconstruirFiltrosHistorial();
             refrescarVistaHistorial();
@@ -1369,20 +1655,21 @@ public class MainActivity extends Activity {
     private void actualizarEstiloBarraFlotante() {
         String bgCard = colFondoTarjeta();
         String txtInact = colTextoSecundario();
+        String acento = colAcentoTema();
 
         boolean enCuentas = (pestanaInferiorActual == 0);
         boolean enHist = (pestanaInferiorActual == 1);
         boolean enAjustes = (pestanaInferiorActual == 2);
 
-        navBtnCuentas.setBackground(fondoRedondeado(enCuentas ? "#0284C7" : bgCard, 18));
+        navBtnCuentas.setBackground(fondoRedondeado(enCuentas ? acento : bgCard, 18));
         navIconCuentas.setImageDrawable(crearIconoVectorial("USERS", enCuentas ? "#FFFFFF" : txtInact, 16));
         navTxtCuentas.setTextColor(Color.parseColor(enCuentas ? "#FFFFFF" : txtInact));
 
-        navBtnHistorial.setBackground(fondoRedondeado(enHist ? "#0284C7" : bgCard, 18));
+        navBtnHistorial.setBackground(fondoRedondeado(enHist ? acento : bgCard, 18));
         navIconHistorial.setImageDrawable(crearIconoVectorial("HISTORY", enHist ? "#FFFFFF" : txtInact, 16));
         navTxtHistorial.setTextColor(Color.parseColor(enHist ? "#FFFFFF" : txtInact));
 
-        navBtnAjustes.setBackground(fondoRedondeado(enAjustes ? "#0284C7" : bgCard, 18));
+        navBtnAjustes.setBackground(fondoRedondeado(enAjustes ? acento : bgCard, 18));
         navIconAjustes.setImageDrawable(crearIconoVectorial("SETTINGS", enAjustes ? "#FFFFFF" : txtInact, 16));
         navTxtAjustes.setTextColor(Color.parseColor(enAjustes ? "#FFFFFF" : txtInact));
     }
@@ -1392,7 +1679,7 @@ public class MainActivity extends Activity {
         for (int i = 0; i < MAX_CUENTAS; i++) {
             final SesionBot sesion = sesiones[i];
 
-            // 1. Construir Tarjeta de la Cuenta (Más compacta)
+            // 1. Construir Tarjeta de la Cuenta
             LinearLayout card = new LinearLayout(this);
             card.setOrientation(LinearLayout.VERTICAL);
             card.setPadding(dp(12), dp(10), dp(12), dp(10));
@@ -1430,8 +1717,7 @@ public class MainActivity extends Activity {
             lblPaso.setPadding(0, dp(1), 0, dp(6));
             card.addView(lblPaso);
 
-            // Fila 4: Los 5 botones de acción MÁS PEQUEÑOS (30dp x 26dp)
-            // ▶ Iniciar | ■ Detener (Mantiene donde quedó) | [→ Salir (Cierra sesión y detiene) | 👁 Ojo | ✎ Editar
+            // Fila 4: Los 5 botones de acción compactos (30dp x 26dp)
             LinearLayout filaAcciones = new LinearLayout(this);
             filaAcciones.setOrientation(LinearLayout.HORIZONTAL);
             filaAcciones.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
@@ -1444,13 +1730,11 @@ public class MainActivity extends Activity {
 
             ImageView bStop = crearBotonAccionTarjeta("STOP", "#450A0A", "#F87171", () -> {
                 if (sesion.estaCorriendo()) {
-                    // Detiene inmediatamente manteniendo la página y sesión donde se quedó
                     pausarSesionSinCerrar(sesion, true);
                 }
             });
 
             ImageView bLogoutStop = crearBotonAccionTarjeta("LOGOUT", "#431407", "#FB923C", () -> {
-                // Solo este botón cierra la sesión y detiene la cuenta
                 cerrarSesionYDetenerCuenta(sesion);
             });
 
@@ -1615,6 +1899,8 @@ public class MainActivity extends Activity {
     private ImageView crearBotonAccionTarjeta(String icono, String bgHex, String fgHex, Runnable accion) {
         ImageView iv = new ImageView(this);
         iv.setScaleType(ImageView.ScaleType.CENTER);
+        iv.setClickable(true);
+        iv.setFocusable(false);
         iv.setImageDrawable(crearIconoVectorial(icono, fgHex, 12));
         iv.setBackground(fondoRedondeadoConBorde(bgHex, fgHex, 7, 1));
         iv.setOnClickListener(v -> {
@@ -1680,22 +1966,23 @@ public class MainActivity extends Activity {
         if (s == null || s.cardView == null) return;
         boolean corriendo = s.estaCorriendo();
         String bgCard = colFondoTarjeta();
+        String bgSub = colFondoSubPanel();
         String borderCard = colBordeTarjeta();
         String txtSec = colTextoSecundario();
 
         Drawable dot = crearCirculoNeon(corriendo || s.compraCompletada, corriendo ? pulsoNeon : true, 11);
         ponerIconoYTexto(s.lblUsuarioCard, dot, s.nombreMostrado());
         if (s.compraCompletada || corriendo) {
-            s.lblUsuarioCard.setTextColor(Color.parseColor(temaActual == 1 ? "#15803D" : "#4ADE80"));
+            s.lblUsuarioCard.setTextColor(Color.parseColor(temaActual == 2 ? "#15803D" : "#4ADE80"));
         } else {
             s.lblUsuarioCard.setTextColor(Color.parseColor(txtSec));
         }
 
         // Borde iluminado en Verde Neón brillante cuando completa la orden
         if (s.compraCompletada) {
-            s.cardView.setBackground(fondoRedondeadoConBorde(temaActual == 1 ? "#DCFCE7" : "#0D2818", "#00FF66", 14, 2));
+            s.cardView.setBackground(fondoRedondeadoConBorde(temaActual == 2 ? "#DCFCE7" : "#0D2818", "#00FF66", 14, 2));
         } else if (corriendo) {
-            s.cardView.setBackground(fondoRedondeadoConBorde(bgCard, "#22C55E", 14, 1));
+            s.cardView.setBackground(fondoRedondeadoConBorde(bgCard, temaActual == 1 ? "#38BDF8" : "#22C55E", 14, 1));
         } else {
             s.cardView.setBackground(fondoRedondeadoConBorde(bgCard, borderCard, 14, 1));
         }
@@ -1706,35 +1993,61 @@ public class MainActivity extends Activity {
             s.badgeEstadoCard.setTextColor(Color.parseColor("#00FF66"));
             s.badgeEstadoCard.setBackground(fondoRedondeadoConBorde("#064E3B", "#00FF66", 10, 1));
         } else if (corriendo) {
-            s.badgeEstadoCard.setTextColor(Color.parseColor("#4ADE80"));
-            s.badgeEstadoCard.setBackground(fondoRedondeadoConBorde("#14532D", "#22C55E", 10, 1));
+            s.badgeEstadoCard.setTextColor(Color.parseColor(temaActual == 1 ? "#38BDF8" : "#4ADE80"));
+            s.badgeEstadoCard.setBackground(fondoRedondeadoConBorde(temaActual == 1 ? "#1E3A8A" : "#14532D",
+                    temaActual == 1 ? "#38BDF8" : "#22C55E", 10, 1));
         } else {
             s.badgeEstadoCard.setTextColor(Color.parseColor(txtSec));
-            s.badgeEstadoCard.setBackground(fondoRedondeadoConBorde(temaActual == 1 ? "#E2E8F0" : "#202227", borderCard, 10, 1));
+            s.badgeEstadoCard.setBackground(fondoRedondeadoConBorde(bgSub, borderCard, 10, 1));
         }
 
         if (s.lblSaldosCard != null) {
             s.lblSaldosCard.setText(s.textoSaldosMostrado());
-            s.lblSaldosCard.setTextColor(Color.parseColor(temaActual == 1 ? "#0284C7" : "#38BDF8"));
+            s.lblSaldosCard.setTextColor(Color.parseColor(temaActual == 2 ? "#0284C7" : "#38BDF8"));
         }
 
         s.lblSubtituloPasoCard.setText(s.ultimoPasoTexto);
         s.lblSubtituloPasoCard.setTextColor(Color.parseColor(
-                s.compraCompletada ? (temaActual == 1 ? "#15803D" : "#00FF66")
+                s.compraCompletada ? (temaActual == 2 ? "#15803D" : "#00FF66")
                         : (corriendo ? colTextoPrimario() : txtSec)
         ));
 
         if (s.scrollConsolaCard != null) {
             s.scrollConsolaCard.setBackground(fondoRedondeadoConBorde(colFondoConsola(), borderCard, 10, 1));
         }
+        if (s.txtConsolaCard != null) {
+            s.txtConsolaCard.setTextColor(Color.parseColor(colTextoConsola()));
+        }
 
+        // Colores de los 5 botones pequeños adaptados al tema actual
+        String bgBtnPlay = temaActual == 1 ? "#134E4A" : (temaActual == 2 ? "#DCFCE7" : "#14532D");
+        String fgBtnPlay = temaActual == 1 ? "#2DD4BF" : (temaActual == 2 ? "#15803D" : "#4ADE80");
+        s.btnPlayCard.setBackground(fondoRedondeadoConBorde(bgBtnPlay, fgBtnPlay, 7, 1));
+        s.btnPlayCard.setImageDrawable(crearIconoVectorial("PLAY", fgBtnPlay, 12));
         s.btnPlayCard.setAlpha(corriendo ? 0.35f : 1.0f);
         s.btnPlayCard.setEnabled(!corriendo);
 
+        String bgBtnStop = temaActual == 1 ? "#4C0519" : (temaActual == 2 ? "#FEE2E2" : "#450A0A");
+        String fgBtnStop = temaActual == 1 ? "#FB7185" : (temaActual == 2 ? "#DC2626" : "#F87171");
+        s.btnStopCard.setBackground(fondoRedondeadoConBorde(bgBtnStop, fgBtnStop, 7, 1));
+        s.btnStopCard.setImageDrawable(crearIconoVectorial("STOP", fgBtnStop, 12));
         s.btnStopCard.setAlpha(corriendo ? 1.0f : 0.35f);
         s.btnStopCard.setEnabled(corriendo);
 
-        s.btnEyeCard.setImageDrawable(crearIconoVectorial(s.nombreOculto ? "EYE_OFF" : "EYE", "#38BDF8", 12));
+        String bgBtnOut = temaActual == 2 ? "#FFEDD5" : "#431407";
+        String fgBtnOut = temaActual == 2 ? "#EA580C" : "#FB923C";
+        s.btnLogoutCard.setBackground(fondoRedondeadoConBorde(bgBtnOut, fgBtnOut, 7, 1));
+        s.btnLogoutCard.setImageDrawable(crearIconoVectorial("LOGOUT", fgBtnOut, 12));
+
+        String bgBtnEye = temaActual == 1 ? "#1E3A8A" : (temaActual == 2 ? "#E0F2FE" : "#1E293B");
+        String fgBtnEye = temaActual == 2 ? "#0284C7" : "#38BDF8";
+        s.btnEyeCard.setBackground(fondoRedondeadoConBorde(bgBtnEye, fgBtnEye, 7, 1));
+        s.btnEyeCard.setImageDrawable(crearIconoVectorial(s.nombreOculto ? "EYE_OFF" : "EYE", fgBtnEye, 12));
+
+        String bgBtnEdit = bgSub;
+        String fgBtnEdit = colTextoPrimario();
+        s.btnEditCard.setBackground(fondoRedondeadoConBorde(bgBtnEdit, borderCard, 7, 1));
+        s.btnEditCard.setImageDrawable(crearIconoVectorial("EDIT", fgBtnEdit, 12));
     }
 
     private void actualizarResumenYBotonesGlobales() {
@@ -1744,8 +2057,16 @@ public class MainActivity extends Activity {
         int detenidas = Math.max(0, total - activas);
 
         chipRegistradas.setText(total == 1 ? "1 registrada" : total + " registradas");
+        chipRegistradas.setBackground(fondoRedondeado(temaActual == 2 ? "#E0F2FE" : "#1E293B", 14));
+        chipRegistradas.setTextColor(Color.parseColor(temaActual == 2 ? "#0369A1" : "#38BDF8"));
+
         chipActivas.setText(activas == 1 ? "1 activa" : activas + " activas");
+        chipActivas.setBackground(fondoRedondeado(temaActual == 2 ? "#DCFCE7" : "#14532D", 14));
+        chipActivas.setTextColor(Color.parseColor(temaActual == 2 ? "#15803D" : "#4ADE80"));
+
         chipDetenidas.setText(detenidas == 1 ? "1 detenida" : detenidas + " detenidas");
+        chipDetenidas.setBackground(fondoRedondeado(colFondoSubPanel(), 14));
+        chipDetenidas.setTextColor(Color.parseColor(colTextoSecundario()));
 
         if (activas > 0) {
             ponerIconoYTexto(badgeEstadoGlobal, crearCirculoNeon(true, pulsoNeon, 10), "VIGILANDO (" + activas + ")");
@@ -1756,19 +2077,28 @@ public class MainActivity extends Activity {
             badgeEstadoGlobal.setTextColor(Color.parseColor("#FCA5A5"));
             badgeEstadoGlobal.setBackground(fondoRedondeado("#450A0A", 12));
         }
+        badgeEstadoGlobal.setVisibility(pestanaInferiorActual == 0 ? View.VISIBLE : View.GONE);
 
-        boolean hayParaIniciar = (total > 0 && activas < total);
+        boolean hayParaIniciar = (total == 0 || activas < total);
         boolean hayParaDetener = (activas > 0);
 
-        btnIniciarTodas.setEnabled(hayParaIniciar || total == 0);
-        btnIniciarTodas.setBackground(fondoRedondeado(hayParaIniciar || total == 0 ? "#16A34A" : "#14532D", 10));
-        ponerIconoYTexto(btnIniciarTodas, crearIconoVectorial("PLAY", hayParaIniciar || total == 0 ? "#FFFFFF" : "#86EFAC", 14), "Iniciar todas");
-        btnIniciarTodas.setTextColor(Color.parseColor(hayParaIniciar || total == 0 ? "#FFFFFF" : "#86EFAC"));
+        String bgStartOn = colBotonIniciarActivo();
+        String bgStartOff = colBotonIniciarInactivo();
+        String txtStartOff = (temaActual == 2) ? "#15803D" : "#86EFAC";
+
+        btnIniciarTodas.setEnabled(hayParaIniciar);
+        btnIniciarTodas.setBackground(fondoRedondeado(hayParaIniciar ? bgStartOn : bgStartOff, 10));
+        ponerIconoYTexto(btnIniciarTodas, crearIconoVectorial("PLAY", hayParaIniciar ? "#FFFFFF" : txtStartOff, 14), "Iniciar todas");
+        btnIniciarTodas.setTextColor(Color.parseColor(hayParaIniciar ? "#FFFFFF" : txtStartOff));
+
+        String bgStopOn = colBotonDetenerActivo();
+        String bgStopOff = colBotonDetenerInactivo();
+        String txtStopOff = (temaActual == 2) ? "#B91C1C" : "#FCA5A5";
 
         btnDetenerTodas.setEnabled(hayParaDetener);
-        btnDetenerTodas.setBackground(fondoRedondeado(hayParaDetener ? "#DC2626" : "#7F1D1D", 10));
-        ponerIconoYTexto(btnDetenerTodas, crearIconoVectorial("STOP", hayParaDetener ? "#FFFFFF" : "#FCA5A5", 14), "Detener todas");
-        btnDetenerTodas.setTextColor(Color.parseColor(hayParaDetener ? "#FFFFFF" : "#FCA5A5"));
+        btnDetenerTodas.setBackground(fondoRedondeado(hayParaDetener ? bgStopOn : bgStopOff, 10));
+        ponerIconoYTexto(btnDetenerTodas, crearIconoVectorial("STOP", hayParaDetener ? "#FFFFFF" : txtStopOff, 14), "Detener todas");
+        btnDetenerTodas.setTextColor(Color.parseColor(hayParaDetener ? "#FFFFFF" : txtStopOff));
     }
 
     private void actualizarSaldosEnSegundoPlano(final SesionBot s, boolean forzarAhora) {
@@ -1846,9 +2176,12 @@ public class MainActivity extends Activity {
     // =========================================================================================
     private void reconstruirFiltrosHistorial() {
         barraFiltrosHistorial.removeAllViews();
+        String acento = colAcentoTema();
+        String bgInact = colFondoSubPanel();
+        String txtInact = colTextoSecundario();
 
-        Button btnAll = crearBoton("TODAS", filtroHistorialSlot == -1 ? "#0284C7" : "#27272A",
-                filtroHistorialSlot == -1 ? "#FFFFFF" : "#A1A1AA", 10, () -> {
+        Button btnAll = crearBoton("TODAS", filtroHistorialSlot == -1 ? acento : bgInact,
+                filtroHistorialSlot == -1 ? "#FFFFFF" : txtInact, 10, () -> {
                     filtroHistorialSlot = -1;
                     reconstruirFiltrosHistorial();
                     refrescarVistaHistorial();
@@ -1860,8 +2193,8 @@ public class MainActivity extends Activity {
 
         for (SesionBot s : obtenerSesionesRegistradas()) {
             boolean sel = (filtroHistorialSlot == s.slotIndex);
-            Button bUsr = crearBoton(s.nombreMostrado(), sel ? "#0284C7" : "#27272A",
-                    sel ? "#FFFFFF" : "#A1A1AA", 10, () -> {
+            Button bUsr = crearBoton(s.nombreMostrado(), sel ? acento : bgInact,
+                    sel ? "#FFFFFF" : txtInact, 10, () -> {
                         filtroHistorialSlot = s.slotIndex;
                         reconstruirFiltrosHistorial();
                         refrescarVistaHistorial();
@@ -2152,7 +2485,7 @@ public class MainActivity extends Activity {
         builder.setView(scrollPopup);
         final AlertDialog dialog = builder.create();
 
-        Button btnGuardar = crearBotonConIcono("CHECK", "Guardar Cuenta", "#0284C7", "#FFFFFF", 13, () -> {
+        Button btnGuardar = crearBotonConIcono("CHECK", "Guardar Cuenta", colAcentoTema(), "#FFFFFF", 13, () -> {
             String u = edtUsuario.getText().toString().trim();
             String c = edtCedula.getText().toString().trim();
             String p = edtClave.getText().toString().trim();
@@ -2304,7 +2637,7 @@ public class MainActivity extends Activity {
     }
 
     // =========================================================================================
-    // ENCENDIDO (CONTINUANDO DONDE SE QUEDÓ), DETENCIÓN (PAUSA) Y BOTÓN SALIR
+    // ENCENDIDO FIABLE (CON 1, 2, 3 O 4 CUENTAS), PAUSA SIN CERRAR SESIÓN Y BOTÓN SALIR
     // =========================================================================================
     private void iniciarTodasLasCuentas() {
         ArrayList<SesionBot> reg = obtenerSesionesRegistradas();
@@ -2317,15 +2650,11 @@ public class MainActivity extends Activity {
         for (SesionBot s : reg) {
             if (!s.estaCorriendo() || s.detenerTrasCerrarSesion) {
                 iniciarSesionIndividual(s, delayEscalonado);
-                delayEscalonado += 350;
+                delayEscalonado += 300;
             }
         }
     }
 
-    /**
-     * Detiene todas las cuentas manteniéndolas exactamente en la página donde se quedaron
-     * sin cerrar la sesión.
-     */
     private void detenerTodasLasCuentas() {
         for (SesionBot s : obtenerSesionesRegistradas()) {
             if (s.estaCorriendo()) {
@@ -2336,29 +2665,33 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * Inicia o reanuda la cuenta: si ya tenía una página cargada (Intervención, Posición Global,
-     * Contraseña o Login), detecta dónde quedó sin recargar de cero; solo carga URL_LOGIN si estaba vacía.
+     * Activa inmediatamente la cuenta (cambiando su estado a CARGANDO_LOGIN desde el primer instante
+     * para que nunca se quede en DETENIDO) y continúa desde la pantalla donde esté o abre el login.
      */
     private void iniciarSesionIndividual(final SesionBot s, int delayMs) {
+        if (s == null || !s.registrada) return;
         s.corriendo = true;
         s.detenerTrasCerrarSesion = false;
         s.compraCompletada = false;
         s.intentoLogout = 0;
+        cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
+
+        if (!s.sesionAbiertaEnServidor) {
+            registrarPasoCuenta(s, "Iniciando sesión (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
+        } else {
+            registrarPasoCuenta(s, "Reanudando cuenta...");
+        }
 
         handler.postDelayed(() -> {
             if (!s.estaCorriendo() || s.webViewOculto == null) return;
             String urlActual = s.webViewOculto.getUrl();
             if (urlActual == null || urlActual.isEmpty() || !urlActual.contains("tesoroenlinea.bt.com.ve")) {
-                registrarPasoCuenta(s, "Iniciando sesión (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
                 s.webViewOculto.loadUrl(URL_LOGIN);
             }
-            cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
-        }, delayMs);
+            ejecutarPasoMaquinaEstados(s);
+        }, Math.max(0, delayMs));
     }
 
-    /**
-     * Pausa el bot en el punto exacto donde está sin cerrar la sesión del banco.
-     */
     private void pausarSesionSinCerrar(SesionBot s, boolean registrarEnLog) {
         s.corriendo = false;
         s.detenerTrasCerrarSesion = false;
@@ -2369,9 +2702,6 @@ public class MainActivity extends Activity {
         cambiarEstado(s, EstadoBot.DETENIDO);
     }
 
-    /**
-     * Exclusivo del botón naranja de Salir: cierra la sesión en el banco y luego detiene la cuenta.
-     */
     private void cerrarSesionYDetenerCuenta(SesionBot s) {
         if (s == null || !s.registrada) return;
         s.corriendo = true;
@@ -2531,7 +2861,7 @@ public class MainActivity extends Activity {
     }
 
     // =========================================================================================
-    // MÁQUINA DE ESTADOS CON CONTINUACIÓN INTELIGENTE, SALDOS .saldoDisp Y SONIDO CHI-CHING
+    // MÁQUINA DE ESTADOS CON CONTINUACIÓN INTELIGENTE, SALDOS .saldoDisp Y SONIDO CHA-CHING
     // =========================================================================================
     private void ejecutarPasoMaquinaEstados(final SesionBot sesion) {
         if (sesion == null || sesion.webViewOculto == null) return;
@@ -2672,7 +3002,6 @@ public class MainActivity extends Activity {
         switch (s.estadoActual) {
 
             case CARGANDO_LOGIN:
-                // Reconoce inmediatamente dónde se quedó cuando fue pausada con Detener
                 if (paginaCompleta && visMonto && !hayInconv) {
                     if (s.tiempoInicioSesionMs == 0) s.tiempoInicioSesionMs = ahora;
                     s.sesionAbiertaEnServidor = true;
@@ -2700,11 +3029,10 @@ public class MainActivity extends Activity {
                 }
                 if (paginaCompleta && visDoc) {
                     s.sesionAbiertaEnServidor = false;
-                    registrarPasoCuenta(s, "Iniciando sesión (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_LOGIN);
                     return;
                 }
-                if (ahora - s.tiempoEstadoMs > 14000) {
+                if (ahora - s.tiempoEstadoMs > 12000) {
                     s.tiempoEstadoMs = ahora;
                     s.webViewOculto.stopLoading();
                     s.webViewOculto.loadUrl(URL_LOGIN);
@@ -3082,7 +3410,7 @@ public class MainActivity extends Activity {
                 "    var btnSiExistente = document.querySelector('button.swal2-confirm') || Array.from(document.querySelectorAll('button, a')).find(el => el.innerText && (el.innerText.trim().toLowerCase() === 'si' || el.innerText.trim().toLowerCase() === 'sí'));" +
                 "    if (btnSiExistente && btnSiExistente.offsetWidth > 0) {" +
                 "      btnSiExistente.click();" +
-                "    } else {" +
+                "} else {" +
                 "      var btnSalir = document.querySelector(\"a[href*='Logout' i], a[onclick*='Logout' i], header ul li:nth-child(4) a, .btn-danger\");" +
                 "      if (btnSalir) { btnSalir.click(); }" +
                 "      if (typeof Logout === 'function') { try { Logout(); } catch(e){} }" +
