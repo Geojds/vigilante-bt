@@ -64,41 +64,45 @@ import java.lang.reflect.Method;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.Iterator;
 import java.util.Locale;
 
 public class MainActivity extends Activity {
 
-    private static final String URL_LOGIN = "https://tesoroenlinea.bt.com.ve/lg";
+    private static final String URL_LOGIN = "https://tesoroenlinea.bt.com.ve/";
     private static final String URL_GIF_LOADER = "https://tesoroenlinea.bt.com.ve/img/loader.gif?1792770684";
-    private static final int MONTO_MAX_USD = 300;
-    private static final String CODIGO_ORIGEN_FONDOS = "1";  // 1 = Sueldos y Salarios
-    private static final String CODIGO_DESTINO_FONDOS = "5"; // 5 = Ahorro
-    private static final int MAX_CUENTAS = 8;
+    private static final String MONTO_COMPRA = "300,00";
+    private static final String ORIGEN_FONDOS = "Sueldos y Salarios";
+    private static final String DESTINO_FONDOS = "Ahorro";
+    private static final int MAX_CUENTAS = 4;
     private final int[] OPCIONES_MINUTOS = {1, 3, 5, 10, 15, 20, 30};
 
-    // Contenedores de las 2 pestañas principales (Cuentas e Historial)
+    // Vistas principales (Cuentas desplazable e Historial)
     private ScrollView vistaCuentasScroll;
     private LinearLayout contenedorTarjetasCuentas;
     private LinearLayout vistaHistorialContainer;
     private LinearLayout barraFiltrosHistorial;
     private ScrollView scrollHistorialConsola;
     private TextView txtHistorialConsola;
-    private FrameLayout contenedorMotoresOcultos;
 
-    // Cabecera y chips de estado
+    // Contenedor de motores en tamaño real detrás del fondo oscuro (para que Android nunca los pause)
+    private LinearLayout filaMotoresSup, filaMotoresInf;
+
+    // Cabecera, chips y controles
     private TextView badgeEstadoGlobal;
     private TextView chipRegistradas, chipActivas, chipDetenidas;
     private TextView lblRefrescoVal, lblReloginVal;
     private Button btnIniciarTodas, btnDetenerTodas, btnNuevaCuenta;
 
     // Barra flotante inferior (Cuentas | Historial)
+    private LinearLayout barraFlotante;
     private LinearLayout navBtnCuentas, navBtnHistorial;
     private ImageView navIconCuentas, navIconHistorial;
     private TextView navTxtCuentas, navTxtHistorial;
 
     // 0 = Cuentas (Principal), 1 = Historial
     private int pestanaInferiorActual = 0;
-    // -1 = Todas las cuentas en el Historial, 0..N = Filtrado por cuenta en el Historial
+    // -1 = Todas las cuentas en el Historial, 0..3 = Filtrado por cuenta
     private int filtroHistorialSlot = -1;
 
     private int intervaloRefresco = 3;
@@ -127,16 +131,24 @@ public class MainActivity extends Activity {
 
     private enum EstadoBot {
         DETENIDO,
-        CONECTANDO_SERVIDOR,
-        ENVIANDO_USUARIO_CHK,
-        ESPERANDO_CLAVE_CHK,
-        ENVIANDO_CLAVE_EXE,
-        VERIFICANDO_SESION,
-        ENTRANDO_INTERVENCION,
-        VIGILANDO_INTERVENCION,
-        COMPRANDO_ORDEN,
+        CARGANDO_LOGIN,
+        ESPERANDO_ESTABILIZAR_LOGIN,
+        ENVIANDO_FASE1,
+        ESPERANDO_CARGA_PASS,
+        ESPERANDO_ESTABILIZAR_PASS,
+        ENVIANDO_FASE2,
+        ESPERANDO_CARGA_INICIO,
+        ESPERANDO_ESTABILIZAR_INICIO,
+        NAVEGANDO_MENU,
+        VIGILANDO,
+        ESPERANDO_FORM_INTENTO1,
+        LIMPIANDO_PANTALLA,
+        ESPERANDO_FORM_INTENTO2,
+        ESPERANDO_ESTABILIZAR_FORM,
+        LLENANDO_COMPRA,
+        COMPRANDO,
         CERRANDO_SESION,
-        RECONECTANDO_RED
+        REINICIANDO_RED
     }
 
     private class SesionBot {
@@ -152,7 +164,7 @@ public class MainActivity extends Activity {
         String contrasena = "";
         String ultimoPasoTexto = "Sin actividad todavía";
 
-        // Motor oculto en segundo plano
+        // Motor WebView en segundo plano
         WebView webViewOculto;
 
         // Elementos visuales de la Tarjeta de Cuenta
@@ -166,14 +178,13 @@ public class MainActivity extends Activity {
         TextView txtConsolaCard;
 
         EstadoBot estadoActual = EstadoBot.DETENIDO;
+        int progresoWeb = 100;
         boolean cargandoRed = false;
         long tiempoInicioSesionMs = 0;
         long tiempoEstadoMs = 0;
         boolean accionEnCurso = false;
-        boolean peticionRedEnCurso = false;
         boolean microCortePropio = false;
         int vueltaActual = 0;
-        int intentoCreate = 0;
         int intentoLogout = 0;
         boolean compraCompletada = false;
 
@@ -515,7 +526,7 @@ public class MainActivity extends Activity {
     }
 
     // =========================================================================================
-    // CONSTRUCCIÓN DE LA INTERFAZ (CUENTAS DESPLAZABLES + BARRA FLOTANTE DE 2 ICONOS)
+    // CONSTRUCCIÓN DE LA INTERFAZ (CUENTAS DESPLAZABLES + BARRA FLOTANTE CORREGIDA)
     // =========================================================================================
     @SuppressLint("SetJavaScriptEnabled")
     private void construirInterfazCompleta() {
@@ -524,14 +535,26 @@ public class MainActivity extends Activity {
         frameRoot.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        // Contenedor invisible de 1x1 píxel donde viven los motores HTML en segundo plano
-        contenedorMotoresOcultos = new FrameLayout(this);
-        contenedorMotoresOcultos.setAlpha(0f);
-        frameRoot.addView(contenedorMotoresOcultos, new FrameLayout.LayoutParams(1, 1));
+        // 0. Cuadrícula 2x2 de tamaño real para los 4 navegadores detrás de la interfaz oscura
+        // (Al tener tamaño real y alpha=1.0f detrás del fondo opaco #0F1115, nunca se ven pero Android jamás los pausa)
+        LinearLayout contenedorMotores2x2 = new LinearLayout(this);
+        contenedorMotores2x2.setOrientation(LinearLayout.VERTICAL);
+        filaMotoresSup = new LinearLayout(this);
+        filaMotoresSup.setOrientation(LinearLayout.HORIZONTAL);
+        filaMotoresInf = new LinearLayout(this);
+        filaMotoresInf.setOrientation(LinearLayout.HORIZONTAL);
+        contenedorMotores2x2.addView(filaMotoresSup, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        contenedorMotores2x2.addView(filaMotoresInf, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        frameRoot.addView(contenedorMotores2x2, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
+        // Capa principal opaca encima de los motores ocultos
         LinearLayout mainVertical = new LinearLayout(this);
         mainVertical.setOrientation(LinearLayout.VERTICAL);
         mainVertical.setBackgroundColor(Color.parseColor("#0F1115"));
+        mainVertical.setClickable(true);
         mainVertical.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
@@ -578,7 +601,7 @@ public class MainActivity extends Activity {
 
         LinearLayout contenidoScrollCuentas = new LinearLayout(this);
         contenidoScrollCuentas.setOrientation(LinearLayout.VERTICAL);
-        contenidoScrollCuentas.setPadding(dp(14), dp(4), dp(14), dp(105)); // Espacio inferior para la barra flotante
+        contenidoScrollCuentas.setPadding(dp(14), dp(4), dp(14), dp(110));
 
         // Cabecera de sección "Cuentas" + Botón "+ Nueva"
         LinearLayout filaHeaderCuentas = new LinearLayout(this);
@@ -697,10 +720,10 @@ public class MainActivity extends Activity {
         mainVertical.addView(vistaCuentasScroll, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        // 3. VISTA SECUNDARIA: "HISTORIAL" (Muestra únicamente el historial de la consola de las cuentas)
+        // 3. VISTA SECUNDARIA: "HISTORIAL"
         vistaHistorialContainer = new LinearLayout(this);
         vistaHistorialContainer.setOrientation(LinearLayout.VERTICAL);
-        vistaHistorialContainer.setPadding(dp(14), dp(6), dp(14), dp(100));
+        vistaHistorialContainer.setPadding(dp(14), dp(6), dp(14), dp(105));
         vistaHistorialContainer.setVisibility(View.GONE);
 
         LinearLayout headerHist = new LinearLayout(this);
@@ -724,7 +747,6 @@ public class MainActivity extends Activity {
         headerHist.addView(btnLimpiarHist, new LinearLayout.LayoutParams(dp(74), dp(32)));
         vistaHistorialContainer.addView(headerHist);
 
-        // Barra horizontal de filtros de cuenta en el Historial (TODAS | usuario1 | usuario2...)
         HorizontalScrollView scrollFiltros = new HorizontalScrollView(this);
         scrollFiltros.setHorizontalScrollBarEnabled(false);
         barraFiltrosHistorial = new LinearLayout(this);
@@ -734,7 +756,6 @@ public class MainActivity extends Activity {
         vistaHistorialContainer.addView(scrollFiltros, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        // Caja de texto del Historial
         scrollHistorialConsola = new ScrollView(this);
         scrollHistorialConsola.setBackground(fondoRedondeadoConBorde("#14161A", "#27272A", 12, 1));
         scrollHistorialConsola.setPadding(dp(12), dp(10), dp(12), dp(10));
@@ -752,38 +773,45 @@ public class MainActivity extends Activity {
 
         frameRoot.addView(mainVertical);
 
-        // 4. BARRA FLOTANTE INFERIOR CON SOLO 2 ICONOS: "Cuentas" E "Historial"
-        LinearLayout barraFlotante = new LinearLayout(this);
+        // 4. BARRA FLOTANTE INFERIOR CORREGIDA (Texto completo "Cuentas" e "Historial" y oculta durante el Splash)
+        barraFlotante = new LinearLayout(this);
         barraFlotante.setOrientation(LinearLayout.HORIZONTAL);
         barraFlotante.setGravity(Gravity.CENTER);
-        barraFlotante.setPadding(dp(10), dp(6), dp(10), dp(6));
+        barraFlotante.setPadding(dp(6), dp(5), dp(6), dp(5));
         barraFlotante.setBackground(fondoRedondeadoConBorde("#18181B", "#2E323B", 30, 1));
-        barraFlotante.setElevation(dp(12));
+        barraFlotante.setVisibility(View.GONE); // Se muestra al finalizar la pantalla de carga inicial
 
         navBtnCuentas = new LinearLayout(this);
         navBtnCuentas.setOrientation(LinearLayout.VERTICAL);
         navBtnCuentas.setGravity(Gravity.CENTER);
-        navBtnCuentas.setPadding(dp(22), dp(6), dp(22), dp(6));
+        navBtnCuentas.setPadding(dp(6), dp(6), dp(6), dp(6));
         navIconCuentas = new ImageView(this);
-        navTxtCuentas = crearTexto("Cuentas", "#FFFFFF", 10.5f, true);
+        navTxtCuentas = crearTexto("Cuentas", "#FFFFFF", 11.5f, true);
+        navTxtCuentas.setSingleLine(true);
+        navTxtCuentas.setGravity(Gravity.CENTER);
         navBtnCuentas.addView(navIconCuentas, new LinearLayout.LayoutParams(dp(22), dp(22)));
-        navBtnCuentas.addView(navTxtCuentas);
+        navBtnCuentas.addView(navTxtCuentas, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         navBtnCuentas.setOnClickListener(v -> cambiarPestanaInferior(0));
 
         navBtnHistorial = new LinearLayout(this);
         navBtnHistorial.setOrientation(LinearLayout.VERTICAL);
         navBtnHistorial.setGravity(Gravity.CENTER);
-        navBtnHistorial.setPadding(dp(22), dp(6), dp(22), dp(6));
+        navBtnHistorial.setPadding(dp(6), dp(6), dp(6), dp(6));
         navIconHistorial = new ImageView(this);
-        navTxtHistorial = crearTexto("Historial", "#A1A1AA", 10.5f, true);
+        navTxtHistorial = crearTexto("Historial", "#A1A1AA", 11.5f, true);
+        navTxtHistorial.setSingleLine(true);
+        navTxtHistorial.setGravity(Gravity.CENTER);
         navBtnHistorial.addView(navIconHistorial, new LinearLayout.LayoutParams(dp(22), dp(22)));
-        navBtnHistorial.addView(navTxtHistorial);
+        navBtnHistorial.addView(navTxtHistorial, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         navBtnHistorial.setOnClickListener(v -> cambiarPestanaInferior(1));
 
-        barraFlotante.addView(navBtnCuentas);
+        // Ancho fijo amplio (118dp por botón) para que jamás se corte a "Cuen" o "Histo"
+        barraFlotante.addView(navBtnCuentas, new LinearLayout.LayoutParams(dp(118), dp(54)));
         View separadorNav = new View(this);
-        barraFlotante.addView(separadorNav, new LinearLayout.LayoutParams(dp(14), dp(1)));
-        barraFlotante.addView(navBtnHistorial);
+        barraFlotante.addView(separadorNav, new LinearLayout.LayoutParams(dp(6), dp(1)));
+        barraFlotante.addView(navBtnHistorial, new LinearLayout.LayoutParams(dp(118), dp(54)));
 
         FrameLayout.LayoutParams lpFloating = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -793,12 +821,13 @@ public class MainActivity extends Activity {
 
         actualizarEstiloBarraFlotante();
 
-        // 5. PANTALLA DE ENTRADA EN GRIS OSCURO (#18181B)
+        // 5. PANTALLA DE ENTRADA EN GRIS OSCURO (#18181B) CON ELEVACIÓN SUPERIOR
         LinearLayout splashOverlay = new LinearLayout(this);
         splashOverlay.setOrientation(LinearLayout.VERTICAL);
         splashOverlay.setGravity(Gravity.CENTER);
         splashOverlay.setBackgroundColor(Color.parseColor("#18181B"));
         splashOverlay.setClickable(true);
+        splashOverlay.setElevation(dp(100));
         splashOverlay.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
@@ -881,6 +910,7 @@ public class MainActivity extends Activity {
                     .withEndAction(() -> {
                         splashOverlay.setVisibility(View.GONE);
                         splashWebView.destroy();
+                        barraFlotante.setVisibility(View.VISIBLE);
                     })
                     .start();
         }, 3000);
@@ -910,18 +940,18 @@ public class MainActivity extends Activity {
     private void actualizarEstiloBarraFlotante() {
         boolean enCuentas = (pestanaInferiorActual == 0);
 
-        navBtnCuentas.setBackground(fondoRedondeado(enCuentas ? "#0284C7" : "#18181B", 22));
+        navBtnCuentas.setBackground(fondoRedondeado(enCuentas ? "#0284C7" : "#18181B", 24));
         navIconCuentas.setImageDrawable(crearIconoVectorial("USERS", enCuentas ? "#FFFFFF" : "#A1A1AA", 20));
         navTxtCuentas.setTextColor(Color.parseColor(enCuentas ? "#FFFFFF" : "#A1A1AA"));
 
-        navBtnHistorial.setBackground(fondoRedondeado(!enCuentas ? "#0284C7" : "#18181B", 22));
+        navBtnHistorial.setBackground(fondoRedondeado(!enCuentas ? "#0284C7" : "#18181B", 24));
         navIconHistorial.setImageDrawable(crearIconoVectorial("HISTORY", !enCuentas ? "#FFFFFF" : "#A1A1AA", 20));
         navTxtHistorial.setTextColor(Color.parseColor(!enCuentas ? "#FFFFFF" : "#A1A1AA"));
     }
 
     /**
-     * Inicializa los motores ocultos en segundo plano y construye la tarjeta interactiva
-     * de cada cuenta con sus 4 botones (Iniciar, Detener, Ojo, Editar) y su consola desplegable.
+     * Inicializa los 4 navegadores en cuadrícula 2x2 de tamaño real detrás del fondo oscuro
+     * para que el DOM del banco funcione idéntico a la versión visual sin pausarse jamás.
      */
     @SuppressLint({"SetJavaScriptEnabled", "ClickableViewAccessibility"})
     private void inicializarMotoresOcultos() {
@@ -934,7 +964,6 @@ public class MainActivity extends Activity {
             card.setPadding(dp(14), dp(12), dp(14), dp(12));
             card.setBackground(fondoRedondeadoConBorde("#18181B", "#27272A", 14, 1));
 
-            // Al tocar la tarjeta se despliega o se cierra la consola de esa cuenta
             card.setOnClickListener(v -> {
                 sesion.consolaDesplegada = !sesion.consolaDesplegada;
                 sesion.contenedorConsolaCard.setVisibility(sesion.consolaDesplegada ? View.VISIBLE : View.GONE);
@@ -943,7 +972,6 @@ public class MainActivity extends Activity {
                 }
             });
 
-            // Fila 1: (Círculo Neón) Nombre de Usuario + Badge de Estado
             LinearLayout filaTopCard = new LinearLayout(this);
             filaTopCard.setOrientation(LinearLayout.HORIZONTAL);
             filaTopCard.setGravity(Gravity.CENTER_VERTICAL);
@@ -957,12 +985,10 @@ public class MainActivity extends Activity {
             filaTopCard.addView(badgeEst);
             card.addView(filaTopCard);
 
-            // Fila 2: Último paso actual en vivo (ej. "Iniciando sesión...", "Sin botón intento 1", etc.)
             TextView lblPaso = crearTexto("Sin actividad todavía", "#A1A1AA", 12f, false);
             lblPaso.setPadding(0, dp(6), 0, dp(10));
             card.addView(lblPaso);
 
-            // Fila 3: Los 4 botones de acción a la derecha (▶ Iniciar | ■ Detener | 👁 Ocultar | ✎ Editar)
             LinearLayout filaAcciones = new LinearLayout(this);
             filaAcciones.setOrientation(LinearLayout.HORIZONTAL);
             filaAcciones.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
@@ -1000,7 +1026,6 @@ public class MainActivity extends Activity {
             filaAcciones.addView(bEdit, lpAct);
             card.addView(filaAcciones);
 
-            // Fila 4: Consola Desplegable Interna (oculta por defecto hasta que se toca la tarjeta)
             LinearLayout boxConsola = new LinearLayout(this);
             boxConsola.setOrientation(LinearLayout.VERTICAL);
             boxConsola.setVisibility(View.GONE);
@@ -1011,7 +1036,6 @@ public class MainActivity extends Activity {
             scrollCon.setBackground(fondoRedondeadoConBorde("#0F1115", "#27272A", 10, 1));
             scrollCon.setPadding(dp(10), dp(8), dp(10), dp(8));
 
-            // Permite deslizar el interior de la consola sin que el ScrollView principal le robe el toque
             scrollCon.setOnTouchListener((v, event) -> {
                 v.getParent().requestDisallowInterceptTouchEvent(true);
                 if (event.getAction() == MotionEvent.ACTION_UP) {
@@ -1059,22 +1083,36 @@ public class MainActivity extends Activity {
             sesion.scrollConsolaCard = scrollCon;
             sesion.txtConsolaCard = txtCon;
 
-            // 2. Motor WebView oculto en segundo plano
+            // 2. Motor WebView en tamaño real detrás del fondo oscuro
             WebView wv = new WebView(this);
+            wv.setBackgroundColor(Color.parseColor("#18181B"));
             configurarPerfilAisladoWebView(wv, i);
 
             WebSettings ws = wv.getSettings();
             ws.setJavaScriptEnabled(true);
             ws.setDomStorageEnabled(true);
             ws.setDatabaseEnabled(true);
-            ws.setLoadsImagesAutomatically(false);
-            ws.setBlockNetworkImage(true);
+            ws.setLoadWithOverviewMode(true);
+            ws.setUseWideViewPort(true);
+            ws.setSupportZoom(true);
+            ws.setBuiltInZoomControls(true);
+            ws.setDisplayZoomControls(false);
+            ws.setLoadsImagesAutomatically(true);
+            ws.setBlockNetworkImage(false);
             ws.setBlockNetworkLoads(false);
-            ws.setUserAgentString("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 HeadlessSlot/" + (i + 1));
+            ws.setUserAgentString("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Slot/" + (i + 1));
 
             CookieManager cm = CookieManager.getInstance();
             cm.setAcceptCookie(true);
             cm.setAcceptThirdPartyCookies(wv, true);
+
+            wv.setWebChromeClient(new android.webkit.WebChromeClient() {
+                @Override
+                public void onProgressChanged(WebView view, int newProgress) {
+                    sesion.progresoWeb = newProgress;
+                    sesion.cargandoRed = (newProgress < 100);
+                }
+            });
 
             wv.setWebViewClient(new WebViewClient() {
                 @Override
@@ -1087,12 +1125,14 @@ public class MainActivity extends Activity {
                 public void onPageFinished(WebView view, String url) {
                     super.onPageFinished(view, url);
                     sesion.cargandoRed = false;
+                    sesion.progresoWeb = 100;
                 }
 
                 @Override
                 public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
                     if (request != null && request.isForMainFrame()) {
                         sesion.cargandoRed = false;
+                        sesion.progresoWeb = 100;
                         view.stopLoading();
                     }
                 }
@@ -1101,12 +1141,19 @@ public class MainActivity extends Activity {
                 @Override
                 public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
                     sesion.cargandoRed = false;
+                    sesion.progresoWeb = 100;
                     view.stopLoading();
                 }
             });
 
             sesion.webViewOculto = wv;
-            contenedorMotoresOcultos.addView(wv, new FrameLayout.LayoutParams(1, 1));
+            LinearLayout.LayoutParams lpWv = new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.MATCH_PARENT, 1f);
+            if (i < 2) {
+                filaMotoresSup.addView(wv, lpWv);
+            } else {
+                filaMotoresInf.addView(wv, lpWv);
+            }
             wv.loadUrl(URL_LOGIN);
         }
     }
@@ -1207,7 +1254,6 @@ public class MainActivity extends Activity {
         if (s == null || s.cardView == null) return;
         boolean corriendo = s.estaCorriendo();
 
-        // 1. Círculo LED Neón + Nombre de usuario (Gris si detenido, Verde si corriendo)
         Drawable dot = crearCirculoNeon(corriendo || s.compraCompletada, corriendo ? pulsoNeon : true, 11);
         ponerIconoYTexto(s.lblUsuarioCard, dot, s.nombreMostrado());
         if (s.compraCompletada || corriendo) {
@@ -1216,7 +1262,7 @@ public class MainActivity extends Activity {
             s.lblUsuarioCard.setTextColor(Color.parseColor("#9CA3AF"));
         }
 
-        // 2. Borde del recuadro de la cuenta: Iluminado en Verde Neón brillante si completó la compra
+        // Borde iluminado en Verde Neón brillante cuando completa la orden
         if (s.compraCompletada) {
             s.cardView.setBackground(fondoRedondeadoConBorde("#0D2818", "#00FF66", 14, 2));
         } else if (corriendo) {
@@ -1225,7 +1271,6 @@ public class MainActivity extends Activity {
             s.cardView.setBackground(fondoRedondeadoConBorde("#18181B", "#27272A", 14, 1));
         }
 
-        // 3. Badge de Estado en la esquina de la tarjeta
         String txtBadge = nombreCortoEstado(s);
         s.badgeEstadoCard.setText(txtBadge);
         if (s.compraCompletada) {
@@ -1239,13 +1284,11 @@ public class MainActivity extends Activity {
             s.badgeEstadoCard.setBackground(fondoRedondeadoConBorde("#202227", "#3F3F46", 12, 1));
         }
 
-        // 4. Subtítulo con el paso actual claro
         s.lblSubtituloPasoCard.setText(s.ultimoPasoTexto);
         s.lblSubtituloPasoCard.setTextColor(Color.parseColor(
                 s.compraCompletada ? "#00FF66" : (corriendo ? "#E4E4E7" : "#A1A1AA")
         ));
 
-        // 5. Estado de los botones Play, Stop y Ojo de la tarjeta
         s.btnPlayCard.setAlpha(corriendo ? 0.35f : 1.0f);
         s.btnPlayCard.setEnabled(!corriendo);
 
@@ -1265,7 +1308,6 @@ public class MainActivity extends Activity {
         chipActivas.setText(activas == 1 ? "1 activa" : activas + " activas");
         chipDetenidas.setText(detenidas == 1 ? "1 detenida" : detenidas + " detenidas");
 
-        // Badge global arriba a la derecha
         if (activas > 0) {
             ponerIconoYTexto(badgeEstadoGlobal, crearCirculoNeon(true, pulsoNeon, 10), "VIGILANDO (" + activas + ")");
             badgeEstadoGlobal.setTextColor(Color.parseColor("#4ADE80"));
@@ -1276,7 +1318,6 @@ public class MainActivity extends Activity {
             badgeEstadoGlobal.setBackground(fondoRedondeado("#450A0A", 12));
         }
 
-        // Botones "Iniciar todas" y "Detener todas" con estilo de nuestro bot
         boolean hayParaIniciar = (total > 0 && activas < total);
         boolean hayParaDetener = (activas > 0);
 
@@ -1292,7 +1333,7 @@ public class MainActivity extends Activity {
     }
 
     // =========================================================================================
-    // HISTORIAL DE LA CONSOLA DE LAS CUENTAS (PESTAÑA INFERIOR "HISTORIAL")
+    // HISTORIAL DE LA CONSOLA DE LAS CUENTAS
     // =========================================================================================
     private void reconstruirFiltrosHistorial() {
         barraFiltrosHistorial.removeAllViews();
@@ -1371,10 +1412,9 @@ public class MainActivity extends Activity {
             if (raw != null && !raw.isEmpty()) {
                 return new JSONArray(raw);
             }
-            // Migración automática si tenía cuentas del formato anterior
             JSONObject viejo = new JSONObject(prefs.getString("cuentas_json", "{}"));
             JSONArray migrado = new JSONArray();
-            java.util.Iterator<String> it = viejo.keys();
+            Iterator<String> it = viejo.keys();
             while (it.hasNext() && migrado.length() < MAX_CUENTAS) {
                 String k = it.next();
                 JSONObject o = viejo.optJSONObject(k);
@@ -1446,10 +1486,6 @@ public class MainActivity extends Activity {
         edt.setSelection(edt.getText().length());
     }
 
-    /**
-     * Abre el diálogo para crear una nueva cuenta (slotEditar == -1) o editar
-     * directamente las credenciales de una tarjeta específica.
-     */
     private void mostrarPopupEditorCuenta(final int slotEditar) {
         final boolean esEdicion = (slotEditar >= 0 && slotEditar < MAX_CUENTAS && sesiones[slotEditar].registrada);
         final SesionBot sesionEdit = esEdicion ? sesiones[slotEditar] : null;
@@ -1575,7 +1611,7 @@ public class MainActivity extends Activity {
                     }
                 }
                 if (slotLibre == -1) {
-                    Toast.makeText(this, "Máximo de cuentas alcanzado", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, "Máximo 4 cuentas simultáneas", Toast.LENGTH_SHORT).show();
                     return;
                 }
                 SesionBot nueva = sesiones[slotLibre];
@@ -1660,7 +1696,6 @@ public class MainActivity extends Activity {
         s.estadoActual = nuevoEstado;
         s.tiempoEstadoMs = System.currentTimeMillis();
         s.accionEnCurso = false;
-        s.peticionRedEnCurso = false;
         actualizarVisualTarjeta(s);
         actualizarResumenYBotonesGlobales();
     }
@@ -1669,16 +1704,24 @@ public class MainActivity extends Activity {
         if (s.compraCompletada) return "COMPLETADA";
         switch (s.estadoActual) {
             case DETENIDO: return "DETENIDO";
-            case CONECTANDO_SERVIDOR:
-            case ENVIANDO_USUARIO_CHK: return "INICIANDO";
-            case ESPERANDO_CLAVE_CHK:
-            case ENVIANDO_CLAVE_EXE: return "CONTRASEÑA";
-            case VERIFICANDO_SESION: return "POSICIÓN GLOBAL";
-            case ENTRANDO_INTERVENCION: return "INTERVENCIÓN";
-            case VIGILANDO_INTERVENCION: return "VIGILANDO";
-            case COMPRANDO_ORDEN: return "COMPRANDO";
+            case CARGANDO_LOGIN:
+            case ESPERANDO_ESTABILIZAR_LOGIN:
+            case ENVIANDO_FASE1: return "INICIANDO";
+            case ESPERANDO_CARGA_PASS:
+            case ESPERANDO_ESTABILIZAR_PASS:
+            case ENVIANDO_FASE2: return "CONTRASEÑA";
+            case ESPERANDO_CARGA_INICIO:
+            case ESPERANDO_ESTABILIZAR_INICIO: return "POSICIÓN GLOBAL";
+            case NAVEGANDO_MENU: return "INTERVENCIÓN";
+            case VIGILANDO: return "VIGILANDO";
+            case ESPERANDO_FORM_INTENTO1:
+            case LIMPIANDO_PANTALLA:
+            case ESPERANDO_FORM_INTENTO2:
+            case ESPERANDO_ESTABILIZAR_FORM:
+            case LLENANDO_COMPRA:
+            case COMPRANDO: return "COMPRANDO";
             case CERRANDO_SESION:
-            case RECONECTANDO_RED: return "CERRANDO SESIÓN";
+            case REINICIANDO_RED: return "CERRANDO SESIÓN";
             default: return "ACTIVO";
         }
     }
@@ -1713,10 +1756,13 @@ public class MainActivity extends Activity {
         s.corriendo = true;
         s.compraCompletada = false;
         s.vueltaActual = 0;
-        s.intentoCreate = 0;
         s.intentoLogout = 0;
         s.tiempoInicioSesionMs = 0;
-        cambiarEstado(s, EstadoBot.CONECTANDO_SERVIDOR);
+        if (s.webViewOculto != null) {
+            s.webViewOculto.stopLoading();
+            s.webViewOculto.loadUrl(URL_LOGIN);
+        }
+        cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
         registrarPasoCuenta(s, "Iniciando sesión (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
     }
 
@@ -1724,7 +1770,6 @@ public class MainActivity extends Activity {
         s.corriendo = false;
         s.tiempoInicioSesionMs = 0;
         s.cargandoRed = false;
-        s.peticionRedEnCurso = false;
         if (s.webViewOculto != null) {
             s.webViewOculto.stopLoading();
         }
@@ -1784,7 +1829,6 @@ public class MainActivity extends Activity {
                             for (int i = 0; i < MAX_CUENTAS; i++) {
                                 sesiones[i].tiempoEstadoMs = ahora;
                                 sesiones[i].accionEnCurso = false;
-                                sesiones[i].peticionRedEnCurso = false;
                             }
                         }
                     });
@@ -1797,7 +1841,6 @@ public class MainActivity extends Activity {
     private void reiniciarConexionIndividual(final SesionBot s) {
         if (s == null || s.microCortePropio) return;
         s.microCortePropio = true;
-        s.peticionRedEnCurso = false;
 
         final WebView wv = s.webViewOculto;
         if (wv != null) {
@@ -1815,7 +1858,7 @@ public class MainActivity extends Activity {
                 } catch (Exception ignored) {}
             }
             s.microCortePropio = false;
-        }, 1200);
+        }, 1400);
     }
 
     private void evaluarJS(SesionBot s, String script, ValueCallback<String> callback) {
@@ -1839,7 +1882,7 @@ public class MainActivity extends Activity {
                     verificarTiemposDeSesionIndependientes(reg);
                     for (SesionBot s : reg) {
                         if (s.estaCorriendo() && internetOk && !s.microCortePropio) {
-                            ejecutarPasoMotorOculto(s);
+                            ejecutarPasoMaquinaEstados(s);
                         } else if (!internetOk) {
                             s.tiempoEstadoMs = System.currentTimeMillis();
                         }
@@ -1847,9 +1890,9 @@ public class MainActivity extends Activity {
                 } else {
                     lblReloginVal.setText(minutosRelogin + " min (--:--)");
                 }
-                handler.postDelayed(this, 550);
+                handler.postDelayed(this, 600);
             }
-        }, 550);
+        }, 600);
     }
 
     private void verificarTiemposDeSesionIndependientes(ArrayList<SesionBot> reg) {
@@ -1860,7 +1903,7 @@ public class MainActivity extends Activity {
         for (SesionBot s : reg) {
             if (!s.estaCorriendo()) continue;
 
-            if (s.tiempoInicioSesionMs > 0 && s.estadoActual == EstadoBot.VIGILANDO_INTERVENCION) {
+            if (s.tiempoInicioSesionMs > 0 && s.estadoActual == EstadoBot.VIGILANDO) {
                 long transcurridoSeg = (ahora - s.tiempoInicioSesionMs) / 1000;
                 long restante = Math.max(0, totalSeg - transcurridoSeg);
                 if (menorRestante == -1 || restante < menorRestante) {
@@ -1883,40 +1926,49 @@ public class MainActivity extends Activity {
     }
 
     // =========================================================================================
-    // MOTOR HEADLESS CON MENSAJES DE CONSOLA LIMPIOS Y DIRECTOS
+    // MÁQUINA DE ESTADOS FIABLE (DETECCIÓN REAL DEL BOTÓN Y FLUJO COMPLETO SIN FALSOS POSITIVOS)
     // =========================================================================================
-    private void ejecutarPasoMotorOculto(final SesionBot sesion) {
+    private void ejecutarPasoMaquinaEstados(final SesionBot sesion) {
         if (sesion == null || sesion.webViewOculto == null) return;
         final long ahora = System.currentTimeMillis();
 
-        String jsInspectorHeadless =
+        String jsInspector =
                 "var ready = (document.readyState === 'complete');" +
                 "var bodyTxt = document.body ? document.body.innerText.toLowerCase() : '';" +
                 "var cargandoTxt = (bodyTxt.indexOf('cargando, por favor espera') !== -1 || bodyTxt.indexOf('procesando') !== -1);" +
                 "var modalLogout = (bodyTxt.indexOf('deseas cerrar tu sesión') !== -1 || bodyTxt.indexOf('deseas cerrar tu sesion') !== -1);" +
                 "var btnX = document.querySelector(\"button.close, .btn-close, [aria-label='Close']\");" +
-                "if (btnX && !modalLogout) { btnX.click(); }" +
+                "if (btnX && btnX.offsetParent !== null && !modalLogout) { btnX.click(); }" +
                 "var btnOk = Array.from(document.querySelectorAll('button, a')).find(el => el.innerText && (el.innerText.trim() === 'OK' || el.innerText.trim() === 'Aceptar'));" +
-                "if (btnOk && bodyTxt.indexOf('deseas realizar') === -1 && !modalLogout) { btnOk.click(); }" +
+                "if (btnOk && btnOk.offsetWidth > 0 && bodyTxt.indexOf('deseas realizar') === -1 && !modalLogout) { btnOk.click(); }" +
                 "var doc = document.querySelector('#documento');" +
                 "var usr = document.querySelector('#username');" +
                 "var pass = document.querySelector('#password');" +
+                "var monto = document.querySelector('#monto');" +
+                "var ord = document.querySelector(\"a.btn-tesoro-green, a[href*='mod.add(1)']\") || Array.from(document.querySelectorAll('.card-header a, .card-header button')).find(el => el.innerText && el.innerText.trim().toLowerCase() === 'ordinaria');" +
                 "var btnLogout = document.querySelector(\"a[href='javascript:Logout()'], header ul li a\");" +
                 "var menuInt = document.querySelector(\"a.sidebar-link[href='/int']\");" +
                 "var opsDiv = Array.from(document.querySelectorAll('a')).find(el => el.textContent.includes('Operaciones Divisas'));" +
-                "var hasDoc = !!(doc && usr && !cargandoTxt);" +
-                "var hasPass = !!(pass && !cargandoTxt);" +
-                "var sesionAdentro = !!(ready && !cargandoTxt && (menuInt || opsDiv || btnLogout || bodyTxt.indexOf('posición global') !== -1 || bodyTxt.indexOf('productos activos') !== -1 || bodyTxt.indexOf('operaciones de intervención') !== -1));" +
+                "var inicioListo = !!(ready && !cargandoTxt && (menuInt || opsDiv || btnLogout) && (bodyTxt.indexOf('posición global') !== -1 || bodyTxt.indexOf('productos activos') !== -1 || bodyTxt.indexOf('operaciones') !== -1 || bodyTxt.indexOf('últ. conexión') !== -1 || bodyTxt.indexOf('ult. conexión') !== -1));" +
+                "var tablaIntLista = !!(ready && !cargandoTxt && (bodyTxt.indexOf('operaciones de intervención') !== -1 || (ord && ord.offsetWidth > 0)));" +
+                "var inconv = (bodyTxt.indexOf('presentando inconvenientes') !== -1 || bodyTxt.indexOf('no podemos procesar su solicitud') !== -1);" +
+                "var exito = bodyTxt.indexOf('registrada exitosamente') !== -1;" +
+                "var sinCupo = bodyTxt.indexOf('no hay asignación disponible') !== -1;" +
                 "var sesionActivaErr = (bodyTxt.indexOf('sesión activa') !== -1 || bodyTxt.indexOf('sesion activa') !== -1 || bodyTxt.indexOf('posee una sesión') !== -1);" +
                 "return JSON.stringify({" +
-                "  ready: ready && !cargandoTxt," +
-                "  doc: hasDoc," +
-                "  pass: hasPass," +
-                "  adentro: sesionAdentro," +
-                "  sesionActivaErr: sesionActivaErr" +
+                "  ready: ready," +
+                "  cargando: cargandoTxt," +
+                "  doc: !!(doc && usr && doc.offsetWidth > 0 && usr.offsetWidth > 0 && !cargandoTxt)," +
+                "  pass: !!(pass && pass.offsetWidth > 0 && !cargandoTxt)," +
+                "  inicio: inicioListo," +
+                "  tablaInt: tablaIntLista," +
+                "  monto: !!(monto && monto.offsetWidth > 0 && !cargandoTxt)," +
+                "  ord: !!(ord && ord.offsetWidth > 0 && !cargandoTxt)," +
+                "  modalLogout: modalLogout," +
+                "  inconv: inconv, exito: exito, sinCupo: sinCupo, sesionActivaErr: sesionActivaErr" +
                 "});";
 
-        evaluarJS(sesion, jsInspectorHeadless, raw -> {
+        evaluarJS(sesion, jsInspector, raw -> {
             if (!sesion.estaCorriendo() || raw == null || raw.equals("null")) return;
             try {
                 String clean = raw;
@@ -1924,24 +1976,35 @@ public class MainActivity extends Activity {
                     clean = clean.substring(1, clean.length() - 1).replace("\\\"", "\"");
                 }
                 JSONObject st = new JSONObject(clean);
-                boolean paginaCompleta = st.optBoolean("ready") && !sesion.cargandoRed;
+                boolean nav100 = !sesion.cargandoRed && (sesion.progresoWeb >= 100);
+                boolean ready = st.optBoolean("ready") && nav100;
+                boolean cargando = st.optBoolean("cargando");
 
-                procesarEstadoHeadless(
+                procesarEstadoConDatos(
                         sesion,
                         ahora,
-                        paginaCompleta,
+                        ready && !cargando,
                         st.optBoolean("doc"),
                         st.optBoolean("pass"),
-                        st.optBoolean("adentro"),
+                        st.optBoolean("inicio"),
+                        st.optBoolean("tablaInt"),
+                        st.optBoolean("monto"),
+                        st.optBoolean("ord"),
+                        st.optBoolean("modalLogout"),
+                        st.optBoolean("inconv"),
+                        st.optBoolean("exito"),
+                        st.optBoolean("sinCupo"),
                         st.optBoolean("sesionActivaErr")
                 );
             } catch (Exception ignored) {}
         });
     }
 
-    private void procesarEstadoHeadless(
-            SesionBot s, long ahora, boolean paginaCompleta, boolean hasDoc, boolean hasPass,
-            boolean sesionAdentro, boolean haySesionActivaErr
+    private void procesarEstadoConDatos(
+            SesionBot s, long ahora, boolean paginaCompleta, boolean visDoc, boolean visPass,
+            boolean visInicioCompleto, boolean visTablaInt, boolean visMonto,
+            boolean visOrd, boolean visModalLogout, boolean hayInconv, boolean hayExito,
+            boolean haySinCupo, boolean haySesionActivaErr
     ) {
         if (!s.estaCorriendo()) return;
 
@@ -1951,125 +2014,301 @@ public class MainActivity extends Activity {
 
         switch (s.estadoActual) {
 
-            case CONECTANDO_SERVIDOR:
-                if (paginaCompleta && sesionAdentro) {
+            case CARGANDO_LOGIN:
+                if (paginaCompleta && visMonto) {
+                    cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_FORM);
+                    return;
+                }
+                if (paginaCompleta && visInicioCompleto) {
                     s.tiempoInicioSesionMs = ahora;
                     registrarPasoCuenta(s, "Sesión iniciada - Posición Global");
-                    cambiarEstado(s, EstadoBot.ENTRANDO_INTERVENCION);
+                    cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_INICIO);
                     return;
                 }
-                if (paginaCompleta && hasPass) {
-                    cambiarEstado(s, EstadoBot.ENVIANDO_CLAVE_EXE);
+                if (paginaCompleta && visPass) {
+                    cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_PASS);
                     return;
                 }
-                if (paginaCompleta && hasDoc) {
-                    if (ahora - s.tiempoEstadoMs >= 1000) {
-                        cambiarEstado(s, EstadoBot.ENVIANDO_USUARIO_CHK);
-                    }
+                if (paginaCompleta && visDoc) {
+                    cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_LOGIN);
                     return;
                 }
-                if (ahora - s.tiempoEstadoMs > 18000) {
+                if (ahora - s.tiempoEstadoMs > 20000) {
                     s.tiempoEstadoMs = ahora;
                     s.webViewOculto.stopLoading();
                     s.webViewOculto.loadUrl(URL_LOGIN);
                 }
                 break;
 
-            case ENVIANDO_USUARIO_CHK:
+            case ESPERANDO_ESTABILIZAR_LOGIN:
+                if (!visDoc) {
+                    cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
+                    return;
+                }
+                if (ahora - s.tiempoEstadoMs >= 2000) {
+                    cambiarEstado(s, EstadoBot.ENVIANDO_FASE1);
+                }
+                break;
+
+            case ENVIANDO_FASE1:
                 if (!s.accionEnCurso) {
                     s.accionEnCurso = true;
-                    String jsChk =
+                    String jsFase1 =
                             "var sel = document.querySelector('#tipodocben');" +
                             "if(sel) { for(var i=0; i<sel.options.length; i++) { if(sel.options[i].text.trim().toUpperCase() === '" + s.tipoDoc + "') { sel.selectedIndex = i; break; } } sel.dispatchEvent(new Event('change', {bubbles:true})); }" +
                             "var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;" +
                             "var d = document.querySelector('#documento'); var u = document.querySelector('#username');" +
                             "if(d && u) {" +
-                            "  setter.call(d, '" + cedSafe + "'); d.dispatchEvent(new Event('input', {bubbles:true})); d.dispatchEvent(new Event('change', {bubbles:true}));" +
-                            "  setter.call(u, '" + usrSafe + "'); u.dispatchEvent(new Event('input', {bubbles:true})); u.dispatchEvent(new Event('change', {bubbles:true}));" +
-                            "  setTimeout(function() { var btn = document.querySelector(\"button[type='submit'], .btn-primary\"); if(btn) btn.click(); }, 180);" +
+                            "  d.focus(); setter.call(d, ''); setter.call(u, '');" +
+                            "  function typeStr(el, str, i, cb) {" +
+                            "    if(i < str.length) {" +
+                            "      setter.call(el, str.substring(0, i + 1)); el.dispatchEvent(new Event('input', {bubbles:true}));" +
+                            "      setTimeout(function(){ typeStr(el, str, i+1, cb); }, 35);" +
+                            "    } else { el.dispatchEvent(new Event('change', {bubbles:true})); if(cb) cb(); }" +
+                            "  }" +
+                            "  typeStr(d, '" + cedSafe + "', 0, function() {" +
+                            "    setTimeout(function() {" +
+                            "      u.focus();" +
+                            "      typeStr(u, '" + usrSafe + "', 0, function() {" +
+                            "        setTimeout(function() { var btn = document.querySelector(\"button[type='submit'], .btn-primary\"); if(btn) btn.click(); }, 350);" +
+                            "      });" +
+                            "    }, 250);" +
+                            "  });" +
                             "}";
-                    evaluarJS(s, jsChk, null);
-                    cambiarEstado(s, EstadoBot.ESPERANDO_CLAVE_CHK);
+                    evaluarJS(s, jsFase1, null);
+                    cambiarEstado(s, EstadoBot.ESPERANDO_CARGA_PASS);
                 }
                 break;
 
-            case ESPERANDO_CLAVE_CHK:
-                if (paginaCompleta && hasPass) {
-                    cambiarEstado(s, EstadoBot.ENVIANDO_CLAVE_EXE);
+            case ESPERANDO_CARGA_PASS:
+                if (paginaCompleta && visPass) {
+                    cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_PASS);
                     return;
                 }
-                if (ahora - s.tiempoEstadoMs > 14000 && paginaCompleta && hasDoc) {
+                if (ahora - s.tiempoEstadoMs > 16000) {
                     registrarPasoCuenta(s, "Iniciando sesión (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
-                    cambiarEstado(s, EstadoBot.CONECTANDO_SERVIDOR);
+                    s.webViewOculto.stopLoading();
+                    s.webViewOculto.loadUrl(URL_LOGIN);
+                    cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
                 }
                 break;
 
-            case ENVIANDO_CLAVE_EXE:
-                if (ahora - s.tiempoEstadoMs >= 800 && !s.accionEnCurso) {
+            case ESPERANDO_ESTABILIZAR_PASS:
+                if (!visPass) {
+                    cambiarEstado(s, EstadoBot.ESPERANDO_CARGA_PASS);
+                    return;
+                }
+                if (ahora - s.tiempoEstadoMs >= 2000) {
+                    cambiarEstado(s, EstadoBot.ENVIANDO_FASE2);
+                }
+                break;
+
+            case ENVIANDO_FASE2:
+                if (!s.accionEnCurso) {
                     s.accionEnCurso = true;
                     registrarPasoCuenta(s, "Colocando contraseña");
-                    String jsExe =
+                    String jsFase2 =
                             "var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;" +
                             "var p = document.querySelector('#password');" +
                             "if(p) {" +
-                            "  setter.call(p, '" + clvSafe + "'); p.dispatchEvent(new Event('input', {bubbles:true})); p.dispatchEvent(new Event('change', {bubbles:true}));" +
-                            "  setTimeout(function() { var btn = document.querySelector(\"button[type='submit'], .btn-primary\"); if(btn) btn.click(); }, 180);" +
+                            "  p.focus(); setter.call(p, '');" +
+                            "  function typeStr(el, str, i, cb) {" +
+                            "    if(i < str.length) {" +
+                            "      setter.call(el, str.substring(0, i + 1)); el.dispatchEvent(new Event('input', {bubbles:true}));" +
+                            "      setTimeout(function(){ typeStr(el, str, i+1, cb); }, 35);" +
+                            "    } else { el.dispatchEvent(new Event('change', {bubbles:true})); if(cb) cb(); }" +
+                            "  }" +
+                            "  typeStr(p, '" + clvSafe + "', 0, function() {" +
+                            "    setTimeout(function() { var btn = document.querySelector(\"button[type='submit'], .btn-primary\"); if(btn) btn.click(); }, 350);" +
+                            "  });" +
                             "}";
-                    evaluarJS(s, jsExe, null);
-                    cambiarEstado(s, EstadoBot.VERIFICANDO_SESION);
+                    evaluarJS(s, jsFase2, null);
+                    cambiarEstado(s, EstadoBot.ESPERANDO_CARGA_INICIO);
                 }
                 break;
 
-            case VERIFICANDO_SESION:
-                if (paginaCompleta && sesionAdentro) {
+            case ESPERANDO_CARGA_INICIO:
+                if (paginaCompleta && visInicioCompleto) {
                     s.tiempoInicioSesionMs = ahora;
                     registrarPasoCuenta(s, "Sesión iniciada - Posición Global");
-                    cambiarEstado(s, EstadoBot.ENTRANDO_INTERVENCION);
+                    cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_INICIO);
                     return;
                 }
                 if (haySesionActivaErr) {
                     s.tiempoEstadoMs = ahora;
                     registrarPasoCuenta(s, "Iniciando sesión (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
-                    cambiarEstado(s, EstadoBot.CONECTANDO_SERVIDOR);
+                    s.webViewOculto.loadUrl(URL_LOGIN);
+                    cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
                     return;
                 }
-                if (ahora - s.tiempoEstadoMs > 10000 && paginaCompleta && hasDoc) {
+                if (ahora - s.tiempoEstadoMs > 12000 && paginaCompleta && visDoc) {
                     registrarPasoCuenta(s, "Iniciando sesión (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
-                    cambiarEstado(s, EstadoBot.CONECTANDO_SERVIDOR);
+                    cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_LOGIN);
                 }
                 break;
 
-            case ENTRANDO_INTERVENCION:
-                registrarPasoCuenta(s, "Entrando a intervención");
-                s.vueltaActual = 0;
-                cambiarEstado(s, EstadoBot.VIGILANDO_INTERVENCION);
-                ejecutarVigilanciaDirectaHtml(s);
+            case ESPERANDO_ESTABILIZAR_INICIO:
+                if (ahora - s.tiempoEstadoMs >= 2000) {
+                    cambiarEstado(s, EstadoBot.NAVEGANDO_MENU);
+                }
                 break;
 
-            case VIGILANDO_INTERVENCION:
-                if (paginaCompleta && hasDoc) {
-                    registrarPasoCuenta(s, "Iniciando sesión (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
-                    cambiarEstado(s, EstadoBot.CONECTANDO_SERVIDOR);
+            case NAVEGANDO_MENU:
+                if (paginaCompleta && visTablaInt) {
+                    cambiarEstado(s, EstadoBot.VIGILANDO);
                     return;
                 }
-                if (!s.peticionRedEnCurso && (ahora - s.tiempoEstadoMs >= intervaloRefresco * 1000L)) {
-                    ejecutarVigilanciaDirectaHtml(s);
+                if (!s.accionEnCurso) {
+                    s.accionEnCurso = true;
+                    registrarPasoCuenta(s, "Entrando a intervención");
+                    irAIntervencionJS(s);
+                } else if (ahora - s.tiempoEstadoMs > 8000 && paginaCompleta) {
+                    s.tiempoEstadoMs = ahora;
+                    irAIntervencionJS(s);
                 }
                 break;
 
-            case COMPRANDO_ORDEN:
-                if (!s.peticionRedEnCurso && (ahora - s.tiempoEstadoMs >= 750)) {
-                    ejecutarCompraDirectaCreateStore(s);
+            case VIGILANDO:
+                if (paginaCompleta && visDoc) {
+                    registrarPasoCuenta(s, "Iniciando sesión (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
+                    cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_LOGIN);
+                    return;
+                }
+                if (paginaCompleta && visMonto && !hayInconv) {
+                    cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_FORM);
+                    return;
+                }
+                if (paginaCompleta && visOrd) {
+                    registrarPasoCuenta(s, "Clic en ordinaria");
+                    if (!yaAvisoApertura) { yaAvisoApertura = true; sonarAlarma(false); }
+                    clicarOrdinariaJS(s);
+                    cambiarEstado(s, EstadoBot.ESPERANDO_FORM_INTENTO1);
+                    return;
+                }
+                if (paginaCompleta && (ahora - s.tiempoEstadoMs >= intervaloRefresco * 1000L)) {
+                    s.tiempoEstadoMs = ahora;
+                    s.vueltaActual++;
+                    registrarPasoCuenta(s, "Sin botón intento " + s.vueltaActual);
+                    irAIntervencionJS(s);
+                }
+                break;
+
+            case ESPERANDO_FORM_INTENTO1:
+                if (paginaCompleta && visMonto && !hayInconv) {
+                    cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_FORM);
+                    return;
+                }
+                if (hayInconv || (paginaCompleta && ahora - s.tiempoEstadoMs > 4500)) {
+                    irAIntervencionJS(s);
+                    cambiarEstado(s, EstadoBot.LIMPIANDO_PANTALLA);
+                }
+                break;
+
+            case LIMPIANDO_PANTALLA:
+                if (paginaCompleta && visTablaInt && (ahora - s.tiempoEstadoMs >= 2500)) {
+                    if (visOrd) {
+                        registrarPasoCuenta(s, "Clic en ordinaria");
+                        clicarOrdinariaJS(s);
+                        cambiarEstado(s, EstadoBot.ESPERANDO_FORM_INTENTO2);
+                    } else {
+                        cambiarEstado(s, EstadoBot.VIGILANDO);
+                    }
+                } else if (ahora - s.tiempoEstadoMs > 9000) {
+                    cambiarEstado(s, EstadoBot.VIGILANDO);
+                }
+                break;
+
+            case ESPERANDO_FORM_INTENTO2:
+                if (paginaCompleta && visMonto && !hayInconv) {
+                    sonarAlarma(false);
+                    cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_FORM);
+                    return;
+                }
+                if (hayInconv || (paginaCompleta && ahora - s.tiempoEstadoMs > 5000)) {
+                    s.intentoLogout = 0;
+                    cambiarEstado(s, EstadoBot.CERRANDO_SESION);
+                }
+                break;
+
+            case ESPERANDO_ESTABILIZAR_FORM:
+                if (ahora - s.tiempoEstadoMs >= 2000) {
+                    cambiarEstado(s, EstadoBot.LLENANDO_COMPRA);
+                }
+                break;
+
+            case LLENANDO_COMPRA:
+                if (!s.accionEnCurso) {
+                    s.accionEnCurso = true;
+                    registrarPasoCuenta(s, "Rellenando formulario");
+                    String jsCompra =
+                            "var d = document.querySelector('#desde'); if(d && d.options.length > 1) { d.selectedIndex = 1; d.dispatchEvent(new Event('change', {bubbles:true})); }" +
+                            "var h = document.querySelector('#hasta'); if(h && h.options.length > 1) { h.selectedIndex = 1; h.dispatchEvent(new Event('change', {bubbles:true})); }" +
+                            "var o = document.querySelector('#origen'); if(o) { for(var i=0;i<o.options.length;i++){ if(o.options[i].text.includes('" + ORIGEN_FONDOS + "')){ o.selectedIndex=i; break; } } o.dispatchEvent(new Event('change', {bubbles:true})); }" +
+                            "var dst = document.querySelector('#destino'); if(dst) { for(var j=0;j<dst.options.length;j++){ if(dst.options[j].text.includes('" + DESTINO_FONDOS + "')){ dst.selectedIndex=j; break; } } dst.dispatchEvent(new Event('change', {bubbles:true})); }" +
+                            "var m = document.querySelector('#monto');" +
+                            "var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;" +
+                            "if(m) {" +
+                            "  m.focus();" +
+                            "  var pasos = ['3', '30', '300', '" + MONTO_COMPRA + "'];" +
+                            "  function escribirPaso(idx) {" +
+                            "    if(idx < pasos.length) {" +
+                            "      setter.call(m, pasos[idx]);" +
+                            "      m.dispatchEvent(new Event('input', {bubbles:true}));" +
+                            "      m.dispatchEvent(new KeyboardEvent('keyup', {bubbles:true}));" +
+                            "      setTimeout(function(){ escribirPaso(idx + 1); }, 80);" +
+                            "    } else {" +
+                            "      if(m.value.indexOf('300') === -1) {" +
+                            "        setter.call(m, '" + MONTO_COMPRA + "');" +
+                            "        m.dispatchEvent(new Event('input', {bubbles:true}));" +
+                            "      }" +
+                            "      m.dispatchEvent(new Event('change', {bubbles:true}));" +
+                            "      m.dispatchEvent(new Event('blur', {bubbles:true}));" +
+                            "      setTimeout(function(){" +
+                            "        var col = document.querySelector(\"a[href='javascript:mod.save()']\") || Array.from(document.querySelectorAll('a, button')).find(el => el.innerText && el.innerText.toLowerCase().includes('colocar orden'));" +
+                            "        if(col) col.click();" +
+                            "        setTimeout(function(){" +
+                            "          var btnSi = document.querySelector('.swal2-confirm') || Array.from(document.querySelectorAll('button, a')).find(el => el.innerText && (el.innerText.trim().toLowerCase() === 'si' || el.innerText.trim().toLowerCase() === 'sí'));" +
+                            "          if(btnSi) btnSi.click();" +
+                            "        }, 900);" +
+                            "      }, 600);" +
+                            "    }" +
+                            "  }" +
+                            "  setTimeout(function(){ escribirPaso(0); }, 250);" +
+                            "}";
+                    evaluarJS(s, jsCompra, null);
+                    cambiarEstado(s, EstadoBot.COMPRANDO);
+                }
+                break;
+
+            case COMPRANDO:
+                if (hayExito) {
+                    s.compraCompletada = true;
+                    s.corriendo = false;
+                    registrarPasoCuenta(s, "Orden completada");
+                    sonarAlarma(true);
+                    cambiarEstado(s, EstadoBot.DETENIDO);
+                    return;
+                }
+                if (haySinCupo) {
+                    cambiarEstado(s, EstadoBot.VIGILANDO);
+                    return;
+                }
+                if (hayInconv) {
+                    cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_FORM);
+                    return;
+                }
+                if (ahora - s.tiempoEstadoMs > 10000) {
+                    cambiarEstado(s, EstadoBot.VIGILANDO);
                 }
                 break;
 
             case CERRANDO_SESION:
-                if (paginaCompleta && (hasDoc || hasPass)) {
-                    if (!hasDoc) {
+                if (paginaCompleta && (visDoc || visPass)) {
+                    if (!visDoc) {
                         s.webViewOculto.loadUrl(URL_LOGIN);
                     }
                     registrarPasoCuenta(s, "Iniciando sesión (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
-                    cambiarEstado(s, EstadoBot.CONECTANDO_SERVIDOR);
+                    cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
                     return;
                 }
                 if (!s.accionEnCurso) {
@@ -2078,9 +2317,9 @@ public class MainActivity extends Activity {
                     s.tiempoEstadoMs = ahora;
                     registrarPasoCuenta(s, "Cerrando sesión intento " + s.intentoLogout);
                     ejecutarScriptLogout(s);
-                } else if (ahora - s.tiempoEstadoMs > 4600) {
+                } else if (ahora - s.tiempoEstadoMs > 5000) {
                     if (s.intentoLogout % 2 == 0) {
-                        cambiarEstado(s, EstadoBot.RECONECTANDO_RED);
+                        cambiarEstado(s, EstadoBot.REINICIANDO_RED);
                         reiniciarConexionIndividual(s);
                     } else {
                         s.accionEnCurso = false;
@@ -2088,297 +2327,18 @@ public class MainActivity extends Activity {
                 }
                 break;
 
-            case RECONECTANDO_RED:
-                if (!s.microCortePropio && (ahora - s.tiempoEstadoMs >= 1300)) {
+            case REINICIANDO_RED:
+                if (!s.microCortePropio && (ahora - s.tiempoEstadoMs >= 1500)) {
                     cambiarEstado(s, EstadoBot.CERRANDO_SESION);
                 }
                 break;
         }
     }
 
-    private void ejecutarVigilanciaDirectaHtml(final SesionBot s) {
-        if (!s.estaCorriendo() || s.peticionRedEnCurso) return;
-        s.peticionRedEnCurso = true;
-        s.tiempoEstadoMs = System.currentTimeMillis();
-        s.vueltaActual++;
-
-        String jsFetchInt =
-                "window.__vbt_int_res = 'WAIT';" +
-                "(async function(){" +
-                "  try {" +
-                "    var meta = document.querySelector('meta[name=\"csrf-token\"]');" +
-                "    var tok = meta ? meta.getAttribute('content') : '';" +
-                "    var r = await fetch('https://tesoroenlinea.bt.com.ve/int', {" +
-                "      method: 'GET'," +
-                "      headers: {" +
-                "        'Accept': 'text/html, */*; q=0.01'," +
-                "        'X-Requested-With': 'XMLHttpRequest'," +
-                "        'X-CSRF-TOKEN': tok" +
-                "      }," +
-                "      credentials: 'same-origin'" +
-                "    });" +
-                "    var txt = await r.text();" +
-                "    var tieneOrd = (txt.indexOf('mod.add(1)') !== -1 || txt.indexOf('btn-tesoro-green') !== -1 || txt.indexOf('Ordinaria') !== -1);" +
-                "    var esLogin = (txt.indexOf('id=\"documento\"') !== -1 && txt.indexOf('id=\"username\"') !== -1);" +
-                "    window.__vbt_int_res = JSON.stringify({ status: r.status, ord: tieneOrd, login: esLogin });" +
-                "  } catch(e) {" +
-                "    window.__vbt_int_res = JSON.stringify({ status: -1 });" +
-                "  }" +
-                "})();";
-
-        evaluarJS(s, jsFetchInt, null);
-        sondearResultadoInt(s, 0);
-    }
-
-    private void sondearResultadoInt(final SesionBot s, final int intentoPoll) {
-        if (!s.estaCorriendo() || s.estadoActual != EstadoBot.VIGILANDO_INTERVENCION) {
-            s.peticionRedEnCurso = false;
-            return;
-        }
-        handler.postDelayed(() -> {
-            evaluarJS(s, "return window.__vbt_int_res || 'WAIT';", raw -> {
-                if (!s.estaCorriendo() || s.estadoActual != EstadoBot.VIGILANDO_INTERVENCION) {
-                    s.peticionRedEnCurso = false;
-                    return;
-                }
-                if (raw == null || raw.contains("WAIT")) {
-                    if (intentoPoll < 25) {
-                        sondearResultadoInt(s, intentoPoll + 1);
-                    } else {
-                        s.peticionRedEnCurso = false;
-                        registrarPasoCuenta(s, "Sin botón intento " + s.vueltaActual);
-                    }
-                    return;
-                }
-                s.peticionRedEnCurso = false;
-                try {
-                    String clean = raw;
-                    if (clean.startsWith("\"") && clean.endsWith("\"")) {
-                        clean = clean.substring(1, clean.length() - 1).replace("\\\"", "\"");
-                    }
-                    JSONObject res = new JSONObject(clean);
-                    if (res.optBoolean("login", false)) {
-                        s.webViewOculto.loadUrl(URL_LOGIN);
-                        registrarPasoCuenta(s, "Iniciando sesión (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
-                        cambiarEstado(s, EstadoBot.CONECTANDO_SERVIDOR);
-                        return;
-                    }
-                    if (res.optBoolean("ord", false)) {
-                        registrarPasoCuenta(s, "Clic en ordinaria");
-                        if (!yaAvisoApertura) { yaAvisoApertura = true; sonarAlarma(false); }
-                        s.intentoCreate = 0;
-                        cambiarEstado(s, EstadoBot.COMPRANDO_ORDEN);
-                        ejecutarCompraDirectaCreateStore(s);
-                    } else {
-                        registrarPasoCuenta(s, "Sin botón intento " + s.vueltaActual);
-                    }
-                } catch (Exception e) {
-                    registrarPasoCuenta(s, "Sin botón intento " + s.vueltaActual);
-                }
-            });
-        }, 150);
-    }
-
-    private void ejecutarCompraDirectaCreateStore(final SesionBot s) {
-        if (!s.estaCorriendo() || s.peticionRedEnCurso) return;
-        s.peticionRedEnCurso = true;
-        s.tiempoEstadoMs = System.currentTimeMillis();
-        s.intentoCreate++;
-
-        registrarPasoCuenta(s, "Rellenando formulario");
-
-        String jsCreateAndStore =
-                "window.__vbt_buy_res = 'WAIT';" +
-                "(async function(){" +
-                "  try {" +
-                "    function fmtBT(val, dec) {" +
-                "      var num = parseFloat(val);" +
-                "      return Number(num).toFixed(dec).replace(/\\./g, ',');" +
-                "    }" +
-                "    var meta = document.querySelector('meta[name=\"csrf-token\"]');" +
-                "    var tok = meta ? meta.getAttribute('content') : '';" +
-                "    var rCreate = await fetch('https://tesoroenlinea.bt.com.ve/int/create', {" +
-                "      method: 'POST'," +
-                "      headers: {" +
-                "        'Accept': '*/*'," +
-                "        'X-Requested-With': 'XMLHttpRequest'," +
-                "        'X-CSRF-TOKEN': tok" +
-                "      }," +
-                "      credentials: 'same-origin'" +
-                "    });" +
-                "    var html = await rCreate.text();" +
-                "    if (rCreate.status !== 200 || html.indexOf('presentando inconvenientes') !== -1 || html.indexOf('no podemos procesar') !== -1) {" +
-                "      window.__vbt_buy_res = JSON.stringify({ step: 'CREATE_ERR' });" +
-                "      return;" +
-                "    }" +
-                "    if (html.indexOf('eval(function(p,a,c,k,e,d)') !== -1 && html.indexOf('_form_sig') === -1) {" +
-                "      var mEval = html.match(/eval\\(function\\(p,a,c,k,e,d\\)[\\s\\S]*?<\\/script>/i);" +
-                "      if (mEval) {" +
-                "        var rawJs = mEval[0].replace(/<\\/?script[^>]*>/gi, '');" +
-                "        try { (0, eval)(rawJs); } catch(e){}" +
-                "      }" +
-                "      window.__vbt_buy_res = JSON.stringify({ step: 'CHALLENGE_JS' });" +
-                "      return;" +
-                "    }" +
-                "    var parser = new DOMParser();" +
-                "    var doc = parser.parseFromString(html, 'text/html');" +
-                "    var inToken = doc.querySelector('input[name=\"_token\"]');" +
-                "    var inSig = doc.querySelector('input[name=\"_form_sig\"]');" +
-                "    var inOper = doc.querySelector('input[name=\"oper\"]');" +
-                "    if (!inSig || !inSig.value) {" +
-                "      window.__vbt_buy_res = JSON.stringify({ step: 'NO_SIG' });" +
-                "      return;" +
-                "    }" +
-                "    var formToken = inToken ? inToken.value : tok;" +
-                "    var formSig = inSig.value;" +
-                "    var operVal = inOper ? inOper.value : 'VE';" +
-                "    var optDesde = Array.from(doc.querySelectorAll('#desde option')).find(o => o.value && o.value.trim() !== '');" +
-                "    var optHasta = Array.from(doc.querySelectorAll('#hasta option')).find(o => o.value && o.value.trim() !== '');" +
-                "    if (!optDesde || !optHasta) {" +
-                "      window.__vbt_buy_res = JSON.stringify({ step: 'NO_ACCOUNTS' });" +
-                "      return;" +
-                "    }" +
-                "    var valDesde = optDesde.value.trim();" +
-                "    var dispBs = parseFloat(optDesde.getAttribute('data-disponible') || '0');" +
-                "    var valHasta = optHasta.value.trim();" +
-                "    var monedaX = optHasta.getAttribute('data-moneda') || 'USD';" +
-                "    var mTasaUsd = html.match(/tasa_usd\\s*=\\s*parseFloat\\(['\"]([^'\"]+)['\"]\\)/);" +
-                "    var mTasaEur = html.match(/tasa_eur\\s*=\\s*parseFloat\\(['\"]([^'\"]+)['\"]\\)/);" +
-                "    var mCom = html.match(/com\\s*=\\s*parseFloat\\(['\"]([^'\"]+)['\"]\\)/);" +
-                "    var mCom2 = html.match(/com2\\s*=\\s*parseFloat\\(['\"]([^'\"]+)['\"]\\)/);" +
-                "    var tasaNum = (monedaX === 'EUR' && mTasaEur) ? parseFloat(mTasaEur[1]) : (mTasaUsd ? parseFloat(mTasaUsd[1]) : 0);" +
-                "    var comPorc = mCom ? parseFloat(mCom[1]) : 0.50;" +
-                "    var com2Porc = mCom2 ? parseFloat(mCom2[1]) : 0;" +
-                "    var montoUsd = " + MONTO_MAX_USD + ";" +
-                "    if (dispBs > 0 && tasaNum > 0) {" +
-                "      var factorCom = 1 + ((comPorc + com2Porc) / 100);" +
-                "      var maxUsdPorSaldo = Math.floor((dispBs / (tasaNum * factorCom)) / 10) * 10;" +
-                "      if (maxUsdPorSaldo >= 10 && maxUsdPorSaldo < montoUsd) {" +
-                "        montoUsd = maxUsdPorSaldo;" +
-                "      }" +
-                "    }" +
-                "    var subTotalBs = montoUsd * tasaNum;" +
-                "    var com1Bs = subTotalBs * (comPorc / 100);" +
-                "    var com2Bs = subTotalBs * (com2Porc / 100);" +
-                "    var totalBloquearStr = fmtBT(subTotalBs + com1Bs + com2Bs, 2);" +
-                "    var tasaStr = fmtBT(tasaNum, 8);" +
-                "    var montoStr = Number(montoUsd).toFixed(2);" +
-                "    var params = new URLSearchParams();" +
-                "    params.append('_token', formToken);" +
-                "    params.append('_form_sig', formSig);" +
-                "    params.append('oper', operVal);" +
-                "    params.append('tasa', tasaStr);" +
-                "    params.append('monedaX', monedaX);" +
-                "    params.append('desde', valDesde);" +
-                "    params.append('hasta', valHasta);" +
-                "    params.append('monto', montoStr);" +
-                "    params.append('origen', '" + CODIGO_ORIGEN_FONDOS + "');" +
-                "    params.append('destino', '" + CODIGO_DESTINO_FONDOS + "');" +
-                "    params.append('total-03', totalBloquearStr);" +
-                "    var rStore = await fetch('https://tesoroenlinea.bt.com.ve/int/store', {" +
-                "      method: 'POST'," +
-                "      headers: {" +
-                "        'Accept': '*/*'," +
-                "        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'," +
-                "        'X-Requested-With': 'XMLHttpRequest'," +
-                "        'X-CSRF-TOKEN': formToken" +
-                "      }," +
-                "      body: params.toString()," +
-                "      credentials: 'same-origin'" +
-                "    });" +
-                "    var storeTxt = await rStore.text();" +
-                "    window.__vbt_buy_res = JSON.stringify({ step: 'STORE_DONE', resp: storeTxt });" +
-                "  } catch(e) {" +
-                "    window.__vbt_buy_res = JSON.stringify({ step: 'EX' });" +
-                "  }" +
-                "})();";
-
-        evaluarJS(s, jsCreateAndStore, null);
-        sondearResultadoCompraDirecta(s, 0);
-    }
-
-    private void sondearResultadoCompraDirecta(final SesionBot s, final int intentoPoll) {
-        if (!s.estaCorriendo() || s.estadoActual != EstadoBot.COMPRANDO_ORDEN) {
-            s.peticionRedEnCurso = false;
-            return;
-        }
-        handler.postDelayed(() -> {
-            evaluarJS(s, "return window.__vbt_buy_res || 'WAIT';", raw -> {
-                if (!s.estaCorriendo() || s.estadoActual != EstadoBot.COMPRANDO_ORDEN) {
-                    s.peticionRedEnCurso = false;
-                    return;
-                }
-                if (raw == null || raw.contains("WAIT")) {
-                    if (intentoPoll < 35) {
-                        sondearResultadoCompraDirecta(s, intentoPoll + 1);
-                    } else {
-                        s.peticionRedEnCurso = false;
-                        cambiarEstado(s, EstadoBot.VIGILANDO_INTERVENCION);
-                    }
-                    return;
-                }
-                s.peticionRedEnCurso = false;
-                try {
-                    String clean = raw;
-                    if (clean.startsWith("\"") && clean.endsWith("\"")) {
-                        clean = clean.substring(1, clean.length() - 1)
-                                .replace("\\\"", "\"")
-                                .replace("\\/", "/");
-                    }
-                    JSONObject res = new JSONObject(clean);
-                    String step = res.optString("step", "");
-
-                    if (step.equals("CHALLENGE_JS")) {
-                        s.tiempoEstadoMs = System.currentTimeMillis() - 600;
-                        return;
-                    }
-
-                    if (step.equals("CREATE_ERR") || step.equals("NO_SIG")) {
-                        if (s.intentoCreate < 2) {
-                            registrarPasoCuenta(s, "Clic en ordinaria");
-                            s.tiempoEstadoMs = System.currentTimeMillis() - 500;
-                        } else {
-                            s.intentoLogout = 0;
-                            cambiarEstado(s, EstadoBot.CERRANDO_SESION);
-                        }
-                        return;
-                    }
-
-                    if (step.equals("STORE_DONE")) {
-                        String respRaw = res.optString("resp", "");
-                        boolean compraOk = false;
-                        try {
-                            JSONObject jStore = new JSONObject(respRaw);
-                            compraOk = jStore.optBoolean("ok", false);
-                        } catch (Exception ignored) {
-                            if (respRaw.contains("\"ok\":true") || respRaw.toLowerCase().contains("exitosamente")) {
-                                compraOk = true;
-                            }
-                        }
-
-                        if (compraOk) {
-                            s.compraCompletada = true;
-                            s.corriendo = false;
-                            registrarPasoCuenta(s, "Orden completada");
-                            sonarAlarma(true);
-                            cambiarEstado(s, EstadoBot.DETENIDO);
-                        } else {
-                            cambiarEstado(s, EstadoBot.VIGILANDO_INTERVENCION);
-                        }
-                    } else {
-                        cambiarEstado(s, EstadoBot.VIGILANDO_INTERVENCION);
-                    }
-                } catch (Exception e) {
-                    cambiarEstado(s, EstadoBot.VIGILANDO_INTERVENCION);
-                }
-            });
-        }, 150);
-    }
-
     private void ejecutarScriptLogout(SesionBot s) {
         String jsLogout =
                 "var btnSiExistente = document.querySelector('button.swal2-confirm') || Array.from(document.querySelectorAll('button, a')).find(el => el.innerText && (el.innerText.trim().toLowerCase() === 'si' || el.innerText.trim().toLowerCase() === 'sí'));" +
-                "if (btnSiExistente) {" +
+                "if (btnSiExistente && btnSiExistente.offsetWidth > 0) {" +
                 "  btnSiExistente.click();" +
                 "} else {" +
                 "  var btnSalir = document.querySelector(\"a[href*='Logout' i], a[onclick*='Logout' i], header ul li:nth-child(4) a, .btn-danger\");" +
@@ -2387,8 +2347,31 @@ public class MainActivity extends Activity {
                 "  setTimeout(function(){" +
                 "    var si = document.querySelector('button.swal2-confirm') || Array.from(document.querySelectorAll('button, a')).find(el => el.innerText && (el.innerText.trim().toLowerCase() === 'si' || el.innerText.trim().toLowerCase() === 'sí' || el.innerText.trim().toLowerCase() === 'aceptar'));" +
                 "    if(si) si.click();" +
-                "  }, 550);" +
+                "  }, 650);" +
                 "}";
         evaluarJS(s, jsLogout, null);
+    }
+
+    private void clicarOrdinariaJS(SesionBot s) {
+        String jsOrd =
+                "var b = document.querySelector(\"a.btn-tesoro-green, a[href*='mod.add(1)']\") || Array.from(document.querySelectorAll('.card-header a, .card-header button')).find(el => el.innerText && el.innerText.trim().toLowerCase() === 'ordinaria');" +
+                "if(b) b.click();";
+        evaluarJS(s, jsOrd, null);
+    }
+
+    private void irAIntervencionJS(SesionBot s) {
+        String jsMenu =
+                "var sub = document.querySelector(\"a.sidebar-link[href='/int']\");" +
+                "if (sub && sub.offsetWidth > 0) {" +
+                "  sub.click();" +
+                "} else {" +
+                "  var ops = Array.from(document.querySelectorAll('a')).find(el => el.textContent.includes('Operaciones Divisas'));" +
+                "  if (ops) { ops.click(); }" +
+                "  setTimeout(function(){" +
+                "    var sub2 = document.querySelector(\"a.sidebar-link[href='/int']\");" +
+                "    if (sub2) { sub2.click(); } else { window.location.hash = '#/int'; }" +
+                "  }, 750);" +
+                "}";
+        evaluarJS(s, jsMenu, null);
     }
 }
