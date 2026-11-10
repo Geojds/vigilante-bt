@@ -29,12 +29,12 @@ import android.os.Looper;
 import android.text.InputType;
 import android.text.SpannableString;
 import android.text.Spanned;
-import android.text.TextUtils;
 import android.text.method.HideReturnsTransformationMethod;
 import android.text.method.PasswordTransformationMethod;
 import android.text.style.ImageSpan;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
@@ -47,9 +47,9 @@ import android.webkit.WebStorage;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
-import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -64,7 +64,6 @@ import java.lang.reflect.Method;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
-import java.util.Iterator;
 import java.util.Locale;
 
 public class MainActivity extends Activity {
@@ -74,27 +73,33 @@ public class MainActivity extends Activity {
     private static final int MONTO_MAX_USD = 300;
     private static final String CODIGO_ORIGEN_FONDOS = "1";  // 1 = Sueldos y Salarios
     private static final String CODIGO_DESTINO_FONDOS = "5"; // 5 = Ahorro
-    private static final int MAX_CUENTAS_SIMULTANEAS = 4;
+    private static final int MAX_CUENTAS = 8;
     private final int[] OPCIONES_MINUTOS = {1, 3, 5, 10, 15, 20, 30};
 
-    private LinearLayout contenedorControlesSuperiores;
-    private LinearLayout barraPestanasCuentas;
-    private FrameLayout contenedorConsolaUnificada;
-    private LinearLayout contenedorConsolasIndividuales;
+    // Contenedores de las 2 pestañas principales (Cuentas e Historial)
+    private ScrollView vistaCuentasScroll;
+    private LinearLayout contenedorTarjetasCuentas;
+    private LinearLayout vistaHistorialContainer;
+    private LinearLayout barraFiltrosHistorial;
+    private ScrollView scrollHistorialConsola;
+    private TextView txtHistorialConsola;
     private FrameLayout contenedorMotoresOcultos;
 
-    private TextView badgeEstado, lblRefrescoVal, lblReloginVal, txtConsolaGeneral;
-    private ScrollView scrollConsolaGeneral;
-    private Button btnCuenta, btnOjoPrivacidad, btnIniciar, btnDetener;
-    private Button btnModoUnificado, btnModoSeparado;
-    private Button btnTabTodas;
+    // Cabecera y chips de estado
+    private TextView badgeEstadoGlobal;
+    private TextView chipRegistradas, chipActivas, chipDetenidas;
+    private TextView lblRefrescoVal, lblReloginVal;
+    private Button btnIniciarTodas, btnDetenerTodas, btnNuevaCuenta;
 
-    private boolean usuarioOculto = false;
-    // 0 = Vista con Panel + Consola Unificada, 1 = Vista Solo Consolas Separadas por Cuenta
-    private int modoVistaActual = 0;
+    // Barra flotante inferior (Cuentas | Historial)
+    private LinearLayout navBtnCuentas, navBtnHistorial;
+    private ImageView navIconCuentas, navIconHistorial;
+    private TextView navTxtCuentas, navTxtHistorial;
 
-    // -1 = Todas las cuentas, 0..3 = Cuenta individual seleccionada para Iniciar/Detener/Ver
-    private int slotEnfocado = -1;
+    // 0 = Cuentas (Principal), 1 = Historial
+    private int pestanaInferiorActual = 0;
+    // -1 = Todas las cuentas en el Historial, 0..N = Filtrado por cuenta en el Historial
+    private int filtroHistorialSlot = -1;
 
     private int intervaloRefresco = 3;
     private int minutosRelogin = 10;
@@ -104,6 +109,22 @@ public class MainActivity extends Activity {
     private boolean avisoSinInternetMostrado = false;
     private ConnectivityManager.NetworkCallback networkCallback;
 
+    private final ArrayList<EntradaLog> historialGlobalLogs = new ArrayList<>();
+
+    private static class EntradaLog {
+        final int slotIndex;
+        final String usuario;
+        final String hora;
+        final String mensaje;
+
+        EntradaLog(int slotIndex, String usuario, String hora, String mensaje) {
+            this.slotIndex = slotIndex;
+            this.usuario = usuario;
+            this.hora = hora;
+            this.mensaje = mensaje;
+        }
+    }
+
     private enum EstadoBot {
         DETENIDO,
         CONECTANDO_SERVIDOR,
@@ -111,31 +132,38 @@ public class MainActivity extends Activity {
         ESPERANDO_CLAVE_CHK,
         ENVIANDO_CLAVE_EXE,
         VERIFICANDO_SESION,
-        VIGILANDO_HTML_INT,
-        COMPRANDO_XHR_STORE,
+        ENTRANDO_INTERVENCION,
+        VIGILANDO_INTERVENCION,
+        COMPRANDO_ORDEN,
         CERRANDO_SESION,
-        RECONECTANDO_SOCKET
+        RECONECTANDO_RED
     }
 
     private class SesionBot {
         final int slotIndex;
-        boolean activa = false;
+        boolean registrada = false;
         boolean corriendo = false;
+        boolean nombreOculto = false;
+        boolean consolaDesplegada = false;
+
         String tipoDoc = "V";
         String cedula = "";
         String usuario = "";
         String contrasena = "";
+        String ultimoPasoTexto = "Sin actividad todavía";
 
-        // Motor oculto en segundo plano (sin interfaz visual)
+        // Motor oculto en segundo plano
         WebView webViewOculto;
-        Button btnTabSelector;
 
-        // Tarjeta de consola individual
-        LinearLayout tarjetaConsolaIndividual;
-        TextView lblTituloConsolaInd;
-        TextView lblPasoActualInd;
-        ScrollView scrollConsolaIndividual;
-        TextView txtConsolaIndividual;
+        // Elementos visuales de la Tarjeta de Cuenta
+        LinearLayout cardView;
+        TextView lblUsuarioCard;
+        TextView badgeEstadoCard;
+        TextView lblSubtituloPasoCard;
+        ImageView btnPlayCard, btnStopCard, btnEyeCard, btnEditCard;
+        LinearLayout contenedorConsolaCard;
+        ScrollView scrollConsolaCard;
+        TextView txtConsolaCard;
 
         EstadoBot estadoActual = EstadoBot.DETENIDO;
         boolean cargandoRed = false;
@@ -155,16 +183,22 @@ public class MainActivity extends Activity {
 
         String nombreMostrado() {
             if (usuario == null || usuario.isEmpty()) return "Sin cuenta";
-            if (usuarioOculto) return "********";
+            if (nombreOculto) return "********";
             return usuario;
         }
 
+        String cedulaMostrada() {
+            if (cedula == null || cedula.isEmpty()) return "";
+            if (nombreOculto) return "********";
+            return tipoDoc + "-" + cedula;
+        }
+
         boolean estaCorriendo() {
-            return activa && corriendo && !compraCompletada && estadoActual != EstadoBot.DETENIDO;
+            return registrada && corriendo && !compraCompletada && estadoActual != EstadoBot.DETENIDO;
         }
     }
 
-    private final SesionBot[] sesiones = new SesionBot[MAX_CUENTAS_SIMULTANEAS];
+    private final SesionBot[] sesiones = new SesionBot[MAX_CUENTAS];
     private final Handler handler = new Handler(Looper.getMainLooper());
     private SharedPreferences prefs;
 
@@ -189,18 +223,18 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        getWindow().setStatusBarColor(Color.parseColor("#18181B"));
-        getWindow().setNavigationBarColor(Color.parseColor("#18181B"));
+        getWindow().setStatusBarColor(Color.parseColor("#0F1115"));
+        getWindow().setNavigationBarColor(Color.parseColor("#0F1115"));
         prefs = getSharedPreferences("VigilanteBTPrefs", Context.MODE_PRIVATE);
 
-        for (int i = 0; i < MAX_CUENTAS_SIMULTANEAS; i++) {
+        for (int i = 0; i < MAX_CUENTAS; i++) {
             sesiones[i] = new SesionBot(i);
         }
 
-        construirInterfazModoConsola();
-        inicializarMotoresOcultosHeadless();
+        construirInterfazCompleta();
+        inicializarMotoresOcultos();
         registrarMonitorPasivoRed();
-        cargarCuentasActivasGuardadas();
+        cargarCuentasGuardadas();
         iniciarCicloReloj();
     }
 
@@ -214,7 +248,7 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {}
 
         try {
-            for (int i = 0; i < MAX_CUENTAS_SIMULTANEAS; i++) {
+            for (int i = 0; i < MAX_CUENTAS; i++) {
                 WebView wv = sesiones[i].webViewOculto;
                 if (wv != null) {
                     wv.evaluateJavascript("if(typeof Logout==='function'){Logout();}", null);
@@ -334,33 +368,6 @@ public class MainActivity extends Activity {
         p.setStrokeJoin(Paint.Join.ROUND);
 
         switch (tipo) {
-            case "TERMINAL": {
-                p.setStyle(Paint.Style.STROKE);
-                RectF r = new RectF(s * 0.12f, s * 0.16f, s * 0.88f, s * 0.84f);
-                c.drawRoundRect(r, s * 0.12f, s * 0.12f, p);
-                c.drawLine(s * 0.26f, s * 0.38f, s * 0.42f, s * 0.50f, p);
-                c.drawLine(s * 0.42f, s * 0.50f, s * 0.26f, s * 0.62f, p);
-                c.drawLine(s * 0.48f, s * 0.62f, s * 0.68f, s * 0.62f, p);
-                break;
-            }
-            case "PANEL": {
-                p.setStyle(Paint.Style.STROKE);
-                c.drawLine(s * 0.15f, s * 0.32f, s * 0.85f, s * 0.32f, p);
-                c.drawLine(s * 0.15f, s * 0.68f, s * 0.85f, s * 0.68f, p);
-                p.setStyle(Paint.Style.FILL);
-                c.drawCircle(s * 0.38f, s * 0.32f, s * 0.13f, p);
-                c.drawCircle(s * 0.65f, s * 0.68f, s * 0.13f, p);
-                break;
-            }
-            case "GRID": {
-                p.setStyle(Paint.Style.STROKE);
-                float g1 = s * 0.15f, g2 = s * 0.44f, g3 = s * 0.56f, g4 = s * 0.85f;
-                c.drawRoundRect(new RectF(g1, g1, g2, g2), s * 0.06f, s * 0.06f, p);
-                c.drawRoundRect(new RectF(g3, g1, g4, g2), s * 0.06f, s * 0.06f, p);
-                c.drawRoundRect(new RectF(g1, g3, g2, g4), s * 0.06f, s * 0.06f, p);
-                c.drawRoundRect(new RectF(g3, g3, g4, g4), s * 0.06f, s * 0.06f, p);
-                break;
-            }
             case "USERS": {
                 p.setStyle(Paint.Style.STROKE);
                 c.drawCircle(s * 0.38f, s * 0.34f, s * 0.15f, p);
@@ -371,6 +378,13 @@ public class MainActivity extends Activity {
                 Path arc2 = new Path();
                 arc2.addArc(new RectF(s * 0.50f, s * 0.58f, s * 0.88f, s * 0.95f), 200, 160);
                 c.drawPath(arc2, p);
+                break;
+            }
+            case "HISTORY": {
+                p.setStyle(Paint.Style.STROKE);
+                c.drawCircle(s * 0.50f, s * 0.50f, s * 0.34f, p);
+                c.drawLine(s * 0.50f, s * 0.30f, s * 0.50f, s * 0.50f, p);
+                c.drawLine(s * 0.50f, s * 0.50f, s * 0.66f, s * 0.60f, p);
                 break;
             }
             case "EYE": {
@@ -397,17 +411,29 @@ public class MainActivity extends Activity {
             case "PLAY": {
                 p.setStyle(Paint.Style.FILL);
                 Path play = new Path();
-                play.moveTo(s * 0.25f, s * 0.18f);
-                play.lineTo(s * 0.82f, s * 0.50f);
-                play.lineTo(s * 0.25f, s * 0.82f);
+                play.moveTo(s * 0.28f, s * 0.20f);
+                play.lineTo(s * 0.80f, s * 0.50f);
+                play.lineTo(s * 0.28f, s * 0.80f);
                 play.close();
                 c.drawPath(play, p);
                 break;
             }
             case "STOP": {
                 p.setStyle(Paint.Style.FILL);
-                RectF r = new RectF(s * 0.22f, s * 0.22f, s * 0.78f, s * 0.78f);
+                RectF r = new RectF(s * 0.24f, s * 0.24f, s * 0.76f, s * 0.76f);
                 c.drawRoundRect(r, s * 0.12f, s * 0.12f, p);
+                break;
+            }
+            case "EDIT": {
+                p.setStyle(Paint.Style.STROKE);
+                Path pen = new Path();
+                pen.moveTo(s * 0.20f, s * 0.80f);
+                pen.lineTo(s * 0.36f, s * 0.76f);
+                pen.lineTo(s * 0.78f, s * 0.34f);
+                pen.lineTo(s * 0.66f, s * 0.22f);
+                pen.lineTo(s * 0.24f, s * 0.64f);
+                pen.close();
+                c.drawPath(pen, p);
                 break;
             }
             case "PLUS": {
@@ -488,29 +514,32 @@ public class MainActivity extends Activity {
         return bmp;
     }
 
+    // =========================================================================================
+    // CONSTRUCCIÓN DE LA INTERFAZ (CUENTAS DESPLAZABLES + BARRA FLOTANTE DE 2 ICONOS)
+    // =========================================================================================
     @SuppressLint("SetJavaScriptEnabled")
-    private void construirInterfazModoConsola() {
+    private void construirInterfazCompleta() {
         FrameLayout frameRoot = new FrameLayout(this);
-        frameRoot.setBackgroundColor(Color.parseColor("#18181B"));
+        frameRoot.setBackgroundColor(Color.parseColor("#0F1115"));
         frameRoot.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        // Contenedor invisible de 1x1 píxel donde viven los 4 motores HTML sin verse jamás en pantalla
+        // Contenedor invisible de 1x1 píxel donde viven los motores HTML en segundo plano
         contenedorMotoresOcultos = new FrameLayout(this);
         contenedorMotoresOcultos.setAlpha(0f);
         frameRoot.addView(contenedorMotoresOcultos, new FrameLayout.LayoutParams(1, 1));
 
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(Color.parseColor("#0F1115"));
-        root.setLayoutParams(new FrameLayout.LayoutParams(
+        LinearLayout mainVertical = new LinearLayout(this);
+        mainVertical.setOrientation(LinearLayout.VERTICAL);
+        mainVertical.setBackgroundColor(Color.parseColor("#0F1115"));
+        mainVertical.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        // 1. BARRA SUPERIOR
+        // 1. CABECERA SUPERIOR FIJA (Logo Vigilante BT + Estado Global)
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
-        topBar.setPadding(dp(12), dp(10), dp(12), dp(6));
+        topBar.setPadding(dp(16), dp(12), dp(16), dp(8));
 
         ImageView iconTop = new ImageView(this);
         int resIdHeader = getResources().getIdentifier("ic_header_logo", "drawable", getPackageName());
@@ -524,79 +553,84 @@ public class MainActivity extends Activity {
         lpIcon.setMargins(0, 0, dp(8), 0);
         topBar.addView(iconTop, lpIcon);
 
-        TextView lblTitulo = new TextView(this);
-        lblTitulo.setText("Vigilante BT");
-        lblTitulo.setTextColor(Color.parseColor("#F4F4F5"));
-        lblTitulo.setTextSize(18);
-        lblTitulo.setTypeface(null, Typeface.BOLD);
-        topBar.addView(lblTitulo, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView lblTituloApp = new TextView(this);
+        lblTituloApp.setText("Vigilante BT");
+        lblTituloApp.setTextColor(Color.parseColor("#F4F4F5"));
+        lblTituloApp.setTextSize(18);
+        lblTituloApp.setTypeface(null, Typeface.BOLD);
+        topBar.addView(lblTituloApp, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        badgeEstado = new TextView(this);
-        ponerIconoYTexto(badgeEstado, crearCirculoNeon(false, false, 10), "APAGADO");
-        badgeEstado.setTextColor(Color.parseColor("#FCA5A5"));
-        badgeEstado.setTextSize(11);
-        badgeEstado.setTypeface(null, Typeface.BOLD);
-        badgeEstado.setGravity(Gravity.CENTER);
-        badgeEstado.setPadding(dp(10), dp(5), dp(10), dp(5));
-        badgeEstado.setBackground(fondoRedondeado("#450A0A", 8));
-        topBar.addView(badgeEstado);
-        root.addView(topBar);
+        badgeEstadoGlobal = new TextView(this);
+        ponerIconoYTexto(badgeEstadoGlobal, crearCirculoNeon(false, false, 10), "APAGADO");
+        badgeEstadoGlobal.setTextColor(Color.parseColor("#FCA5A5"));
+        badgeEstadoGlobal.setTextSize(11);
+        badgeEstadoGlobal.setTypeface(null, Typeface.BOLD);
+        badgeEstadoGlobal.setGravity(Gravity.CENTER);
+        badgeEstadoGlobal.setPadding(dp(12), dp(5), dp(12), dp(5));
+        badgeEstadoGlobal.setBackground(fondoRedondeado("#450A0A", 12));
+        topBar.addView(badgeEstadoGlobal);
+        mainVertical.addView(topBar);
 
-        // Selector de Modo: Panel + Consola General | Solo Consolas Separadas
-        LinearLayout viewBar = new LinearLayout(this);
-        viewBar.setOrientation(LinearLayout.HORIZONTAL);
-        viewBar.setPadding(dp(12), dp(2), dp(12), dp(6));
+        // 2. VISTA PRINCIPAL DESPLAZABLE: "CUENTAS"
+        vistaCuentasScroll = new ScrollView(this);
+        vistaCuentasScroll.setFillViewport(true);
+        vistaCuentasScroll.setVerticalScrollBarEnabled(false);
 
-        btnModoUnificado = crearBotonConIcono("TERMINAL", "Panel Principal", "#0284C7", "#FFFFFF", 11, () -> cambiarVista(0));
-        btnModoSeparado = crearBotonConIcono("PANEL", "Solo Panel (Consolas)", "#27272A", "#A1A1AA", 11, () -> cambiarVista(1));
+        LinearLayout contenidoScrollCuentas = new LinearLayout(this);
+        contenidoScrollCuentas.setOrientation(LinearLayout.VERTICAL);
+        contenidoScrollCuentas.setPadding(dp(14), dp(4), dp(14), dp(105)); // Espacio inferior para la barra flotante
 
-        LinearLayout.LayoutParams lpViewBtn = new LinearLayout.LayoutParams(0, dp(32), 1f);
-        lpViewBtn.setMargins(dp(2), 0, dp(2), 0);
-        viewBar.addView(btnModoUnificado, lpViewBtn);
-        viewBar.addView(btnModoSeparado, lpViewBtn);
-        root.addView(viewBar);
+        // Cabecera de sección "Cuentas" + Botón "+ Nueva"
+        LinearLayout filaHeaderCuentas = new LinearLayout(this);
+        filaHeaderCuentas.setOrientation(LinearLayout.HORIZONTAL);
+        filaHeaderCuentas.setGravity(Gravity.CENTER_VERTICAL);
+        filaHeaderCuentas.setPadding(0, dp(4), 0, dp(6));
 
-        // 2. TARJETA PRINCIPAL DE CONTROLES Y CONSOLAS (Ocupa toda la pantalla, sin navegador)
-        LinearLayout mainCard = new LinearLayout(this);
-        mainCard.setOrientation(LinearLayout.VERTICAL);
-        mainCard.setPadding(dp(12), dp(10), dp(12), dp(10));
-        mainCard.setBackground(fondoRedondeado("#18181B", 14));
-        LinearLayout.LayoutParams lpMain = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
-        lpMain.setMargins(dp(8), dp(2), dp(8), dp(8));
+        LinearLayout colTitCuentas = new LinearLayout(this);
+        colTitCuentas.setOrientation(LinearLayout.VERTICAL);
+        TextView lblCuentasBig = crearTexto("Cuentas", "#F4F4F5", 22f, true);
+        TextView lblCuentasSub = crearTexto("Toca cualquier cuenta para abrir o cerrar su consola en vivo.", "#A1A1AA", 11.5f, false);
+        colTitCuentas.addView(lblCuentasBig);
+        colTitCuentas.addView(lblCuentasSub);
+        filaHeaderCuentas.addView(colTitCuentas, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        // Controles superiores (Se ocultan en "Solo Panel" para dejar únicamente las consolas separadas)
-        contenedorControlesSuperiores = new LinearLayout(this);
-        contenedorControlesSuperiores.setOrientation(LinearLayout.VERTICAL);
+        btnNuevaCuenta = crearBotonConIcono("PLUS", "Nueva", "#0284C7", "#FFFFFF", 12, () -> mostrarPopupEditorCuenta(-1));
+        btnNuevaCuenta.setPadding(dp(12), 0, dp(12), 0);
+        filaHeaderCuentas.addView(btnNuevaCuenta, new LinearLayout.LayoutParams(dp(92), dp(36)));
+        contenidoScrollCuentas.addView(filaHeaderCuentas);
 
-        LinearLayout filaCuenta = new LinearLayout(this);
-        filaCuenta.setOrientation(LinearLayout.HORIZONTAL);
-        filaCuenta.setGravity(Gravity.CENTER_VERTICAL);
+        // Chips de resumen (Registradas | Activas | Detenidas)
+        LinearLayout filaChips = new LinearLayout(this);
+        filaChips.setOrientation(LinearLayout.HORIZONTAL);
+        filaChips.setPadding(0, dp(4), 0, dp(10));
 
-        btnCuenta = crearBotonConIcono("USERS", "0 Cuentas Registradas", "#27272A", "#F4F4F5", 12, this::mostrarPopupCuenta);
-        LinearLayout.LayoutParams lpBtnCuenta = new LinearLayout.LayoutParams(0, dp(38), 1f);
-        lpBtnCuenta.setMargins(0, 0, dp(6), 0);
-        filaCuenta.addView(btnCuenta, lpBtnCuenta);
+        chipRegistradas = crearChipResumen("0 registradas", "#1E293B", "#38BDF8");
+        chipActivas = crearChipResumen("0 activas", "#14532D", "#4ADE80");
+        chipDetenidas = crearChipResumen("0 detenidas", "#27272A", "#A1A1AA");
 
-        btnOjoPrivacidad = crearBotonConIcono("EYE", "", "#27272A", "#F4F4F5", 13, this::togglePrivacidadUsuario);
-        filaCuenta.addView(btnOjoPrivacidad, new LinearLayout.LayoutParams(dp(42), dp(38)));
-        contenedorControlesSuperiores.addView(filaCuenta);
+        LinearLayout.LayoutParams lpChip = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lpChip.setMargins(0, 0, dp(8), 0);
+        filaChips.addView(chipRegistradas, lpChip);
+        filaChips.addView(chipActivas, lpChip);
+        filaChips.addView(chipDetenidas, lpChip);
+        contenidoScrollCuentas.addView(filaChips);
 
+        // Tarjeta de Tiempos (Frecuencia Refresco y Reinicio Sesión)
         LinearLayout cardTiempos = new LinearLayout(this);
         cardTiempos.setOrientation(LinearLayout.VERTICAL);
-        cardTiempos.setPadding(dp(10), dp(8), dp(10), dp(8));
-        cardTiempos.setBackground(fondoRedondeado("#27272A", 10));
-        LinearLayout.LayoutParams lpCard = new LinearLayout.LayoutParams(
+        cardTiempos.setPadding(dp(12), dp(10), dp(12), dp(10));
+        cardTiempos.setBackground(fondoRedondeadoConBorde("#18181B", "#27272A", 12, 1));
+        LinearLayout.LayoutParams lpCardT = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lpCard.setMargins(0, dp(6), 0, dp(6));
+        lpCardT.setMargins(0, 0, 0, dp(10));
 
         LinearLayout filaRef = new LinearLayout(this);
         filaRef.setGravity(Gravity.CENTER_VERTICAL);
-        TextView tRef = crearTexto("Frecuencia Refresco:", "#F4F4F5", 11, true);
+        TextView tRef = crearTexto("Frecuencia Refresco:", "#F4F4F5", 11.5f, true);
         SeekBar sldRef = new SeekBar(this);
         sldRef.setMax(29);
         sldRef.setProgress(2);
-        lblRefrescoVal = crearTexto("3 seg", "#F4F4F5", 11, true);
+        lblRefrescoVal = crearTexto("3 seg", "#F4F4F5", 11.5f, true);
         lblRefrescoVal.setGravity(Gravity.END);
         sldRef.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
@@ -614,12 +648,12 @@ public class MainActivity extends Activity {
 
         LinearLayout filaRel = new LinearLayout(this);
         filaRel.setGravity(Gravity.CENTER_VERTICAL);
-        filaRel.setPadding(0, dp(4), 0, 0);
-        TextView tRel = crearTexto("Reinicio Sesión:", "#F4F4F5", 11, true);
+        filaRel.setPadding(0, dp(6), 0, 0);
+        TextView tRel = crearTexto("Reinicio Sesión:", "#F4F4F5", 11.5f, true);
         SeekBar sldRel = new SeekBar(this);
         sldRel.setMax(OPCIONES_MINUTOS.length - 1);
         sldRel.setProgress(3);
-        lblReloginVal = crearTexto("10 min (--:--)", "#F4F4F5", 10.5f, true);
+        lblReloginVal = crearTexto("10 min (--:--)", "#F4F4F5", 11f, true);
         lblReloginVal.setGravity(Gravity.END);
         sldRel.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
@@ -634,97 +668,132 @@ public class MainActivity extends Activity {
         filaRel.addView(sldRel, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         filaRel.addView(lblReloginVal, new LinearLayout.LayoutParams(dp(75), ViewGroup.LayoutParams.WRAP_CONTENT));
         cardTiempos.addView(filaRel);
+        contenidoScrollCuentas.addView(cardTiempos, lpCardT);
 
-        contenedorControlesSuperiores.addView(cardTiempos, lpCard);
+        // Botones Globales: "Iniciar todas" y "Detener todas"
+        LinearLayout filaBotonesGlobales = new LinearLayout(this);
+        filaBotonesGlobales.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams lpFilaGlob = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lpFilaGlob.setMargins(0, 0, 0, dp(12));
 
-        // Botones INICIAR y DETENER
-        LinearLayout filaBotones = new LinearLayout(this);
-        filaBotones.setOrientation(LinearLayout.HORIZONTAL);
-        btnIniciar = crearBotonConIcono("PLAY", "INICIAR", "#16A34A", "#FFFFFF", 12, this::accionBotonIniciar);
-        btnDetener = crearBotonConIcono("STOP", "DETENER", "#7F1D1D", "#FCA5A5", 12, this::accionBotonDetener);
-        btnDetener.setEnabled(false);
+        btnIniciarTodas = crearBotonConIcono("PLAY", "Iniciar todas", "#16A34A", "#FFFFFF", 13, this::iniciarTodasLasCuentas);
+        btnDetenerTodas = crearBotonConIcono("STOP", "Detener todas", "#7F1D1D", "#FCA5A5", 13, this::detenerTodasLasCuentas);
+        btnDetenerTodas.setEnabled(false);
 
-        LinearLayout.LayoutParams lpBtnMando = new LinearLayout.LayoutParams(0, dp(38), 1f);
-        lpBtnMando.setMargins(dp(3), 0, dp(3), 0);
-        filaBotones.addView(btnIniciar, lpBtnMando);
-        filaBotones.addView(btnDetener, lpBtnMando);
-        contenedorControlesSuperiores.addView(filaBotones);
+        LinearLayout.LayoutParams lpBtnG = new LinearLayout.LayoutParams(0, dp(42), 1f);
+        lpBtnG.setMargins(dp(3), 0, dp(3), 0);
+        filaBotonesGlobales.addView(btnIniciarTodas, lpBtnG);
+        filaBotonesGlobales.addView(btnDetenerTodas, lpBtnG);
+        contenidoScrollCuentas.addView(filaBotonesGlobales, lpFilaGlob);
 
-        // Barra de Pestañas de Cuentas (Para elegir si encender/detener Todas o una cuenta específica)
-        barraPestanasCuentas = new LinearLayout(this);
-        barraPestanasCuentas.setOrientation(LinearLayout.HORIZONTAL);
-        barraPestanasCuentas.setGravity(Gravity.CENTER_VERTICAL);
-        barraPestanasCuentas.setPadding(dp(2), dp(8), dp(2), dp(4));
+        // Lista vertical de Tarjetas de cada cuenta (con su consola desplegable adentro)
+        contenedorTarjetasCuentas = new LinearLayout(this);
+        contenedorTarjetasCuentas.setOrientation(LinearLayout.VERTICAL);
+        contenidoScrollCuentas.addView(contenedorTarjetasCuentas, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        btnTabTodas = crearBotonConIcono("GRID", "Todas", "#0284C7", "#FFFFFF", 10, () -> cambiarSlotEnfocado(-1));
-        btnTabTodas.setGravity(Gravity.CENTER);
-        btnTabTodas.setSingleLine(true);
-        btnTabTodas.setIncludeFontPadding(false);
-        LinearLayout.LayoutParams lpTabM = new LinearLayout.LayoutParams(0, dp(26), 1.15f);
-        lpTabM.setMargins(dp(2), 0, dp(2), 0);
-        barraPestanasCuentas.addView(btnTabTodas, lpTabM);
-
-        for (int i = 0; i < MAX_CUENTAS_SIMULTANEAS; i++) {
-            final int idx = i;
-            Button bTab = crearBoton("", "#27272A", "#A1A1AA", 10, () -> cambiarSlotEnfocado(idx));
-            bTab.setGravity(Gravity.CENTER);
-            bTab.setSingleLine(true);
-            bTab.setEllipsize(TextUtils.TruncateAt.END);
-            bTab.setIncludeFontPadding(false);
-            bTab.setPadding(dp(3), 0, dp(3), 0);
-            sesiones[i].btnTabSelector = bTab;
-            LinearLayout.LayoutParams lpT = new LinearLayout.LayoutParams(0, dp(26), 1f);
-            lpT.setMargins(dp(2), 0, dp(2), 0);
-            barraPestanasCuentas.addView(bTab, lpT);
-        }
-        contenedorControlesSuperiores.addView(barraPestanasCuentas);
-
-        mainCard.addView(contenedorControlesSuperiores);
-
-        // 3. ÁREA DE CONSOLAS (Sin ningún navegador visible)
-        // 3A. Consola Unificada + Tarjetas de Estado en Tiempo Real
-        contenedorConsolaUnificada = new FrameLayout(this);
-        scrollConsolaGeneral = new ScrollView(this);
-        scrollConsolaGeneral.setBackground(fondoRedondeadoConBorde("#121316", "#27272A", 8, 1));
-        scrollConsolaGeneral.setPadding(dp(10), dp(8), dp(10), dp(8));
-        txtConsolaGeneral = new TextView(this);
-        txtConsolaGeneral.setTextColor(Color.parseColor("#4ADE80"));
-        txtConsolaGeneral.setTextSize(11f);
-        txtConsolaGeneral.setTypeface(Typeface.MONOSPACE);
-        scrollConsolaGeneral.addView(txtConsolaGeneral);
-
-        contenedorConsolaUnificada.addView(scrollConsolaGeneral, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-
-        TextView btnLimpiarCorner = new TextView(this);
-        btnLimpiarCorner.setText("Limpiar");
-        btnLimpiarCorner.setTextColor(Color.parseColor("#A1A1AA"));
-        btnLimpiarCorner.setTextSize(9f);
-        btnLimpiarCorner.setTypeface(null, Typeface.BOLD);
-        btnLimpiarCorner.setGravity(Gravity.CENTER);
-        btnLimpiarCorner.setPadding(dp(7), dp(2), dp(7), dp(2));
-        btnLimpiarCorner.setBackground(fondoRedondeadoConBorde("#27272A", "#3F3F46", 5, 1));
-        btnLimpiarCorner.setOnClickListener(v -> txtConsolaGeneral.setText(""));
-
-        FrameLayout.LayoutParams lpLimpiarCorner = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.END);
-        lpLimpiarCorner.setMargins(0, dp(6), dp(8), 0);
-        contenedorConsolaUnificada.addView(btnLimpiarCorner, lpLimpiarCorner);
-
-        mainCard.addView(contenedorConsolaUnificada, new LinearLayout.LayoutParams(
+        vistaCuentasScroll.addView(contenidoScrollCuentas);
+        mainVertical.addView(vistaCuentasScroll, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        // 3B. Consolas Separadas por cada Cuenta (Cada una con su barra de usuario, paso actual y log propio)
-        contenedorConsolasIndividuales = new LinearLayout(this);
-        contenedorConsolasIndividuales.setOrientation(LinearLayout.VERTICAL);
-        contenedorConsolasIndividuales.setVisibility(View.GONE);
-        mainCard.addView(contenedorConsolasIndividuales, new LinearLayout.LayoutParams(
+        // 3. VISTA SECUNDARIA: "HISTORIAL" (Muestra únicamente el historial de la consola de las cuentas)
+        vistaHistorialContainer = new LinearLayout(this);
+        vistaHistorialContainer.setOrientation(LinearLayout.VERTICAL);
+        vistaHistorialContainer.setPadding(dp(14), dp(6), dp(14), dp(100));
+        vistaHistorialContainer.setVisibility(View.GONE);
+
+        LinearLayout headerHist = new LinearLayout(this);
+        headerHist.setOrientation(LinearLayout.HORIZONTAL);
+        headerHist.setGravity(Gravity.CENTER_VERTICAL);
+        headerHist.setPadding(0, 0, 0, dp(8));
+
+        LinearLayout colTitHist = new LinearLayout(this);
+        colTitHist.setOrientation(LinearLayout.VERTICAL);
+        colTitHist.addView(crearTexto("Historial de Consola", "#F4F4F5", 20f, true));
+        colTitHist.addView(crearTexto("Actividad en tiempo real de las cuentas registradas", "#A1A1AA", 11.5f, false));
+        headerHist.addView(colTitHist, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        Button btnLimpiarHist = crearBoton("Limpiar", "#27272A", "#E4E4E7", 11, () -> {
+            historialGlobalLogs.clear();
+            for (int i = 0; i < MAX_CUENTAS; i++) {
+                if (sesiones[i].txtConsolaCard != null) sesiones[i].txtConsolaCard.setText("");
+            }
+            refrescarVistaHistorial();
+        });
+        headerHist.addView(btnLimpiarHist, new LinearLayout.LayoutParams(dp(74), dp(32)));
+        vistaHistorialContainer.addView(headerHist);
+
+        // Barra horizontal de filtros de cuenta en el Historial (TODAS | usuario1 | usuario2...)
+        HorizontalScrollView scrollFiltros = new HorizontalScrollView(this);
+        scrollFiltros.setHorizontalScrollBarEnabled(false);
+        barraFiltrosHistorial = new LinearLayout(this);
+        barraFiltrosHistorial.setOrientation(LinearLayout.HORIZONTAL);
+        barraFiltrosHistorial.setPadding(0, dp(2), 0, dp(8));
+        scrollFiltros.addView(barraFiltrosHistorial);
+        vistaHistorialContainer.addView(scrollFiltros, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        // Caja de texto del Historial
+        scrollHistorialConsola = new ScrollView(this);
+        scrollHistorialConsola.setBackground(fondoRedondeadoConBorde("#14161A", "#27272A", 12, 1));
+        scrollHistorialConsola.setPadding(dp(12), dp(10), dp(12), dp(10));
+        txtHistorialConsola = new TextView(this);
+        txtHistorialConsola.setTextColor(Color.parseColor("#E4E4E7"));
+        txtHistorialConsola.setTextSize(11f);
+        txtHistorialConsola.setTypeface(Typeface.MONOSPACE);
+        scrollHistorialConsola.addView(txtHistorialConsola);
+
+        vistaHistorialContainer.addView(scrollHistorialConsola, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        root.addView(mainCard, lpMain);
-        frameRoot.addView(root);
+        mainVertical.addView(vistaHistorialContainer, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        // 4. PANTALLA DE ENTRADA EN GRIS OSCURO (#18181B)
+        frameRoot.addView(mainVertical);
+
+        // 4. BARRA FLOTANTE INFERIOR CON SOLO 2 ICONOS: "Cuentas" E "Historial"
+        LinearLayout barraFlotante = new LinearLayout(this);
+        barraFlotante.setOrientation(LinearLayout.HORIZONTAL);
+        barraFlotante.setGravity(Gravity.CENTER);
+        barraFlotante.setPadding(dp(10), dp(6), dp(10), dp(6));
+        barraFlotante.setBackground(fondoRedondeadoConBorde("#18181B", "#2E323B", 30, 1));
+        barraFlotante.setElevation(dp(12));
+
+        navBtnCuentas = new LinearLayout(this);
+        navBtnCuentas.setOrientation(LinearLayout.VERTICAL);
+        navBtnCuentas.setGravity(Gravity.CENTER);
+        navBtnCuentas.setPadding(dp(22), dp(6), dp(22), dp(6));
+        navIconCuentas = new ImageView(this);
+        navTxtCuentas = crearTexto("Cuentas", "#FFFFFF", 10.5f, true);
+        navBtnCuentas.addView(navIconCuentas, new LinearLayout.LayoutParams(dp(22), dp(22)));
+        navBtnCuentas.addView(navTxtCuentas);
+        navBtnCuentas.setOnClickListener(v -> cambiarPestanaInferior(0));
+
+        navBtnHistorial = new LinearLayout(this);
+        navBtnHistorial.setOrientation(LinearLayout.VERTICAL);
+        navBtnHistorial.setGravity(Gravity.CENTER);
+        navBtnHistorial.setPadding(dp(22), dp(6), dp(22), dp(6));
+        navIconHistorial = new ImageView(this);
+        navTxtHistorial = crearTexto("Historial", "#A1A1AA", 10.5f, true);
+        navBtnHistorial.addView(navIconHistorial, new LinearLayout.LayoutParams(dp(22), dp(22)));
+        navBtnHistorial.addView(navTxtHistorial);
+        navBtnHistorial.setOnClickListener(v -> cambiarPestanaInferior(1));
+
+        barraFlotante.addView(navBtnCuentas);
+        View separadorNav = new View(this);
+        barraFlotante.addView(separadorNav, new LinearLayout.LayoutParams(dp(14), dp(1)));
+        barraFlotante.addView(navBtnHistorial);
+
+        FrameLayout.LayoutParams lpFloating = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        lpFloating.setMargins(0, 0, 0, dp(16));
+        frameRoot.addView(barraFlotante, lpFloating);
+
+        actualizarEstiloBarraFlotante();
+
+        // 5. PANTALLA DE ENTRADA EN GRIS OSCURO (#18181B)
         LinearLayout splashOverlay = new LinearLayout(this);
         splashOverlay.setOrientation(LinearLayout.VERTICAL);
         splashOverlay.setGravity(Gravity.CENTER);
@@ -817,68 +886,180 @@ public class MainActivity extends Activity {
         }, 3000);
     }
 
+    private TextView crearChipResumen(String texto, String bgHex, String fgHex) {
+        TextView tv = crearTexto(texto, fgHex, 11f, true);
+        tv.setPadding(dp(10), dp(4), dp(10), dp(4));
+        tv.setBackground(fondoRedondeado(bgHex, 14));
+        return tv;
+    }
+
+    private void cambiarPestanaInferior(int nuevaPestana) {
+        pestanaInferiorActual = nuevaPestana;
+        if (nuevaPestana == 0) {
+            vistaCuentasScroll.setVisibility(View.VISIBLE);
+            vistaHistorialContainer.setVisibility(View.GONE);
+        } else {
+            vistaCuentasScroll.setVisibility(View.GONE);
+            vistaHistorialContainer.setVisibility(View.VISIBLE);
+            reconstruirFiltrosHistorial();
+            refrescarVistaHistorial();
+        }
+        actualizarEstiloBarraFlotante();
+    }
+
+    private void actualizarEstiloBarraFlotante() {
+        boolean enCuentas = (pestanaInferiorActual == 0);
+
+        navBtnCuentas.setBackground(fondoRedondeado(enCuentas ? "#0284C7" : "#18181B", 22));
+        navIconCuentas.setImageDrawable(crearIconoVectorial("USERS", enCuentas ? "#FFFFFF" : "#A1A1AA", 20));
+        navTxtCuentas.setTextColor(Color.parseColor(enCuentas ? "#FFFFFF" : "#A1A1AA"));
+
+        navBtnHistorial.setBackground(fondoRedondeado(!enCuentas ? "#0284C7" : "#18181B", 22));
+        navIconHistorial.setImageDrawable(crearIconoVectorial("HISTORY", !enCuentas ? "#FFFFFF" : "#A1A1AA", 20));
+        navTxtHistorial.setTextColor(Color.parseColor(!enCuentas ? "#FFFFFF" : "#A1A1AA"));
+    }
+
     /**
-     * Inicializa los 4 motores invisibles en memoria con bloqueo total de imágenes
-     * y construye las 4 consolas individuales.
+     * Inicializa los motores ocultos en segundo plano y construye la tarjeta interactiva
+     * de cada cuenta con sus 4 botones (Iniciar, Detener, Ojo, Editar) y su consola desplegable.
      */
-    @SuppressLint("SetJavaScriptEnabled")
-    private void inicializarMotoresOcultosHeadless() {
-        for (int i = 0; i < MAX_CUENTAS_SIMULTANEAS; i++) {
+    @SuppressLint({"SetJavaScriptEnabled", "ClickableViewAccessibility"})
+    private void inicializarMotoresOcultos() {
+        for (int i = 0; i < MAX_CUENTAS; i++) {
             final SesionBot sesion = sesiones[i];
 
-            // 1. Consola individual de la cuenta
-            LinearLayout cardConsolaInd = new LinearLayout(this);
-            cardConsolaInd.setOrientation(LinearLayout.VERTICAL);
-            cardConsolaInd.setBackground(fondoRedondeadoConBorde("#121316", "#27272A", 8, 1));
-            cardConsolaInd.setPadding(dp(1), dp(1), dp(1), dp(1));
+            // 1. Construir Tarjeta de la Cuenta
+            LinearLayout card = new LinearLayout(this);
+            card.setOrientation(LinearLayout.VERTICAL);
+            card.setPadding(dp(14), dp(12), dp(14), dp(12));
+            card.setBackground(fondoRedondeadoConBorde("#18181B", "#27272A", 14, 1));
 
-            LinearLayout headerConsolaInd = new LinearLayout(this);
-            headerConsolaInd.setOrientation(LinearLayout.HORIZONTAL);
-            headerConsolaInd.setGravity(Gravity.CENTER_VERTICAL);
-            headerConsolaInd.setBackgroundColor(Color.parseColor("#202227"));
-            headerConsolaInd.setPadding(dp(8), dp(4), dp(8), dp(4));
-
-            TextView lblTitConInd = crearTexto("Sin cuenta", "#9CA3AF", 11f, true);
-            TextView lblPasoInd = crearTexto("DETENIDO", "#9CA3AF", 9.5f, true);
-            LinearLayout.LayoutParams lpEstCon = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            lpEstCon.setMargins(dp(6), 0, dp(8), 0);
-
-            TextView btnLimpiarInd = new TextView(this);
-            btnLimpiarInd.setText("Limpiar");
-            btnLimpiarInd.setTextColor(Color.parseColor("#A1A1AA"));
-            btnLimpiarInd.setTextSize(8.5f);
-            btnLimpiarInd.setTypeface(null, Typeface.BOLD);
-            btnLimpiarInd.setPadding(dp(6), dp(2), dp(6), dp(2));
-            btnLimpiarInd.setBackground(fondoRedondeadoConBorde("#18181B", "#3F3F46", 4, 1));
-            btnLimpiarInd.setOnClickListener(v -> {
-                if (sesion.txtConsolaIndividual != null) sesion.txtConsolaIndividual.setText("");
+            // Al tocar la tarjeta se despliega o se cierra la consola de esa cuenta
+            card.setOnClickListener(v -> {
+                sesion.consolaDesplegada = !sesion.consolaDesplegada;
+                sesion.contenedorConsolaCard.setVisibility(sesion.consolaDesplegada ? View.VISIBLE : View.GONE);
+                if (sesion.consolaDesplegada && sesion.scrollConsolaCard != null) {
+                    sesion.scrollConsolaCard.post(() -> sesion.scrollConsolaCard.fullScroll(View.FOCUS_DOWN));
+                }
             });
 
-            headerConsolaInd.addView(lblTitConInd, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-            headerConsolaInd.addView(lblPasoInd, lpEstCon);
-            headerConsolaInd.addView(btnLimpiarInd);
+            // Fila 1: (Círculo Neón) Nombre de Usuario + Badge de Estado
+            LinearLayout filaTopCard = new LinearLayout(this);
+            filaTopCard.setOrientation(LinearLayout.HORIZONTAL);
+            filaTopCard.setGravity(Gravity.CENTER_VERTICAL);
 
-            ScrollView scrollInd = new ScrollView(this);
-            scrollInd.setPadding(dp(8), dp(5), dp(8), dp(5));
-            TextView txtInd = new TextView(this);
-            txtInd.setTextColor(Color.parseColor("#4ADE80"));
-            txtInd.setTextSize(10f);
-            txtInd.setTypeface(Typeface.MONOSPACE);
-            scrollInd.addView(txtInd);
+            TextView lblUsr = crearTexto("Sin cuenta", "#9CA3AF", 15f, true);
+            TextView badgeEst = crearTexto("DETENIDO", "#9CA3AF", 10f, true);
+            badgeEst.setPadding(dp(10), dp(4), dp(10), dp(4));
+            badgeEst.setBackground(fondoRedondeadoConBorde("#202227", "#3F3F46", 12, 1));
 
-            cardConsolaInd.addView(headerConsolaInd, new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-            cardConsolaInd.addView(scrollInd, new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+            filaTopCard.addView(lblUsr, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            filaTopCard.addView(badgeEst);
+            card.addView(filaTopCard);
 
-            sesion.tarjetaConsolaIndividual = cardConsolaInd;
-            sesion.lblTituloConsolaInd = lblTitConInd;
-            sesion.lblPasoActualInd = lblPasoInd;
-            sesion.scrollConsolaIndividual = scrollInd;
-            sesion.txtConsolaIndividual = txtInd;
+            // Fila 2: Último paso actual en vivo (ej. "Iniciando sesión...", "Sin botón intento 1", etc.)
+            TextView lblPaso = crearTexto("Sin actividad todavía", "#A1A1AA", 12f, false);
+            lblPaso.setPadding(0, dp(6), 0, dp(10));
+            card.addView(lblPaso);
 
-            // 2. Motor HTML Oculto (Sin renderizado de imágenes ni elementos pesados)
+            // Fila 3: Los 4 botones de acción a la derecha (▶ Iniciar | ■ Detener | 👁 Ocultar | ✎ Editar)
+            LinearLayout filaAcciones = new LinearLayout(this);
+            filaAcciones.setOrientation(LinearLayout.HORIZONTAL);
+            filaAcciones.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+
+            ImageView bPlay = crearBotonAccionTarjeta("PLAY", "#14532D", "#4ADE80", () -> {
+                if (!sesion.estaCorriendo()) {
+                    iniciarSesionIndividual(sesion);
+                }
+            });
+
+            ImageView bStop = crearBotonAccionTarjeta("STOP", "#450A0A", "#F87171", () -> {
+                if (sesion.estaCorriendo()) {
+                    detenerSesionIndividual(sesion, true);
+                }
+            });
+
+            ImageView bEye = crearBotonAccionTarjeta("EYE", "#1E293B", "#38BDF8", () -> {
+                sesion.nombreOculto = !sesion.nombreOculto;
+                actualizarVisualTarjeta(sesion);
+                if (pestanaInferiorActual == 1) {
+                    reconstruirFiltrosHistorial();
+                    refrescarVistaHistorial();
+                }
+            });
+
+            ImageView bEdit = crearBotonAccionTarjeta("EDIT", "#27272A", "#E4E4E7", () -> {
+                mostrarPopupEditorCuenta(sesion.slotIndex);
+            });
+
+            LinearLayout.LayoutParams lpAct = new LinearLayout.LayoutParams(dp(42), dp(36));
+            lpAct.setMargins(dp(6), 0, 0, 0);
+            filaAcciones.addView(bPlay, lpAct);
+            filaAcciones.addView(bStop, lpAct);
+            filaAcciones.addView(bEye, lpAct);
+            filaAcciones.addView(bEdit, lpAct);
+            card.addView(filaAcciones);
+
+            // Fila 4: Consola Desplegable Interna (oculta por defecto hasta que se toca la tarjeta)
+            LinearLayout boxConsola = new LinearLayout(this);
+            boxConsola.setOrientation(LinearLayout.VERTICAL);
+            boxConsola.setVisibility(View.GONE);
+            boxConsola.setPadding(0, dp(10), 0, 0);
+
+            FrameLayout frameConsolaInterna = new FrameLayout(this);
+            ScrollView scrollCon = new ScrollView(this);
+            scrollCon.setBackground(fondoRedondeadoConBorde("#0F1115", "#27272A", 10, 1));
+            scrollCon.setPadding(dp(10), dp(8), dp(10), dp(8));
+
+            // Permite deslizar el interior de la consola sin que el ScrollView principal le robe el toque
+            scrollCon.setOnTouchListener((v, event) -> {
+                v.getParent().requestDisallowInterceptTouchEvent(true);
+                if (event.getAction() == MotionEvent.ACTION_UP) {
+                    v.getParent().requestDisallowInterceptTouchEvent(false);
+                }
+                return false;
+            });
+
+            TextView txtCon = new TextView(this);
+            txtCon.setTextColor(Color.parseColor("#E4E4E7"));
+            txtCon.setTextSize(10.5f);
+            txtCon.setTypeface(Typeface.MONOSPACE);
+            scrollCon.addView(txtCon);
+
+            frameConsolaInterna.addView(scrollCon, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(155)));
+
+            TextView btnLimpiarMini = new TextView(this);
+            btnLimpiarMini.setText("Limpiar");
+            btnLimpiarMini.setTextColor(Color.parseColor("#A1A1AA"));
+            btnLimpiarMini.setTextSize(8.5f);
+            btnLimpiarMini.setTypeface(null, Typeface.BOLD);
+            btnLimpiarMini.setPadding(dp(7), dp(2), dp(7), dp(2));
+            btnLimpiarMini.setBackground(fondoRedondeadoConBorde("#18181B", "#3F3F46", 5, 1));
+            btnLimpiarMini.setOnClickListener(v -> txtCon.setText(""));
+
+            FrameLayout.LayoutParams lpLimp = new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                    Gravity.TOP | Gravity.END);
+            lpLimp.setMargins(0, dp(6), dp(8), 0);
+            frameConsolaInterna.addView(btnLimpiarMini, lpLimp);
+
+            boxConsola.addView(frameConsolaInterna);
+            card.addView(boxConsola);
+
+            sesion.cardView = card;
+            sesion.lblUsuarioCard = lblUsr;
+            sesion.badgeEstadoCard = badgeEst;
+            sesion.lblSubtituloPasoCard = lblPaso;
+            sesion.btnPlayCard = bPlay;
+            sesion.btnStopCard = bStop;
+            sesion.btnEyeCard = bEye;
+            sesion.btnEditCard = bEdit;
+            sesion.contenedorConsolaCard = boxConsola;
+            sesion.scrollConsolaCard = scrollCon;
+            sesion.txtConsolaCard = txtCon;
+
+            // 2. Motor WebView oculto en segundo plano
             WebView wv = new WebView(this);
             configurarPerfilAisladoWebView(wv, i);
 
@@ -886,7 +1067,6 @@ public class MainActivity extends Activity {
             ws.setJavaScriptEnabled(true);
             ws.setDomStorageEnabled(true);
             ws.setDatabaseEnabled(true);
-            // Bloquea al 100% la descarga de imágenes del banco para máxima velocidad
             ws.setLoadsImagesAutomatically(false);
             ws.setBlockNetworkImage(true);
             ws.setBlockNetworkLoads(false);
@@ -929,9 +1109,17 @@ public class MainActivity extends Activity {
             contenedorMotoresOcultos.addView(wv, new FrameLayout.LayoutParams(1, 1));
             wv.loadUrl(URL_LOGIN);
         }
+    }
 
-        reorganizarConsolasYPestanas();
-        log("[SISTEMA] Motor Headless HTML/XHR activado (Navegador oculto / 0% carga grafica).");
+    private ImageView crearBotonAccionTarjeta(String icono, String bgHex, String fgHex, Runnable accion) {
+        ImageView iv = new ImageView(this);
+        iv.setScaleType(ImageView.ScaleType.CENTER);
+        iv.setImageDrawable(crearIconoVectorial(icono, fgHex, 16));
+        iv.setBackground(fondoRedondeadoConBorde(bgHex, fgHex, 10, 1));
+        iv.setOnClickListener(v -> {
+            if (accion != null) accion.run();
+        });
+        return iv;
     }
 
     private void configurarPerfilAisladoWebView(WebView wv, int slotIdx) {
@@ -975,276 +1163,454 @@ public class MainActivity extends Activity {
         } catch (Throwable ignored) {}
     }
 
-    private boolean hayAlgunaCuentaCorriendo() {
-        for (SesionBot s : obtenerSesionesActivas()) {
-            if (s.estaCorriendo()) return true;
-        }
-        return false;
-    }
-
-    private int contarCuentasCorriendo() {
-        int c = 0;
-        for (SesionBot s : obtenerSesionesActivas()) {
-            if (s.estaCorriendo()) c++;
-        }
-        return c;
-    }
-
-    private void actualizarEstilosIndicadoresNeon() {
-        ArrayList<SesionBot> activas = obtenerSesionesActivas();
-        int cantActivas = activas.isEmpty() ? 1 : activas.size();
-        int cantCorriendo = contarCuentasCorriendo();
-
-        if (cantCorriendo > 0) {
-            ponerIconoYTexto(badgeEstado, crearCirculoNeon(true, pulsoNeon, 10), "VIGILANDO (" + cantCorriendo + ")");
-            badgeEstado.setTextColor(Color.parseColor("#4ADE80"));
-            badgeEstado.setBackground(fondoRedondeado("#14532D", 8));
-        } else {
-            ponerIconoYTexto(badgeEstado, crearCirculoNeon(false, false, 10), "APAGADO");
-            badgeEstado.setTextColor(Color.parseColor("#FCA5A5"));
-            badgeEstado.setBackground(fondoRedondeado("#450A0A", 8));
-        }
-
-        ponerIconoYTexto(btnTabTodas, crearIconoVectorial("GRID", slotEnfocado == -1 ? "#FFFFFF" : "#A1A1AA", 12), "Todas (" + cantActivas + ")");
-        btnTabTodas.setBackground(fondoRedondeado(slotEnfocado == -1 ? "#0284C7" : "#27272A", 6));
-        btnTabTodas.setTextColor(Color.parseColor(slotEnfocado == -1 ? "#FFFFFF" : "#A1A1AA"));
-
-        for (int i = 0; i < MAX_CUENTAS_SIMULTANEAS; i++) {
-            SesionBot s = sesiones[i];
-            boolean corriendo = s.estaCorriendo();
-            String colorTextoPanel = corriendo ? "#4ADE80" : "#9CA3AF";
-            String nombre = s.nombreMostrado();
-
-            // Cabecera de cada consola individual (Con círculo neón rojo/verde titilando)
-            if (s.lblTituloConsolaInd != null) {
-                Drawable dotConsola = crearCirculoNeon(corriendo, pulsoNeon, 10);
-                ponerIconoYTexto(s.lblTituloConsolaInd, dotConsola, nombre);
-                s.lblTituloConsolaInd.setTextColor(Color.parseColor(colorTextoPanel));
-            }
-
-            // Pestañas de selección: solo el nombre en gris centrado (#A1A1AA)
-            s.btnTabSelector.setText(nombre);
-            s.btnTabSelector.setTextColor(Color.parseColor("#A1A1AA"));
-            s.btnTabSelector.setGravity(Gravity.CENTER);
-            s.btnTabSelector.setVisibility(s.activa || (activas.isEmpty() && i == 0) ? View.VISIBLE : View.GONE);
-
-            boolean tabSeleccionada = (slotEnfocado == i);
-            if (tabSeleccionada) {
-                s.btnTabSelector.setBackground(fondoRedondeadoConBorde("#1E293B", "#0284C7", 6, 1));
-            } else {
-                s.btnTabSelector.setBackground(fondoRedondeado("#27272A", 6));
-            }
-        }
-    }
-
-    private void actualizarBotonesMandoSegunSeleccion() {
-        ArrayList<SesionBot> activas = obtenerSesionesActivas();
-        if (activas.isEmpty()) {
-            btnIniciar.setEnabled(true);
-            btnIniciar.setBackground(fondoRedondeado("#16A34A", 8));
-            ponerIconoYTexto(btnIniciar, crearIconoVectorial("PLAY", "#FFFFFF", 14), "INICIAR");
-
-            btnDetener.setEnabled(false);
-            btnDetener.setBackground(fondoRedondeado("#7F1D1D", 8));
-            ponerIconoYTexto(btnDetener, crearIconoVectorial("STOP", "#FCA5A5", 14), "DETENER");
-            return;
-        }
-
-        if (slotEnfocado >= 0 && slotEnfocado < MAX_CUENTAS_SIMULTANEAS && sesiones[slotEnfocado].activa) {
-            SesionBot sel = sesiones[slotEnfocado];
-            boolean corriendo = sel.estaCorriendo();
-
-            btnIniciar.setEnabled(!corriendo);
-            btnIniciar.setBackground(fondoRedondeado(corriendo ? "#14532D" : "#16A34A", 8));
-            ponerIconoYTexto(btnIniciar, crearIconoVectorial("PLAY", corriendo ? "#86EFAC" : "#FFFFFF", 14), "INICIAR");
-            btnIniciar.setTextColor(Color.parseColor(corriendo ? "#86EFAC" : "#FFFFFF"));
-
-            btnDetener.setEnabled(corriendo);
-            btnDetener.setBackground(fondoRedondeado(corriendo ? "#DC2626" : "#7F1D1D", 8));
-            ponerIconoYTexto(btnDetener, crearIconoVectorial("STOP", corriendo ? "#FFFFFF" : "#FCA5A5", 14), "DETENER");
-            btnDetener.setTextColor(Color.parseColor(corriendo ? "#FFFFFF" : "#FCA5A5"));
-        } else {
-            boolean algunaDetenida = false;
-            boolean algunaCorriendo = false;
-            for (SesionBot s : activas) {
-                if (s.estaCorriendo()) algunaCorriendo = true;
-                else algunaDetenida = true;
-            }
-
-            btnIniciar.setEnabled(algunaDetenida);
-            btnIniciar.setBackground(fondoRedondeado(algunaDetenida ? "#16A34A" : "#14532D", 8));
-            ponerIconoYTexto(btnIniciar, crearIconoVectorial("PLAY", algunaDetenida ? "#FFFFFF" : "#86EFAC", 14), "INICIAR");
-            btnIniciar.setTextColor(Color.parseColor(algunaDetenida ? "#FFFFFF" : "#86EFAC"));
-
-            btnDetener.setEnabled(algunaCorriendo);
-            btnDetener.setBackground(fondoRedondeado(algunaCorriendo ? "#DC2626" : "#7F1D1D", 8));
-            ponerIconoYTexto(btnDetener, crearIconoVectorial("STOP", algunaCorriendo ? "#FFFFFF" : "#FCA5A5", 14), "DETENER");
-            btnDetener.setTextColor(Color.parseColor(algunaCorriendo ? "#FFFFFF" : "#FCA5A5"));
-        }
-    }
-
-    private void reorganizarConsolasYPestanas() {
-        contenedorConsolasIndividuales.removeAllViews();
-        for (int i = 0; i < MAX_CUENTAS_SIMULTANEAS; i++) {
-            ViewGroup parentCon = (ViewGroup) sesiones[i].tarjetaConsolaIndividual.getParent();
-            if (parentCon != null) parentCon.removeView(sesiones[i].tarjetaConsolaIndividual);
-        }
-
-        ArrayList<SesionBot> activas = obtenerSesionesActivas();
-        if (activas.isEmpty()) {
-            activas.add(sesiones[0]);
-        }
-
-        for (SesionBot s : activas) {
-            if (slotEnfocado == -1 || slotEnfocado == s.slotIndex || modoVistaActual == 1) {
-                LinearLayout.LayoutParams lpConInd = new LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
-                lpConInd.setMargins(0, dp(3), 0, dp(3));
-                contenedorConsolasIndividuales.addView(s.tarjetaConsolaIndividual, lpConInd);
-            }
-        }
-
-        actualizarEstilosIndicadoresNeon();
-        actualizarBotonesMandoSegunSeleccion();
-        actualizarModoVisualConsolas();
-    }
-
-    private void cambiarSlotEnfocado(int nuevoSlot) {
-        slotEnfocado = nuevoSlot;
-        reorganizarConsolasYPestanas();
-    }
-
-    private void cambiarVista(int modo) {
-        modoVistaActual = modo;
-        btnModoUnificado.setBackground(fondoRedondeado(modo == 0 ? "#0284C7" : "#27272A", 8));
-        btnModoSeparado.setBackground(fondoRedondeado(modo == 1 ? "#0284C7" : "#27272A", 8));
-
-        ponerIconoYTexto(btnModoUnificado, crearIconoVectorial("TERMINAL", modo == 0 ? "#FFFFFF" : "#A1A1AA", 13), "Panel Principal");
-        btnModoUnificado.setTextColor(Color.parseColor(modo == 0 ? "#FFFFFF" : "#A1A1AA"));
-
-        ponerIconoYTexto(btnModoSeparado, crearIconoVectorial("PANEL", modo == 1 ? "#FFFFFF" : "#A1A1AA", 13), "Solo Panel (Consolas)");
-        btnModoSeparado.setTextColor(Color.parseColor(modo == 1 ? "#FFFFFF" : "#A1A1AA"));
-
-        reorganizarConsolasYPestanas();
-    }
-
-    private void actualizarModoVisualConsolas() {
-        if (modoVistaActual == 0) {
-            // Panel Principal: Muestra controles arriba; si está en "Todas" muestra la consola general, y si toca un usuario muestra la consola de ese usuario
-            contenedorControlesSuperiores.setVisibility(View.VISIBLE);
-            if (slotEnfocado == -1) {
-                contenedorConsolaUnificada.setVisibility(View.VISIBLE);
-                contenedorConsolasIndividuales.setVisibility(View.GONE);
-            } else {
-                contenedorConsolaUnificada.setVisibility(View.GONE);
-                contenedorConsolasIndividuales.setVisibility(View.VISIBLE);
-            }
-        } else {
-            // Solo Panel: Oculta botones de agregar cuentas e iniciar/detener, y muestra únicamente las consolas separadas de cada cuenta
-            contenedorControlesSuperiores.setVisibility(View.GONE);
-            contenedorConsolaUnificada.setVisibility(View.GONE);
-            contenedorConsolasIndividuales.setVisibility(View.VISIBLE);
-        }
-    }
-
-    private ArrayList<SesionBot> obtenerSesionesActivas() {
+    // =========================================================================================
+    // ACTUALIZACIÓN VISUAL DE TARJETAS, BORDE VERDE NEÓN AL COMPRAR Y BOTONES GLOBALES
+    // =========================================================================================
+    private ArrayList<SesionBot> obtenerSesionesRegistradas() {
         ArrayList<SesionBot> lista = new ArrayList<>();
-        for (int i = 0; i < MAX_CUENTAS_SIMULTANEAS; i++) {
-            if (sesiones[i].activa && !sesiones[i].usuario.isEmpty()) {
+        for (int i = 0; i < MAX_CUENTAS; i++) {
+            if (sesiones[i].registrada && !sesiones[i].usuario.isEmpty()) {
                 lista.add(sesiones[i]);
             }
         }
         return lista;
     }
 
+    private int contarCuentasCorriendo() {
+        int c = 0;
+        for (SesionBot s : obtenerSesionesRegistradas()) {
+            if (s.estaCorriendo()) c++;
+        }
+        return c;
+    }
+
+    private void reconstruirListaTarjetas() {
+        contenedorTarjetasCuentas.removeAllViews();
+        for (int i = 0; i < MAX_CUENTAS; i++) {
+            ViewGroup p = (ViewGroup) sesiones[i].cardView.getParent();
+            if (p != null) p.removeView(sesiones[i].cardView);
+        }
+
+        ArrayList<SesionBot> reg = obtenerSesionesRegistradas();
+        for (SesionBot s : reg) {
+            LinearLayout.LayoutParams lpCard = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lpCard.setMargins(0, 0, 0, dp(10));
+            contenedorTarjetasCuentas.addView(s.cardView, lpCard);
+            actualizarVisualTarjeta(s);
+        }
+
+        actualizarResumenYBotonesGlobales();
+    }
+
+    private void actualizarVisualTarjeta(SesionBot s) {
+        if (s == null || s.cardView == null) return;
+        boolean corriendo = s.estaCorriendo();
+
+        // 1. Círculo LED Neón + Nombre de usuario (Gris si detenido, Verde si corriendo)
+        Drawable dot = crearCirculoNeon(corriendo || s.compraCompletada, corriendo ? pulsoNeon : true, 11);
+        ponerIconoYTexto(s.lblUsuarioCard, dot, s.nombreMostrado());
+        if (s.compraCompletada || corriendo) {
+            s.lblUsuarioCard.setTextColor(Color.parseColor("#4ADE80"));
+        } else {
+            s.lblUsuarioCard.setTextColor(Color.parseColor("#9CA3AF"));
+        }
+
+        // 2. Borde del recuadro de la cuenta: Iluminado en Verde Neón brillante si completó la compra
+        if (s.compraCompletada) {
+            s.cardView.setBackground(fondoRedondeadoConBorde("#0D2818", "#00FF66", 14, 2));
+        } else if (corriendo) {
+            s.cardView.setBackground(fondoRedondeadoConBorde("#18181B", "#1E3A2F", 14, 1));
+        } else {
+            s.cardView.setBackground(fondoRedondeadoConBorde("#18181B", "#27272A", 14, 1));
+        }
+
+        // 3. Badge de Estado en la esquina de la tarjeta
+        String txtBadge = nombreCortoEstado(s);
+        s.badgeEstadoCard.setText(txtBadge);
+        if (s.compraCompletada) {
+            s.badgeEstadoCard.setTextColor(Color.parseColor("#00FF66"));
+            s.badgeEstadoCard.setBackground(fondoRedondeadoConBorde("#064E3B", "#00FF66", 12, 1));
+        } else if (corriendo) {
+            s.badgeEstadoCard.setTextColor(Color.parseColor("#4ADE80"));
+            s.badgeEstadoCard.setBackground(fondoRedondeadoConBorde("#14532D", "#22C55E", 12, 1));
+        } else {
+            s.badgeEstadoCard.setTextColor(Color.parseColor("#9CA3AF"));
+            s.badgeEstadoCard.setBackground(fondoRedondeadoConBorde("#202227", "#3F3F46", 12, 1));
+        }
+
+        // 4. Subtítulo con el paso actual claro
+        s.lblSubtituloPasoCard.setText(s.ultimoPasoTexto);
+        s.lblSubtituloPasoCard.setTextColor(Color.parseColor(
+                s.compraCompletada ? "#00FF66" : (corriendo ? "#E4E4E7" : "#A1A1AA")
+        ));
+
+        // 5. Estado de los botones Play, Stop y Ojo de la tarjeta
+        s.btnPlayCard.setAlpha(corriendo ? 0.35f : 1.0f);
+        s.btnPlayCard.setEnabled(!corriendo);
+
+        s.btnStopCard.setAlpha(corriendo ? 1.0f : 0.35f);
+        s.btnStopCard.setEnabled(corriendo);
+
+        s.btnEyeCard.setImageDrawable(crearIconoVectorial(s.nombreOculto ? "EYE_OFF" : "EYE", "#38BDF8", 16));
+    }
+
+    private void actualizarResumenYBotonesGlobales() {
+        ArrayList<SesionBot> reg = obtenerSesionesRegistradas();
+        int total = reg.size();
+        int activas = contarCuentasCorriendo();
+        int detenidas = Math.max(0, total - activas);
+
+        chipRegistradas.setText(total == 1 ? "1 registrada" : total + " registradas");
+        chipActivas.setText(activas == 1 ? "1 activa" : activas + " activas");
+        chipDetenidas.setText(detenidas == 1 ? "1 detenida" : detenidas + " detenidas");
+
+        // Badge global arriba a la derecha
+        if (activas > 0) {
+            ponerIconoYTexto(badgeEstadoGlobal, crearCirculoNeon(true, pulsoNeon, 10), "VIGILANDO (" + activas + ")");
+            badgeEstadoGlobal.setTextColor(Color.parseColor("#4ADE80"));
+            badgeEstadoGlobal.setBackground(fondoRedondeado("#14532D", 12));
+        } else {
+            ponerIconoYTexto(badgeEstadoGlobal, crearCirculoNeon(false, false, 10), "APAGADO");
+            badgeEstadoGlobal.setTextColor(Color.parseColor("#FCA5A5"));
+            badgeEstadoGlobal.setBackground(fondoRedondeado("#450A0A", 12));
+        }
+
+        // Botones "Iniciar todas" y "Detener todas" con estilo de nuestro bot
+        boolean hayParaIniciar = (total > 0 && activas < total);
+        boolean hayParaDetener = (activas > 0);
+
+        btnIniciarTodas.setEnabled(hayParaIniciar || total == 0);
+        btnIniciarTodas.setBackground(fondoRedondeado(hayParaIniciar || total == 0 ? "#16A34A" : "#14532D", 10));
+        ponerIconoYTexto(btnIniciarTodas, crearIconoVectorial("PLAY", hayParaIniciar || total == 0 ? "#FFFFFF" : "#86EFAC", 14), "Iniciar todas");
+        btnIniciarTodas.setTextColor(Color.parseColor(hayParaIniciar || total == 0 ? "#FFFFFF" : "#86EFAC"));
+
+        btnDetenerTodas.setEnabled(hayParaDetener);
+        btnDetenerTodas.setBackground(fondoRedondeado(hayParaDetener ? "#DC2626" : "#7F1D1D", 10));
+        ponerIconoYTexto(btnDetenerTodas, crearIconoVectorial("STOP", hayParaDetener ? "#FFFFFF" : "#FCA5A5", 14), "Detener todas");
+        btnDetenerTodas.setTextColor(Color.parseColor(hayParaDetener ? "#FFFFFF" : "#FCA5A5"));
+    }
+
     // =========================================================================================
-    // CONTROL DE RED INDIVIDUAL EN SEGUNDO PLANO
+    // HISTORIAL DE LA CONSOLA DE LAS CUENTAS (PESTAÑA INFERIOR "HISTORIAL")
     // =========================================================================================
-    @SuppressWarnings("deprecation")
-    private boolean hayInternetDisponible() {
-        try {
-            ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
-            if (cm == null) return true;
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-                Network net = cm.getActiveNetwork();
-                if (net == null) return false;
-                NetworkCapabilities caps = cm.getNetworkCapabilities(net);
-                return caps != null && (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
-                        || caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
-                        || caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET));
-            } else {
-                NetworkInfo ni = cm.getActiveNetworkInfo();
-                return ni != null && ni.isConnected();
+    private void reconstruirFiltrosHistorial() {
+        barraFiltrosHistorial.removeAllViews();
+
+        Button btnAll = crearBoton("TODAS", filtroHistorialSlot == -1 ? "#0284C7" : "#27272A",
+                filtroHistorialSlot == -1 ? "#FFFFFF" : "#A1A1AA", 10, () -> {
+                    filtroHistorialSlot = -1;
+                    reconstruirFiltrosHistorial();
+                    refrescarVistaHistorial();
+                });
+        LinearLayout.LayoutParams lpF = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(28));
+        lpF.setMargins(0, 0, dp(6), 0);
+        btnAll.setPadding(dp(12), 0, dp(12), 0);
+        barraFiltrosHistorial.addView(btnAll, lpF);
+
+        for (SesionBot s : obtenerSesionesRegistradas()) {
+            boolean sel = (filtroHistorialSlot == s.slotIndex);
+            Button bUsr = crearBoton(s.nombreMostrado(), sel ? "#0284C7" : "#27272A",
+                    sel ? "#FFFFFF" : "#A1A1AA", 10, () -> {
+                        filtroHistorialSlot = s.slotIndex;
+                        reconstruirFiltrosHistorial();
+                        refrescarVistaHistorial();
+                    });
+            bUsr.setPadding(dp(12), 0, dp(12), 0);
+            barraFiltrosHistorial.addView(bUsr, lpF);
+        }
+    }
+
+    private void refrescarVistaHistorial() {
+        if (txtHistorialConsola == null) return;
+        StringBuilder sb = new StringBuilder();
+        for (EntradaLog e : historialGlobalLogs) {
+            if (filtroHistorialSlot == -1 || filtroHistorialSlot == e.slotIndex) {
+                String nombre = e.usuario;
+                if (e.slotIndex >= 0 && e.slotIndex < MAX_CUENTAS) {
+                    nombre = sesiones[e.slotIndex].nombreMostrado();
+                }
+                sb.append("[").append(e.hora).append("] [").append(nombre).append("] ").append(e.mensaje).append("\n");
             }
-        } catch (Exception ignored) {
-            return true;
         }
+        txtHistorialConsola.setText(sb.toString());
+        scrollHistorialConsola.post(() -> scrollHistorialConsola.fullScroll(View.FOCUS_DOWN));
     }
 
-    private void registrarMonitorPasivoRed() {
+    private void registrarPasoCuenta(final SesionBot s, final String mensajeClaro) {
+        final String hora = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
+        runOnUiThread(() -> {
+            s.ultimoPasoTexto = mensajeClaro;
+            actualizarVisualTarjeta(s);
+
+            if (s.txtConsolaCard != null && s.scrollConsolaCard != null) {
+                s.txtConsolaCard.append("[" + hora + "] " + mensajeClaro + "\n");
+                if (s.consolaDesplegada) {
+                    s.scrollConsolaCard.post(() -> s.scrollConsolaCard.fullScroll(View.FOCUS_DOWN));
+                }
+            }
+
+            historialGlobalLogs.add(new EntradaLog(s.slotIndex, s.usuario, hora, mensajeClaro));
+            if (historialGlobalLogs.size() > 500) {
+                historialGlobalLogs.remove(0);
+            }
+
+            if (pestanaInferiorActual == 1 && (filtroHistorialSlot == -1 || filtroHistorialSlot == s.slotIndex)) {
+                txtHistorialConsola.append("[" + hora + "] [" + s.nombreMostrado() + "] " + mensajeClaro + "\n");
+                scrollHistorialConsola.post(() -> scrollHistorialConsola.fullScroll(View.FOCUS_DOWN));
+            }
+        });
+    }
+
+    // =========================================================================================
+    // GESTIÓN Y EDICIÓN DE CREDENCIALES DE CADA CUENTA
+    // =========================================================================================
+    private JSONArray obtenerArrayCuentasPrefs() {
         try {
-            ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
-            if (cm == null) return;
-            networkCallback = new ConnectivityManager.NetworkCallback() {
-                @Override
-                public void onLost(Network network) {
-                    runOnUiThread(() -> {
-                        for (int i = 0; i < MAX_CUENTAS_SIMULTANEAS; i++) {
-                            if (sesiones[i].webViewOculto != null) {
-                                sesiones[i].webViewOculto.stopLoading();
-                            }
-                        }
-                        if (!avisoSinInternetMostrado) {
-                            avisoSinInternetMostrado = true;
-                            log("[RED] Internet desconectado. Motores en espera...");
-                        }
-                    });
-                }
-
-                @Override
-                public void onAvailable(Network network) {
-                    runOnUiThread(() -> {
-                        if (avisoSinInternetMostrado) {
-                            avisoSinInternetMostrado = false;
-                            log("[RED] Internet restablecido. Retomando operaciones...");
-                            long ahora = System.currentTimeMillis();
-                            for (int i = 0; i < MAX_CUENTAS_SIMULTANEAS; i++) {
-                                sesiones[i].tiempoEstadoMs = ahora;
-                                sesiones[i].accionEnCurso = false;
-                                sesiones[i].peticionRedEnCurso = false;
-                            }
-                        }
-                    });
-                }
-            };
-            cm.registerDefaultNetworkCallback(networkCallback);
-        } catch (Exception ignored) {}
+            String raw = prefs.getString("lista_cuentas_v2", "");
+            if (raw != null && !raw.isEmpty()) {
+                return new JSONArray(raw);
+            }
+            // Migración automática si tenía cuentas del formato anterior
+            JSONObject viejo = new JSONObject(prefs.getString("cuentas_json", "{}"));
+            JSONArray migrado = new JSONArray();
+            java.util.Iterator<String> it = viejo.keys();
+            while (it.hasNext() && migrado.length() < MAX_CUENTAS) {
+                String k = it.next();
+                JSONObject o = viejo.optJSONObject(k);
+                if (o != null) migrado.put(o);
+            }
+            if (migrado.length() > 0) {
+                prefs.edit().putString("lista_cuentas_v2", migrado.toString()).apply();
+            }
+            return migrado;
+        } catch (Exception e) {
+            return new JSONArray();
+        }
     }
 
-    private void reiniciarConexionIndividual(final SesionBot s) {
-        if (s == null || s.microCortePropio) return;
-        s.microCortePropio = true;
-        s.peticionRedEnCurso = false;
-        logCuenta(s, "[SOCKET] Reiniciando canal de red interno para esta cuenta...");
-
-        final WebView wv = s.webViewOculto;
-        if (wv != null) {
-            try {
-                wv.stopLoading();
-                wv.getSettings().setBlockNetworkLoads(true);
-                evaluarJS(s, "if(window.stop){try{window.stop();}catch(e){}}", null);
-            } catch (Exception ignored) {}
-        }
-
-        handler.postDelayed(() -> {
-            if (wv != null) {
+    private void guardarArrayCuentasPrefs() {
+        JSONArray arr = new JSONArray();
+        for (int i = 0; i < MAX_CUENTAS; i++) {
+            SesionBot s = sesiones[i];
+            if (s.registrada && !s.usuario.isEmpty()) {
                 try {
-                    wv.getSettings().setBlockNetworkLoads(false);
+                    JSONObject o = new JSONObject();
+                    o.put("tipo_doc", s.tipoDoc);
+                    o.put("cedula", s.cedula);
+                    o.put("usuario", s.usuario);
+                    o.put("clave", s.contrasena);
+                    arr.put(o);
                 } catch (Exception ignored) {}
             }
-            s.microCortePropio = false;
-            logCuenta(s, "[SOCKET] Canal de red restablecido.");
-        }, 1200);
+        }
+        prefs.edit().putString("lista_cuentas_v2", arr.toString()).apply();
+    }
+
+    private void cargarCuentasGuardadas() {
+        JSONArray arr = obtenerArrayCuentasPrefs();
+        for (int i = 0; i < MAX_CUENTAS; i++) {
+            sesiones[i].registrada = false;
+            sesiones[i].tipoDoc = "V";
+            sesiones[i].cedula = "";
+            sesiones[i].usuario = "";
+            sesiones[i].contrasena = "";
+        }
+
+        for (int i = 0; i < arr.length() && i < MAX_CUENTAS; i++) {
+            JSONObject d = arr.optJSONObject(i);
+            if (d != null) {
+                sesiones[i].registrada = true;
+                sesiones[i].tipoDoc = d.optString("tipo_doc", "V");
+                sesiones[i].cedula = d.optString("cedula", "");
+                sesiones[i].usuario = d.optString("usuario", "");
+                sesiones[i].contrasena = d.optString("clave", "");
+            }
+        }
+        reconstruirListaTarjetas();
+    }
+
+    private void toggleCampoOjo(EditText edt, Button btn) {
+        boolean estaOculto = (edt.getTransformationMethod() instanceof PasswordTransformationMethod);
+        if (estaOculto) {
+            edt.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+            edt.setTransformationMethod(HideReturnsTransformationMethod.getInstance());
+            btn.setBackground(fondoRedondeado("#52525B", 6));
+            ponerIconoYTexto(btn, crearIconoVectorial("EYE", "#F4F4F5", 14), "");
+        } else {
+            edt.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+            edt.setTransformationMethod(PasswordTransformationMethod.getInstance());
+            btn.setBackground(fondoRedondeado("#27272A", 6));
+            ponerIconoYTexto(btn, crearIconoVectorial("EYE_OFF", "#F4F4F5", 14), "");
+        }
+        edt.setSelection(edt.getText().length());
+    }
+
+    /**
+     * Abre el diálogo para crear una nueva cuenta (slotEditar == -1) o editar
+     * directamente las credenciales de una tarjeta específica.
+     */
+    private void mostrarPopupEditorCuenta(final int slotEditar) {
+        final boolean esEdicion = (slotEditar >= 0 && slotEditar < MAX_CUENTAS && sesiones[slotEditar].registrada);
+        final SesionBot sesionEdit = esEdicion ? sesiones[slotEditar] : null;
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dp(18), dp(16), dp(18), dp(16));
+        layout.setBackgroundColor(Color.parseColor("#18181B"));
+
+        TextView titulo = crearTexto(esEdicion ? "Editar Credenciales" : "Agregar Nueva Cuenta", "#F4F4F5", 16f, true);
+        titulo.setPadding(0, 0, 0, dp(10));
+        layout.addView(titulo);
+
+        final String[] tipoSeleccionado = {esEdicion ? sesionEdit.tipoDoc : "V"};
+        final String[] tiposDocArray = {"V", "E", "J", "P", "G", "C", "R"};
+
+        LinearLayout filaCed = new LinearLayout(this);
+        filaCed.setOrientation(LinearLayout.HORIZONTAL);
+        filaCed.setPadding(0, dp(4), 0, dp(6));
+
+        final Button btnTipoDoc = crearBoton(tipoSeleccionado[0] + " ▼", "#27272A", "#F4F4F5", 12, null);
+        btnTipoDoc.setOnClickListener(v -> {
+            new AlertDialog.Builder(this)
+                    .setTitle("Tipo de Documento")
+                    .setItems(tiposDocArray, (d, which) -> {
+                        tipoSeleccionado[0] = tiposDocArray[which];
+                        btnTipoDoc.setText(tipoSeleccionado[0] + " ▼");
+                    }).show();
+        });
+
+        final EditText edtCedula = new EditText(this);
+        edtCedula.setHint("Cédula");
+        edtCedula.setHintTextColor(Color.parseColor("#94A3B8"));
+        edtCedula.setTextColor(Color.parseColor("#F4F4F5"));
+        edtCedula.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+        edtCedula.setTransformationMethod(HideReturnsTransformationMethod.getInstance());
+        edtCedula.setBackground(fondoRedondeado("#27272A", 6));
+        edtCedula.setPadding(dp(10), dp(6), dp(10), dp(6));
+        if (esEdicion) edtCedula.setText(sesionEdit.cedula);
+
+        final Button btnOjoCed = crearBotonConIcono("EYE", "", "#52525B", "#F4F4F5", 12, null);
+        btnOjoCed.setOnClickListener(v -> toggleCampoOjo(edtCedula, btnOjoCed));
+
+        LinearLayout.LayoutParams lpTipo = new LinearLayout.LayoutParams(dp(58), dp(38));
+        lpTipo.setMargins(0, 0, dp(4), 0);
+        LinearLayout.LayoutParams lpEdt = new LinearLayout.LayoutParams(0, dp(38), 1f);
+        lpEdt.setMargins(0, 0, dp(4), 0);
+        filaCed.addView(btnTipoDoc, lpTipo);
+        filaCed.addView(edtCedula, lpEdt);
+        filaCed.addView(btnOjoCed, new LinearLayout.LayoutParams(dp(38), dp(38)));
+        layout.addView(filaCed);
+
+        LinearLayout filaUsr = new LinearLayout(this);
+        filaUsr.setOrientation(LinearLayout.HORIZONTAL);
+        filaUsr.setPadding(0, dp(4), 0, dp(6));
+
+        final EditText edtUsuario = new EditText(this);
+        edtUsuario.setHint("Usuario");
+        edtUsuario.setHintTextColor(Color.parseColor("#94A3B8"));
+        edtUsuario.setTextColor(Color.parseColor("#F4F4F5"));
+        edtUsuario.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+        edtUsuario.setTransformationMethod(HideReturnsTransformationMethod.getInstance());
+        edtUsuario.setBackground(fondoRedondeado("#27272A", 6));
+        edtUsuario.setPadding(dp(10), dp(6), dp(10), dp(6));
+        if (esEdicion) edtUsuario.setText(sesionEdit.usuario);
+
+        final Button btnOjoUsr = crearBotonConIcono("EYE", "", "#52525B", "#F4F4F5", 12, null);
+        btnOjoUsr.setOnClickListener(v -> toggleCampoOjo(edtUsuario, btnOjoUsr));
+
+        filaUsr.addView(edtUsuario, lpEdt);
+        filaUsr.addView(btnOjoUsr, new LinearLayout.LayoutParams(dp(38), dp(38)));
+        layout.addView(filaUsr);
+
+        LinearLayout filaClv = new LinearLayout(this);
+        filaClv.setOrientation(LinearLayout.HORIZONTAL);
+        filaClv.setPadding(0, dp(4), 0, dp(12));
+
+        final EditText edtClave = new EditText(this);
+        edtClave.setHint("Contraseña");
+        edtClave.setHintTextColor(Color.parseColor("#94A3B8"));
+        edtClave.setTextColor(Color.parseColor("#F4F4F5"));
+        edtClave.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        edtClave.setTransformationMethod(PasswordTransformationMethod.getInstance());
+        edtClave.setBackground(fondoRedondeado("#27272A", 6));
+        edtClave.setPadding(dp(10), dp(6), dp(10), dp(6));
+        if (esEdicion) edtClave.setText(sesionEdit.contrasena);
+
+        final Button btnOjoClv = crearBotonConIcono("EYE_OFF", "", "#27272A", "#F4F4F5", 12, null);
+        btnOjoClv.setOnClickListener(v -> toggleCampoOjo(edtClave, btnOjoClv));
+
+        filaClv.addView(edtClave, lpEdt);
+        filaClv.addView(btnOjoClv, new LinearLayout.LayoutParams(dp(38), dp(38)));
+        layout.addView(filaClv);
+
+        builder.setView(layout);
+        final AlertDialog dialog = builder.create();
+
+        Button btnGuardar = crearBotonConIcono("CHECK", "Guardar Cuenta", "#0284C7", "#FFFFFF", 13, () -> {
+            String u = edtUsuario.getText().toString().trim();
+            String c = edtCedula.getText().toString().trim();
+            String p = edtClave.getText().toString().trim();
+            String t = tipoSeleccionado[0];
+            if (u.isEmpty() || c.isEmpty() || p.isEmpty()) {
+                Toast.makeText(this, "Completa Cédula, Usuario y Contraseña", Toast.LENGTH_SHORT).show();
+                return;
+            }
+
+            if (esEdicion) {
+                sesionEdit.tipoDoc = t;
+                sesionEdit.cedula = c;
+                sesionEdit.usuario = u;
+                sesionEdit.contrasena = p;
+                guardarArrayCuentasPrefs();
+                actualizarVisualTarjeta(sesionEdit);
+                dialog.dismiss();
+            } else {
+                int slotLibre = -1;
+                for (int i = 0; i < MAX_CUENTAS; i++) {
+                    if (!sesiones[i].registrada) {
+                        slotLibre = i;
+                        break;
+                    }
+                }
+                if (slotLibre == -1) {
+                    Toast.makeText(this, "Máximo de cuentas alcanzado", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                SesionBot nueva = sesiones[slotLibre];
+                nueva.registrada = true;
+                nueva.tipoDoc = t;
+                nueva.cedula = c;
+                nueva.usuario = u;
+                nueva.contrasena = p;
+                nueva.compraCompletada = false;
+                nueva.ultimoPasoTexto = "Sin actividad todavía";
+                guardarArrayCuentasPrefs();
+                reconstruirListaTarjetas();
+                dialog.dismiss();
+            }
+        });
+        layout.addView(btnGuardar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(40)));
+
+        if (esEdicion) {
+            Button btnBorrar = crearBotonConIcono("CLOSE", "Eliminar esta cuenta", "#450A0A", "#FCA5A5", 12, () -> {
+                detenerSesionIndividual(sesionEdit, false);
+                sesionEdit.registrada = false;
+                sesionEdit.usuario = "";
+                sesionEdit.cedula = "";
+                sesionEdit.contrasena = "";
+                sesionEdit.txtConsolaCard.setText("");
+                guardarArrayCuentasPrefs();
+                reconstruirListaTarjetas();
+                dialog.dismiss();
+            });
+            LinearLayout.LayoutParams lpDel = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38));
+            lpDel.setMargins(0, dp(8), 0, 0);
+            layout.addView(btnBorrar, lpDel);
+        }
+
+        dialog.show();
     }
 
     private TextView crearTexto(String texto, String colorHex, float sizeSp, boolean bold) {
@@ -1276,400 +1642,6 @@ public class MainActivity extends Activity {
         return b;
     }
 
-    // =========================================================================================
-    // GESTIÓN DE CUENTAS ("X Cuentas Registradas")
-    // =========================================================================================
-    private void togglePrivacidadUsuario() {
-        usuarioOculto = !usuarioOculto;
-        actualizarTextoBotonUsuario();
-        actualizarEstilosIndicadoresNeon();
-    }
-
-    private void actualizarTextoBotonUsuario() {
-        ArrayList<SesionBot> activas = obtenerSesionesActivas();
-        int n = activas.size();
-        String textoCont;
-        if (n == 0) {
-            textoCont = "0 Cuentas Registradas";
-        } else if (n == 1) {
-            textoCont = "1 Cuenta Registrada";
-        } else {
-            textoCont = n + " Cuentas Registradas";
-        }
-        ponerIconoYTexto(btnCuenta, crearIconoVectorial("USERS", "#38BDF8", 15), textoCont);
-        ponerIconoYTexto(btnOjoPrivacidad, crearIconoVectorial(usuarioOculto ? "EYE_OFF" : "EYE", "#F4F4F5", 15), "");
-    }
-
-    private JSONObject obtenerCuentasGuardadas() {
-        try { return new JSONObject(prefs.getString("cuentas_json", "{}")); }
-        catch (Exception e) { return new JSONObject(); }
-    }
-
-    private ArrayList<String> obtenerNombresCuentasActivasPrefs() {
-        ArrayList<String> res = new ArrayList<>();
-        try {
-            JSONArray arr = new JSONArray(prefs.getString("cuentas_activas_arr", "[]"));
-            for (int i = 0; i < arr.length() && res.size() < MAX_CUENTAS_SIMULTANEAS; i++) {
-                String u = arr.optString(i, "");
-                if (!u.isEmpty() && !res.contains(u)) res.add(u);
-            }
-        } catch (Exception ignored) {}
-        if (res.isEmpty()) {
-            String ultima = prefs.getString("ultima_cuenta", "");
-            if (!ultima.isEmpty()) res.add(ultima);
-        }
-        return res;
-    }
-
-    private void guardarNombresCuentasActivasPrefs(ArrayList<String> activas) {
-        JSONArray arr = new JSONArray();
-        for (int i = 0; i < activas.size() && i < MAX_CUENTAS_SIMULTANEAS; i++) {
-            arr.put(activas.get(i));
-        }
-        prefs.edit().putString("cuentas_activas_arr", arr.toString()).apply();
-    }
-
-    private void cargarCuentasActivasGuardadas() {
-        JSONObject todas = obtenerCuentasGuardadas();
-        ArrayList<String> nombresActivos = obtenerNombresCuentasActivasPrefs();
-
-        for (int i = 0; i < MAX_CUENTAS_SIMULTANEAS; i++) {
-            sesiones[i].activa = false;
-            sesiones[i].tipoDoc = "V";
-            sesiones[i].cedula = "";
-            sesiones[i].usuario = "";
-            sesiones[i].contrasena = "";
-        }
-
-        int slot = 0;
-        for (String nombre : nombresActivos) {
-            if (slot >= MAX_CUENTAS_SIMULTANEAS) break;
-            if (todas.has(nombre)) {
-                JSONObject d = todas.optJSONObject(nombre);
-                if (d != null) {
-                    sesiones[slot].activa = true;
-                    sesiones[slot].tipoDoc = d.optString("tipo_doc", "V");
-                    sesiones[slot].cedula = d.optString("cedula", "");
-                    sesiones[slot].usuario = d.optString("usuario", "");
-                    sesiones[slot].contrasena = d.optString("clave", "");
-                    slot++;
-                }
-            }
-        }
-
-        actualizarTextoBotonUsuario();
-        reorganizarConsolasYPestanas();
-    }
-
-    private void toggleCampoOjo(EditText edt, Button btn) {
-        boolean estaOculto = (edt.getTransformationMethod() instanceof PasswordTransformationMethod);
-        if (estaOculto) {
-            edt.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
-            edt.setTransformationMethod(HideReturnsTransformationMethod.getInstance());
-            btn.setBackground(fondoRedondeado("#52525B", 6));
-            ponerIconoYTexto(btn, crearIconoVectorial("EYE", "#F4F4F5", 14), "");
-        } else {
-            edt.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-            edt.setTransformationMethod(PasswordTransformationMethod.getInstance());
-            btn.setBackground(fondoRedondeado("#27272A", 6));
-            ponerIconoYTexto(btn, crearIconoVectorial("EYE_OFF", "#F4F4F5", 14), "");
-        }
-        edt.setSelection(edt.getText().length());
-    }
-
-    private void mostrarPopupCuenta() {
-        AlertDialog.Builder builder = new AlertDialog.Builder(this);
-        ScrollView scrollPopup = new ScrollView(this);
-        scrollPopup.setBackgroundColor(Color.parseColor("#18181B"));
-
-        LinearLayout layout = new LinearLayout(this);
-        layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(dp(16), dp(14), dp(16), dp(14));
-        layout.setBackgroundColor(Color.parseColor("#18181B"));
-        scrollPopup.addView(layout);
-
-        TextView titulo = crearTexto("Gestión de Cuentas (Hasta 4 Simultáneas)", "#F4F4F5", 15, true);
-        titulo.setPadding(0, 0, 0, dp(8));
-        layout.addView(titulo);
-
-        final JSONObject cuentasObj = obtenerCuentasGuardadas();
-        final ArrayList<String> activasSeleccionadas = obtenerNombresCuentasActivasPrefs();
-
-        TextView subActivas = crearTexto("1. Marca las cuentas registradas a usar (Máx. 4):", "#38BDF8", 11, true);
-        subActivas.setPadding(0, 0, 0, dp(4));
-        layout.addView(subActivas);
-
-        final LinearLayout contenedorChecks = new LinearLayout(this);
-        contenedorChecks.setOrientation(LinearLayout.VERTICAL);
-        contenedorChecks.setPadding(dp(8), dp(6), dp(8), dp(6));
-        contenedorChecks.setBackground(fondoRedondeado("#27272A", 8));
-        layout.addView(contenedorChecks);
-
-        final Runnable[] refrescarListaCheckboxes = new Runnable[1];
-        refrescarListaCheckboxes[0] = () -> {
-            contenedorChecks.removeAllViews();
-            Iterator<String> kIt = cuentasObj.keys();
-            boolean hayAlguna = false;
-            while (kIt.hasNext()) {
-                hayAlguna = true;
-                final String usrKey = kIt.next();
-                JSONObject objC = cuentasObj.optJSONObject(usrKey);
-                String cedInfo = objC != null ? (objC.optString("tipo_doc", "V") + "-" + objC.optString("cedula", "")) : "";
-
-                CheckBox cb = new CheckBox(this);
-                cb.setText(usrKey + "  (" + cedInfo + ")");
-                cb.setTextColor(Color.parseColor("#F4F4F5"));
-                cb.setTextSize(12);
-                cb.setChecked(activasSeleccionadas.contains(usrKey));
-                cb.setOnCheckedChangeListener((buttonView, isChecked) -> {
-                    if (isChecked) {
-                        if (activasSeleccionadas.size() >= MAX_CUENTAS_SIMULTANEAS && !activasSeleccionadas.contains(usrKey)) {
-                            buttonView.setChecked(false);
-                            Toast.makeText(this, "Máximo 4 cuentas simultáneas permitidas", Toast.LENGTH_SHORT).show();
-                        } else if (!activasSeleccionadas.contains(usrKey)) {
-                            activasSeleccionadas.add(usrKey);
-                        }
-                    } else {
-                        activasSeleccionadas.remove(usrKey);
-                    }
-                });
-                contenedorChecks.addView(cb);
-            }
-            if (!hayAlguna) {
-                TextView tvVacio = crearTexto("No hay cuentas guardadas todavía. Agrega una abajo.", "#A1A1AA", 11, false);
-                contenedorChecks.addView(tvVacio);
-            }
-        };
-        refrescarListaCheckboxes[0].run();
-
-        TextView subEditor = crearTexto("2. Agregar Cuenta o Editar Existente:", "#38BDF8", 11, true);
-        subEditor.setPadding(0, dp(10), 0, dp(4));
-        layout.addView(subEditor);
-
-        final ArrayList<String> listaNombres = new ArrayList<>();
-        final Runnable actualizarSelectorNombres = () -> {
-            listaNombres.clear();
-            listaNombres.add("Agregar Cuenta");
-            Iterator<String> keys = cuentasObj.keys();
-            while (keys.hasNext()) { listaNombres.add(keys.next()); }
-        };
-        actualizarSelectorNombres.run();
-
-        final String[] cuentaSeleccionada = {"Agregar Cuenta"};
-        final String[] tipoSeleccionado = {"V"};
-
-        LinearLayout filaSel = new LinearLayout(this);
-        filaSel.setOrientation(LinearLayout.HORIZONTAL);
-
-        final Button btnSelectCuenta = crearBoton(cuentaSeleccionada[0] + "  ▼", "#27272A", "#F4F4F5", 12, null);
-        LinearLayout.LayoutParams lpSel = new LinearLayout.LayoutParams(0, dp(38), 1f);
-        lpSel.setMargins(0, 0, dp(6), 0);
-        filaSel.addView(btnSelectCuenta, lpSel);
-
-        LinearLayout filaCed = new LinearLayout(this);
-        filaCed.setOrientation(LinearLayout.HORIZONTAL);
-        filaCed.setPadding(0, dp(8), 0, dp(4));
-
-        final String[] tiposDocArray = {"V", "E", "J", "P", "G", "C", "R"};
-        final Button btnTipoDoc = crearBoton(tipoSeleccionado[0] + " ▼", "#27272A", "#F4F4F5", 12, null);
-        btnTipoDoc.setOnClickListener(v -> {
-            new AlertDialog.Builder(this)
-                    .setTitle("Tipo de Documento")
-                    .setItems(tiposDocArray, (d, which) -> {
-                        tipoSeleccionado[0] = tiposDocArray[which];
-                        btnTipoDoc.setText(tipoSeleccionado[0] + " ▼");
-                    }).show();
-        });
-
-        final EditText edtCedula = new EditText(this);
-        edtCedula.setHint("Cédula");
-        edtCedula.setHintTextColor(Color.parseColor("#94A3B8"));
-        edtCedula.setTextColor(Color.parseColor("#F4F4F5"));
-        edtCedula.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
-        edtCedula.setTransformationMethod(HideReturnsTransformationMethod.getInstance());
-        edtCedula.setBackground(fondoRedondeado("#27272A", 6));
-        edtCedula.setPadding(dp(10), dp(6), dp(10), dp(6));
-
-        final Button btnOjoCed = crearBotonConIcono("EYE", "", "#52525B", "#F4F4F5", 12, null);
-        btnOjoCed.setOnClickListener(v -> toggleCampoOjo(edtCedula, btnOjoCed));
-
-        LinearLayout.LayoutParams lpTipo = new LinearLayout.LayoutParams(dp(58), dp(38));
-        lpTipo.setMargins(0, 0, dp(4), 0);
-        LinearLayout.LayoutParams lpEdt = new LinearLayout.LayoutParams(0, dp(38), 1f);
-        lpEdt.setMargins(0, 0, dp(4), 0);
-        filaCed.addView(btnTipoDoc, lpTipo);
-        filaCed.addView(edtCedula, lpEdt);
-        filaCed.addView(btnOjoCed, new LinearLayout.LayoutParams(dp(38), dp(38)));
-
-        LinearLayout filaUsr = new LinearLayout(this);
-        filaUsr.setOrientation(LinearLayout.HORIZONTAL);
-        filaUsr.setPadding(0, dp(4), 0, dp(4));
-
-        final EditText edtUsuario = new EditText(this);
-        edtUsuario.setHint("Usuario");
-        edtUsuario.setHintTextColor(Color.parseColor("#94A3B8"));
-        edtUsuario.setTextColor(Color.parseColor("#F4F4F5"));
-        edtUsuario.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
-        edtUsuario.setTransformationMethod(HideReturnsTransformationMethod.getInstance());
-        edtUsuario.setBackground(fondoRedondeado("#27272A", 6));
-        edtUsuario.setPadding(dp(10), dp(6), dp(10), dp(6));
-
-        final Button btnOjoUsr = crearBotonConIcono("EYE", "", "#52525B", "#F4F4F5", 12, null);
-        btnOjoUsr.setOnClickListener(v -> toggleCampoOjo(edtUsuario, btnOjoUsr));
-
-        filaUsr.addView(edtUsuario, lpEdt);
-        filaUsr.addView(btnOjoUsr, new LinearLayout.LayoutParams(dp(38), dp(38)));
-
-        LinearLayout filaClv = new LinearLayout(this);
-        filaClv.setOrientation(LinearLayout.HORIZONTAL);
-        filaClv.setPadding(0, dp(4), 0, dp(8));
-
-        final EditText edtClave = new EditText(this);
-        edtClave.setHint("Contraseña");
-        edtClave.setHintTextColor(Color.parseColor("#94A3B8"));
-        edtClave.setTextColor(Color.parseColor("#F4F4F5"));
-        edtClave.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        edtClave.setTransformationMethod(PasswordTransformationMethod.getInstance());
-        edtClave.setBackground(fondoRedondeado("#27272A", 6));
-        edtClave.setPadding(dp(10), dp(6), dp(10), dp(6));
-
-        final Button btnOjoClv = crearBotonConIcono("EYE_OFF", "", "#27272A", "#F4F4F5", 12, null);
-        btnOjoClv.setOnClickListener(v -> toggleCampoOjo(edtClave, btnOjoClv));
-
-        filaClv.addView(edtClave, lpEdt);
-        filaClv.addView(btnOjoClv, new LinearLayout.LayoutParams(dp(38), dp(38)));
-
-        btnSelectCuenta.setOnClickListener(v -> {
-            actualizarSelectorNombres.run();
-            String[] items = listaNombres.toArray(new String[0]);
-            new AlertDialog.Builder(this)
-                    .setTitle("Seleccionar Cuenta")
-                    .setItems(items, (d, which) -> {
-                        String sel = items[which];
-                        cuentaSeleccionada[0] = sel;
-                        btnSelectCuenta.setText(sel + "  ▼");
-                        if (sel.equals("Agregar Cuenta")) {
-                            edtCedula.setText(""); edtUsuario.setText(""); edtClave.setText("");
-                        } else {
-                            JSONObject dat = cuentasObj.optJSONObject(sel);
-                            if (dat != null) {
-                                tipoSeleccionado[0] = dat.optString("tipo_doc", "V");
-                                btnTipoDoc.setText(tipoSeleccionado[0] + " ▼");
-                                edtCedula.setText(dat.optString("cedula", ""));
-                                edtUsuario.setText(dat.optString("usuario", ""));
-                                edtClave.setText(dat.optString("clave", ""));
-                            }
-                        }
-                    }).show();
-        });
-
-        builder.setView(scrollPopup);
-        final AlertDialog dialog = builder.create();
-
-        Button btnEliminar = crearBotonConIcono("CLOSE", "", "#27272A", "#A1A1AA", 13, () -> {
-            String sel = cuentaSeleccionada[0];
-            if (!sel.equals("Agregar Cuenta") && cuentasObj.has(sel)) {
-                cuentasObj.remove(sel);
-                activasSeleccionadas.remove(sel);
-                prefs.edit().putString("cuentas_json", cuentasObj.toString()).apply();
-                guardarNombresCuentasActivasPrefs(activasSeleccionadas);
-                cuentaSeleccionada[0] = "Agregar Cuenta";
-                btnSelectCuenta.setText("Agregar Cuenta  ▼");
-                edtCedula.setText(""); edtUsuario.setText(""); edtClave.setText("");
-                refrescarListaCheckboxes[0].run();
-                cargarCuentasActivasGuardadas();
-                log("[SISTEMA] Cuenta eliminada: " + sel);
-            }
-        });
-        filaSel.addView(btnEliminar, new LinearLayout.LayoutParams(dp(42), dp(38)));
-
-        layout.addView(filaSel);
-        layout.addView(filaCed);
-        layout.addView(filaUsr);
-        layout.addView(filaClv);
-
-        Button btnGuardarCuenta = crearBotonConIcono("PLUS", "Guardar Cuenta en la Lista", "#3F3F46", "#FFFFFF", 12, () -> {
-            String u = edtUsuario.getText().toString().trim();
-            String c = edtCedula.getText().toString().trim();
-            String p = edtClave.getText().toString().trim();
-            String t = tipoSeleccionado[0];
-            if (u.isEmpty() || c.isEmpty() || p.isEmpty()) {
-                Toast.makeText(this, "Completa Cédula, Usuario y Contraseña", Toast.LENGTH_SHORT).show();
-                return;
-            }
-            try {
-                JSONObject nuevo = new JSONObject();
-                nuevo.put("tipo_doc", t);
-                nuevo.put("cedula", c);
-                nuevo.put("usuario", u);
-                nuevo.put("clave", p);
-                cuentasObj.put(u, nuevo);
-                if (!activasSeleccionadas.contains(u) && activasSeleccionadas.size() < MAX_CUENTAS_SIMULTANEAS) {
-                    activasSeleccionadas.add(u);
-                }
-                prefs.edit().putString("cuentas_json", cuentasObj.toString()).putString("ultima_cuenta", u).apply();
-                guardarNombresCuentasActivasPrefs(activasSeleccionadas);
-                edtCedula.setText(""); edtUsuario.setText(""); edtClave.setText("");
-                cuentaSeleccionada[0] = "Agregar Cuenta";
-                btnSelectCuenta.setText("Agregar Cuenta  ▼");
-                refrescarListaCheckboxes[0].run();
-                Toast.makeText(this, "Cuenta guardada: " + u, Toast.LENGTH_SHORT).show();
-            } catch (Exception ignored) {}
-        });
-        LinearLayout.LayoutParams lpBtnAdd = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38));
-        lpBtnAdd.setMargins(0, 0, 0, dp(8));
-        layout.addView(btnGuardarCuenta, lpBtnAdd);
-
-        Button btnAplicar = crearBotonConIcono("CHECK", "Aplicar Cuentas Seleccionadas", "#0284C7", "#FFFFFF", 13, () -> {
-            String uPend = edtUsuario.getText().toString().trim();
-            String cPend = edtCedula.getText().toString().trim();
-            String pPend = edtClave.getText().toString().trim();
-            if (!uPend.isEmpty() && !cPend.isEmpty() && !pPend.isEmpty()) {
-                try {
-                    JSONObject nuevo = new JSONObject();
-                    nuevo.put("tipo_doc", tipoSeleccionado[0]);
-                    nuevo.put("cedula", cPend);
-                    nuevo.put("usuario", uPend);
-                    nuevo.put("clave", pPend);
-                    cuentasObj.put(uPend, nuevo);
-                    if (!activasSeleccionadas.contains(uPend) && activasSeleccionadas.size() < MAX_CUENTAS_SIMULTANEAS) {
-                        activasSeleccionadas.add(uPend);
-                    }
-                    prefs.edit().putString("cuentas_json", cuentasObj.toString()).putString("ultima_cuenta", uPend).apply();
-                } catch (Exception ignored) {}
-            }
-            guardarNombresCuentasActivasPrefs(activasSeleccionadas);
-            cargarCuentasActivasGuardadas();
-            log("[SISTEMA] Cuentas registradas listas: " + activasSeleccionadas.size());
-            dialog.dismiss();
-        });
-        layout.addView(btnAplicar, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42)));
-        dialog.show();
-    }
-
-    private void log(String msg) {
-        String hora = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
-        final String limpio = msg.replaceAll("[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]|[\\u2600-\\u27BF]", "").trim();
-        runOnUiThread(() -> {
-            txtConsolaGeneral.append(hora + "  " + limpio + "\n");
-            scrollConsolaGeneral.post(() -> scrollConsolaGeneral.fullScroll(View.FOCUS_DOWN));
-        });
-    }
-
-    private void logCuenta(final SesionBot s, String msg) {
-        final String hora = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
-        final String limpio = msg.replaceAll("[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]|[\\u2600-\\u27BF]", "").trim();
-        runOnUiThread(() -> {
-            txtConsolaGeneral.append(hora + "  [" + s.nombreMostrado() + "] " + limpio + "\n");
-            scrollConsolaGeneral.post(() -> scrollConsolaGeneral.fullScroll(View.FOCUS_DOWN));
-
-            if (s.txtConsolaIndividual != null && s.scrollConsolaIndividual != null) {
-                s.txtConsolaIndividual.append(hora + "  " + limpio + "\n");
-                s.scrollConsolaIndividual.post(() -> s.scrollConsolaIndividual.fullScroll(View.FOCUS_DOWN));
-            }
-        });
-    }
-
     private void sonarAlarma(boolean exito) {
         new Thread(() -> {
             try {
@@ -1689,100 +1661,66 @@ public class MainActivity extends Activity {
         s.tiempoEstadoMs = System.currentTimeMillis();
         s.accionEnCurso = false;
         s.peticionRedEnCurso = false;
-
-        String txtEst = nombreCortoEstado(nuevoEstado);
-        String colHex;
-        if (nuevoEstado == EstadoBot.DETENIDO) {
-            colHex = "#9CA3AF";
-        } else if (nuevoEstado == EstadoBot.VIGILANDO_HTML_INT || nuevoEstado == EstadoBot.COMPRANDO_XHR_STORE) {
-            colHex = "#4ADE80";
-        } else {
-            colHex = "#38BDF8";
-        }
-
-        if (s.lblPasoActualInd != null) {
-            s.lblPasoActualInd.setText(txtEst);
-            s.lblPasoActualInd.setTextColor(Color.parseColor(colHex));
-        }
-
-        actualizarEstilosIndicadoresNeon();
-        actualizarBotonesMandoSegunSeleccion();
+        actualizarVisualTarjeta(s);
+        actualizarResumenYBotonesGlobales();
     }
 
-    private String nombreCortoEstado(EstadoBot st) {
-        switch (st) {
+    private String nombreCortoEstado(SesionBot s) {
+        if (s.compraCompletada) return "COMPLETADA";
+        switch (s.estadoActual) {
             case DETENIDO: return "DETENIDO";
-            case CONECTANDO_SERVIDOR: return "PASO 1/4: CONECTANDO /lg";
-            case ENVIANDO_USUARIO_CHK: return "PASO 2/4: USUARIO /lg/chk";
+            case CONECTANDO_SERVIDOR:
+            case ENVIANDO_USUARIO_CHK: return "INICIANDO";
             case ESPERANDO_CLAVE_CHK:
-            case ENVIANDO_CLAVE_EXE: return "PASO 3/4: CLAVE /lg/exe";
-            case VERIFICANDO_SESION: return "PASO 4/4: ABRIENDO SESION";
-            case VIGILANDO_HTML_INT: return "VIGILANDO HTML (/int)";
-            case COMPRANDO_XHR_STORE: return "COMPRANDO (/int/store)";
-            case CERRANDO_SESION: return "CERRANDO SESION";
-            case RECONECTANDO_SOCKET: return "RECONECTANDO RED";
-            default: return "";
+            case ENVIANDO_CLAVE_EXE: return "CONTRASEÑA";
+            case VERIFICANDO_SESION: return "POSICIÓN GLOBAL";
+            case ENTRANDO_INTERVENCION: return "INTERVENCIÓN";
+            case VIGILANDO_INTERVENCION: return "VIGILANDO";
+            case COMPRANDO_ORDEN: return "COMPRANDO";
+            case CERRANDO_SESION:
+            case RECONECTANDO_RED: return "CERRANDO SESIÓN";
+            default: return "ACTIVO";
         }
     }
 
     // =========================================================================================
-    // ENCENDIDO Y DETENCIÓN INDIVIDUAL O GLOBAL
+    // ENCENDIDO Y DETENCIÓN INDIVIDUAL Y GLOBAL
     // =========================================================================================
-    private void accionBotonIniciar() {
-        ArrayList<SesionBot> activas = obtenerSesionesActivas();
-        if (activas.isEmpty()) {
-            log("[ERROR] Registra y selecciona al menos 1 cuenta antes de iniciar.");
-            mostrarPopupCuenta();
+    private void iniciarTodasLasCuentas() {
+        ArrayList<SesionBot> reg = obtenerSesionesRegistradas();
+        if (reg.isEmpty()) {
+            mostrarPopupEditorCuenta(-1);
             return;
         }
-
-        if (slotEnfocado >= 0 && slotEnfocado < MAX_CUENTAS_SIMULTANEAS && sesiones[slotEnfocado].activa) {
-            SesionBot s = sesiones[slotEnfocado];
-            iniciarSesionIndividual(s);
-            logCuenta(s, "[INICIO] Motor Headless iniciado para esta cuenta.");
-        } else {
-            int iniciadas = 0;
-            for (SesionBot s : activas) {
-                if (!s.estaCorriendo()) {
-                    iniciarSesionIndividual(s);
-                    iniciadas++;
-                }
+        yaAvisoApertura = false;
+        for (SesionBot s : reg) {
+            if (!s.estaCorriendo()) {
+                iniciarSesionIndividual(s);
             }
-            log("[INICIO] Motor Headless iniciado en " + iniciadas + " cuenta(s) simultanea(s).");
         }
-        actualizarEstilosIndicadoresNeon();
-        actualizarBotonesMandoSegunSeleccion();
+    }
+
+    private void detenerTodasLasCuentas() {
+        for (SesionBot s : obtenerSesionesRegistradas()) {
+            if (s.estaCorriendo()) {
+                detenerSesionIndividual(s, true);
+            }
+        }
+        lblReloginVal.setText(minutosRelogin + " min (--:--)");
     }
 
     private void iniciarSesionIndividual(SesionBot s) {
         s.corriendo = true;
+        s.compraCompletada = false;
         s.vueltaActual = 0;
         s.intentoCreate = 0;
         s.intentoLogout = 0;
         s.tiempoInicioSesionMs = 0;
-        s.compraCompletada = false;
         cambiarEstado(s, EstadoBot.CONECTANDO_SERVIDOR);
-        logCuenta(s, "[PASO 1/4] Conectando con servidor Banco del Tesoro (/lg)...");
+        registrarPasoCuenta(s, "Iniciando sesión (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
     }
 
-    private void accionBotonDetener() {
-        ArrayList<SesionBot> activas = obtenerSesionesActivas();
-        if (slotEnfocado >= 0 && slotEnfocado < MAX_CUENTAS_SIMULTANEAS && sesiones[slotEnfocado].activa) {
-            SesionBot s = sesiones[slotEnfocado];
-            detenerSesionIndividual(s);
-            logCuenta(s, "[STOP] Cuenta detenida individualmente.");
-        } else {
-            for (SesionBot s : activas) {
-                detenerSesionIndividual(s);
-            }
-            lblReloginVal.setText(minutosRelogin + " min (--:--)");
-            log("[STOP] Todas las cuentas han sido detenidas.");
-        }
-        actualizarEstilosIndicadoresNeon();
-        actualizarBotonesMandoSegunSeleccion();
-    }
-
-    private void detenerSesionIndividual(SesionBot s) {
+    private void detenerSesionIndividual(SesionBot s, boolean registrarEnLog) {
         s.corriendo = false;
         s.tiempoInicioSesionMs = 0;
         s.cargandoRed = false;
@@ -1790,7 +1728,94 @@ public class MainActivity extends Activity {
         if (s.webViewOculto != null) {
             s.webViewOculto.stopLoading();
         }
+        if (registrarEnLog) {
+            registrarPasoCuenta(s, "Cuenta detenida");
+        }
         cambiarEstado(s, EstadoBot.DETENIDO);
+    }
+
+    // =========================================================================================
+    // CONTROL DE RED Y RELOJ PRINCIPAL
+    // =========================================================================================
+    @SuppressWarnings("deprecation")
+    private boolean hayInternetDisponible() {
+        try {
+            ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return true;
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                Network net = cm.getActiveNetwork();
+                if (net == null) return false;
+                NetworkCapabilities caps = cm.getNetworkCapabilities(net);
+                return caps != null && (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                        || caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+                        || caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET));
+            } else {
+                NetworkInfo ni = cm.getActiveNetworkInfo();
+                return ni != null && ni.isConnected();
+            }
+        } catch (Exception ignored) {
+            return true;
+        }
+    }
+
+    private void registrarMonitorPasivoRed() {
+        try {
+            ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return;
+            networkCallback = new ConnectivityManager.NetworkCallback() {
+                @Override
+                public void onLost(Network network) {
+                    runOnUiThread(() -> {
+                        for (int i = 0; i < MAX_CUENTAS; i++) {
+                            if (sesiones[i].webViewOculto != null) {
+                                sesiones[i].webViewOculto.stopLoading();
+                            }
+                        }
+                        avisoSinInternetMostrado = true;
+                    });
+                }
+
+                @Override
+                public void onAvailable(Network network) {
+                    runOnUiThread(() -> {
+                        if (avisoSinInternetMostrado) {
+                            avisoSinInternetMostrado = false;
+                            long ahora = System.currentTimeMillis();
+                            for (int i = 0; i < MAX_CUENTAS; i++) {
+                                sesiones[i].tiempoEstadoMs = ahora;
+                                sesiones[i].accionEnCurso = false;
+                                sesiones[i].peticionRedEnCurso = false;
+                            }
+                        }
+                    });
+                }
+            };
+            cm.registerDefaultNetworkCallback(networkCallback);
+        } catch (Exception ignored) {}
+    }
+
+    private void reiniciarConexionIndividual(final SesionBot s) {
+        if (s == null || s.microCortePropio) return;
+        s.microCortePropio = true;
+        s.peticionRedEnCurso = false;
+
+        final WebView wv = s.webViewOculto;
+        if (wv != null) {
+            try {
+                wv.stopLoading();
+                wv.getSettings().setBlockNetworkLoads(true);
+                evaluarJS(s, "if(window.stop){try{window.stop();}catch(e){}}", null);
+            } catch (Exception ignored) {}
+        }
+
+        handler.postDelayed(() -> {
+            if (wv != null) {
+                try {
+                    wv.getSettings().setBlockNetworkLoads(false);
+                } catch (Exception ignored) {}
+            }
+            s.microCortePropio = false;
+        }, 1200);
     }
 
     private void evaluarJS(SesionBot s, String script, ValueCallback<String> callback) {
@@ -1803,14 +1828,16 @@ public class MainActivity extends Activity {
             @Override
             public void run() {
                 pulsoNeon = !pulsoNeon;
-                actualizarEstilosIndicadoresNeon();
+                ArrayList<SesionBot> reg = obtenerSesionesRegistradas();
+                for (SesionBot s : reg) {
+                    actualizarVisualTarjeta(s);
+                }
+                actualizarResumenYBotonesGlobales();
 
-                ArrayList<SesionBot> activas = obtenerSesionesActivas();
                 boolean internetOk = hayInternetDisponible();
-
-                if (hayAlgunaCuentaCorriendo()) {
-                    verificarTiemposDeSesionIndependientes(activas);
-                    for (SesionBot s : activas) {
+                if (contarCuentasCorriendo() > 0) {
+                    verificarTiemposDeSesionIndependientes(reg);
+                    for (SesionBot s : reg) {
                         if (s.estaCorriendo() && internetOk && !s.microCortePropio) {
                             ejecutarPasoMotorOculto(s);
                         } else if (!internetOk) {
@@ -1825,22 +1852,21 @@ public class MainActivity extends Activity {
         }, 550);
     }
 
-    private void verificarTiemposDeSesionIndependientes(ArrayList<SesionBot> activas) {
+    private void verificarTiemposDeSesionIndependientes(ArrayList<SesionBot> reg) {
         long ahora = System.currentTimeMillis();
         long totalSeg = minutosRelogin * 60L;
         long menorRestante = -1;
 
-        for (SesionBot s : activas) {
+        for (SesionBot s : reg) {
             if (!s.estaCorriendo()) continue;
 
-            if (s.tiempoInicioSesionMs > 0 && s.estadoActual == EstadoBot.VIGILANDO_HTML_INT) {
+            if (s.tiempoInicioSesionMs > 0 && s.estadoActual == EstadoBot.VIGILANDO_INTERVENCION) {
                 long transcurridoSeg = (ahora - s.tiempoInicioSesionMs) / 1000;
                 long restante = Math.max(0, totalSeg - transcurridoSeg);
                 if (menorRestante == -1 || restante < menorRestante) {
                     menorRestante = restante;
                 }
                 if (transcurridoSeg >= totalSeg) {
-                    logCuenta(s, "[SESION] Tiempo de sesion cumplido. Ejecutando Logout en segundo plano...");
                     s.intentoLogout = 0;
                     cambiarEstado(s, EstadoBot.CERRANDO_SESION);
                 }
@@ -1856,6 +1882,9 @@ public class MainActivity extends Activity {
         }
     }
 
+    // =========================================================================================
+    // MOTOR HEADLESS CON MENSAJES DE CONSOLA LIMPIOS Y DIRECTOS
+    // =========================================================================================
     private void ejecutarPasoMotorOculto(final SesionBot sesion) {
         if (sesion == null || sesion.webViewOculto == null) return;
         final long ahora = System.currentTimeMillis();
@@ -1925,25 +1954,22 @@ public class MainActivity extends Activity {
             case CONECTANDO_SERVIDOR:
                 if (paginaCompleta && sesionAdentro) {
                     s.tiempoInicioSesionMs = ahora;
-                    logCuenta(s, "[SESION OK] Sesion activa en memoria. Iniciando lectura directa de HTML (/int)...");
-                    cambiarEstado(s, EstadoBot.VIGILANDO_HTML_INT);
-                    ejecutarVigilanciaDirectaHtml(s);
+                    registrarPasoCuenta(s, "Sesión iniciada - Posición Global");
+                    cambiarEstado(s, EstadoBot.ENTRANDO_INTERVENCION);
                     return;
                 }
                 if (paginaCompleta && hasPass) {
-                    logCuenta(s, "[PASO 3/4] Servidor solicito clave (/lg/chk OK). Preparando envio a /lg/exe...");
                     cambiarEstado(s, EstadoBot.ENVIANDO_CLAVE_EXE);
                     return;
                 }
                 if (paginaCompleta && hasDoc) {
-                    if (ahora - s.tiempoEstadoMs >= 1200) {
+                    if (ahora - s.tiempoEstadoMs >= 1000) {
                         cambiarEstado(s, EstadoBot.ENVIANDO_USUARIO_CHK);
                     }
                     return;
                 }
-                if (ahora - s.tiempoEstadoMs > 20000) {
+                if (ahora - s.tiempoEstadoMs > 18000) {
                     s.tiempoEstadoMs = ahora;
-                    logCuenta(s, "[REINTENTO] Reconectando con /lg en segundo plano...");
                     s.webViewOculto.stopLoading();
                     s.webViewOculto.loadUrl(URL_LOGIN);
                 }
@@ -1952,7 +1978,6 @@ public class MainActivity extends Activity {
             case ENVIANDO_USUARIO_CHK:
                 if (!s.accionEnCurso) {
                     s.accionEnCurso = true;
-                    logCuenta(s, "[PASO 2/4] Cifrando y enviando Cedula + Usuario a /lg/chk...");
                     String jsChk =
                             "var sel = document.querySelector('#tipodocben');" +
                             "if(sel) { for(var i=0; i<sel.options.length; i++) { if(sel.options[i].text.trim().toUpperCase() === '" + s.tipoDoc + "') { sel.selectedIndex = i; break; } } sel.dispatchEvent(new Event('change', {bubbles:true})); }" +
@@ -1961,7 +1986,7 @@ public class MainActivity extends Activity {
                             "if(d && u) {" +
                             "  setter.call(d, '" + cedSafe + "'); d.dispatchEvent(new Event('input', {bubbles:true})); d.dispatchEvent(new Event('change', {bubbles:true}));" +
                             "  setter.call(u, '" + usrSafe + "'); u.dispatchEvent(new Event('input', {bubbles:true})); u.dispatchEvent(new Event('change', {bubbles:true}));" +
-                            "  setTimeout(function() { var btn = document.querySelector(\"button[type='submit'], .btn-primary\"); if(btn) btn.click(); }, 200);" +
+                            "  setTimeout(function() { var btn = document.querySelector(\"button[type='submit'], .btn-primary\"); if(btn) btn.click(); }, 180);" +
                             "}";
                     evaluarJS(s, jsChk, null);
                     cambiarEstado(s, EstadoBot.ESPERANDO_CLAVE_CHK);
@@ -1970,25 +1995,25 @@ public class MainActivity extends Activity {
 
             case ESPERANDO_CLAVE_CHK:
                 if (paginaCompleta && hasPass) {
-                    logCuenta(s, "[PASO 3/4] Respuesta 200 de /lg/chk recibida. Enviando contrasena a /lg/exe...");
                     cambiarEstado(s, EstadoBot.ENVIANDO_CLAVE_EXE);
                     return;
                 }
                 if (ahora - s.tiempoEstadoMs > 14000 && paginaCompleta && hasDoc) {
-                    logCuenta(s, "[REINTENTO] /lg/chk no avanzo. Reenviando credenciales...");
+                    registrarPasoCuenta(s, "Iniciando sesión (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
                     cambiarEstado(s, EstadoBot.CONECTANDO_SERVIDOR);
                 }
                 break;
 
             case ENVIANDO_CLAVE_EXE:
-                if (ahora - s.tiempoEstadoMs >= 900 && !s.accionEnCurso) {
+                if (ahora - s.tiempoEstadoMs >= 800 && !s.accionEnCurso) {
                     s.accionEnCurso = true;
+                    registrarPasoCuenta(s, "Colocando contraseña");
                     String jsExe =
                             "var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;" +
                             "var p = document.querySelector('#password');" +
                             "if(p) {" +
                             "  setter.call(p, '" + clvSafe + "'); p.dispatchEvent(new Event('input', {bubbles:true})); p.dispatchEvent(new Event('change', {bubbles:true}));" +
-                            "  setTimeout(function() { var btn = document.querySelector(\"button[type='submit'], .btn-primary\"); if(btn) btn.click(); }, 200);" +
+                            "  setTimeout(function() { var btn = document.querySelector(\"button[type='submit'], .btn-primary\"); if(btn) btn.click(); }, 180);" +
                             "}";
                     evaluarJS(s, jsExe, null);
                     cambiarEstado(s, EstadoBot.VERIFICANDO_SESION);
@@ -1998,26 +2023,32 @@ public class MainActivity extends Activity {
             case VERIFICANDO_SESION:
                 if (paginaCompleta && sesionAdentro) {
                     s.tiempoInicioSesionMs = ahora;
-                    logCuenta(s, "[PASO 4/4] Sesion autenticada con exito (JWT + XSRF activos). Vigilando /int por HTML...");
-                    cambiarEstado(s, EstadoBot.VIGILANDO_HTML_INT);
-                    ejecutarVigilanciaDirectaHtml(s);
+                    registrarPasoCuenta(s, "Sesión iniciada - Posición Global");
+                    cambiarEstado(s, EstadoBot.ENTRANDO_INTERVENCION);
                     return;
                 }
                 if (haySesionActivaErr) {
-                    logCuenta(s, "[AVISO] El servidor reporta sesion previa activa. Reintentando en 4s...");
                     s.tiempoEstadoMs = ahora;
+                    registrarPasoCuenta(s, "Iniciando sesión (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
                     cambiarEstado(s, EstadoBot.CONECTANDO_SERVIDOR);
                     return;
                 }
                 if (ahora - s.tiempoEstadoMs > 10000 && paginaCompleta && hasDoc) {
-                    logCuenta(s, "[REINTENTO] El servidor devolvio a /lg. Reintentando login...");
+                    registrarPasoCuenta(s, "Iniciando sesión (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
                     cambiarEstado(s, EstadoBot.CONECTANDO_SERVIDOR);
                 }
                 break;
 
-            case VIGILANDO_HTML_INT:
+            case ENTRANDO_INTERVENCION:
+                registrarPasoCuenta(s, "Entrando a intervención");
+                s.vueltaActual = 0;
+                cambiarEstado(s, EstadoBot.VIGILANDO_INTERVENCION);
+                ejecutarVigilanciaDirectaHtml(s);
+                break;
+
+            case VIGILANDO_INTERVENCION:
                 if (paginaCompleta && hasDoc) {
-                    logCuenta(s, "[SESION] Sesion expirada en servidor. Reconectando automaticamente...");
+                    registrarPasoCuenta(s, "Iniciando sesión (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
                     cambiarEstado(s, EstadoBot.CONECTANDO_SERVIDOR);
                     return;
                 }
@@ -2026,18 +2057,18 @@ public class MainActivity extends Activity {
                 }
                 break;
 
-            case COMPRANDO_XHR_STORE:
-                if (!s.peticionRedEnCurso && (ahora - s.tiempoEstadoMs >= 800)) {
+            case COMPRANDO_ORDEN:
+                if (!s.peticionRedEnCurso && (ahora - s.tiempoEstadoMs >= 750)) {
                     ejecutarCompraDirectaCreateStore(s);
                 }
                 break;
 
             case CERRANDO_SESION:
                 if (paginaCompleta && (hasDoc || hasPass)) {
-                    logCuenta(s, "[SESION] Sesion cerrada limpiamente. Iniciando nuevo ciclo...");
                     if (!hasDoc) {
                         s.webViewOculto.loadUrl(URL_LOGIN);
                     }
+                    registrarPasoCuenta(s, "Iniciando sesión (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
                     cambiarEstado(s, EstadoBot.CONECTANDO_SERVIDOR);
                     return;
                 }
@@ -2045,11 +2076,11 @@ public class MainActivity extends Activity {
                     s.accionEnCurso = true;
                     s.intentoLogout++;
                     s.tiempoEstadoMs = ahora;
-                    logCuenta(s, "[LOGOUT] Ejecutando cierre de sesion en segundo plano (Intento #" + s.intentoLogout + ")...");
+                    registrarPasoCuenta(s, "Cerrando sesión intento " + s.intentoLogout);
                     ejecutarScriptLogout(s);
-                } else if (ahora - s.tiempoEstadoMs > 4800) {
+                } else if (ahora - s.tiempoEstadoMs > 4600) {
                     if (s.intentoLogout % 2 == 0) {
-                        cambiarEstado(s, EstadoBot.RECONECTANDO_SOCKET);
+                        cambiarEstado(s, EstadoBot.RECONECTANDO_RED);
                         reiniciarConexionIndividual(s);
                     } else {
                         s.accionEnCurso = false;
@@ -2057,18 +2088,14 @@ public class MainActivity extends Activity {
                 }
                 break;
 
-            case RECONECTANDO_SOCKET:
-                if (!s.microCortePropio && (ahora - s.tiempoEstadoMs >= 1400)) {
+            case RECONECTANDO_RED:
+                if (!s.microCortePropio && (ahora - s.tiempoEstadoMs >= 1300)) {
                     cambiarEstado(s, EstadoBot.CERRANDO_SESION);
                 }
                 break;
         }
     }
 
-    /**
-     * Lee directamente por red el HTML de https://tesoroenlinea.bt.com.ve/int (3.1 kB)
-     * buscando el enlace "javascript:mod.add(1)" de Ordinaria.
-     */
     private void ejecutarVigilanciaDirectaHtml(final SesionBot s) {
         if (!s.estaCorriendo() || s.peticionRedEnCurso) return;
         s.peticionRedEnCurso = true;
@@ -2079,7 +2106,6 @@ public class MainActivity extends Activity {
                 "window.__vbt_int_res = 'WAIT';" +
                 "(async function(){" +
                 "  try {" +
-                "    var t0 = Date.now();" +
                 "    var meta = document.querySelector('meta[name=\"csrf-token\"]');" +
                 "    var tok = meta ? meta.getAttribute('content') : '';" +
                 "    var r = await fetch('https://tesoroenlinea.bt.com.ve/int', {" +
@@ -2092,12 +2118,11 @@ public class MainActivity extends Activity {
                 "      credentials: 'same-origin'" +
                 "    });" +
                 "    var txt = await r.text();" +
-                "    var ms = Date.now() - t0;" +
                 "    var tieneOrd = (txt.indexOf('mod.add(1)') !== -1 || txt.indexOf('btn-tesoro-green') !== -1 || txt.indexOf('Ordinaria') !== -1);" +
                 "    var esLogin = (txt.indexOf('id=\"documento\"') !== -1 && txt.indexOf('id=\"username\"') !== -1);" +
-                "    window.__vbt_int_res = JSON.stringify({ status: r.status, ord: tieneOrd, login: esLogin, len: txt.length, ms: ms });" +
+                "    window.__vbt_int_res = JSON.stringify({ status: r.status, ord: tieneOrd, login: esLogin });" +
                 "  } catch(e) {" +
-                "    window.__vbt_int_res = JSON.stringify({ status: -1, err: e.message });" +
+                "    window.__vbt_int_res = JSON.stringify({ status: -1 });" +
                 "  }" +
                 "})();";
 
@@ -2106,13 +2131,13 @@ public class MainActivity extends Activity {
     }
 
     private void sondearResultadoInt(final SesionBot s, final int intentoPoll) {
-        if (!s.estaCorriendo() || s.estadoActual != EstadoBot.VIGILANDO_HTML_INT) {
+        if (!s.estaCorriendo() || s.estadoActual != EstadoBot.VIGILANDO_INTERVENCION) {
             s.peticionRedEnCurso = false;
             return;
         }
         handler.postDelayed(() -> {
             evaluarJS(s, "return window.__vbt_int_res || 'WAIT';", raw -> {
-                if (!s.estaCorriendo() || s.estadoActual != EstadoBot.VIGILANDO_HTML_INT) {
+                if (!s.estaCorriendo() || s.estadoActual != EstadoBot.VIGILANDO_INTERVENCION) {
                     s.peticionRedEnCurso = false;
                     return;
                 }
@@ -2121,7 +2146,7 @@ public class MainActivity extends Activity {
                         sondearResultadoInt(s, intentoPoll + 1);
                     } else {
                         s.peticionRedEnCurso = false;
-                        logCuenta(s, "[TIMEOUT] /int tardo mas de 4s. Reintentando en el proximo ciclo...");
+                        registrarPasoCuenta(s, "Sin botón intento " + s.vueltaActual);
                     }
                     return;
                 }
@@ -2133,38 +2158,34 @@ public class MainActivity extends Activity {
                     }
                     JSONObject res = new JSONObject(clean);
                     if (res.optBoolean("login", false)) {
-                        logCuenta(s, "[SESION] El servidor cerro la sesion. Reautenticando en /lg...");
                         s.webViewOculto.loadUrl(URL_LOGIN);
+                        registrarPasoCuenta(s, "Iniciando sesión (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
                         cambiarEstado(s, EstadoBot.CONECTANDO_SERVIDOR);
                         return;
                     }
                     if (res.optBoolean("ord", false)) {
-                        logCuenta(s, "[ALERTA] 'mod.add(1)' (Ordinaria) detectado en /int (" + res.optInt("ms", 0) + " ms)! Disparando compra XHR...");
+                        registrarPasoCuenta(s, "Clic en ordinaria");
                         if (!yaAvisoApertura) { yaAvisoApertura = true; sonarAlarma(false); }
                         s.intentoCreate = 0;
-                        cambiarEstado(s, EstadoBot.COMPRANDO_XHR_STORE);
+                        cambiarEstado(s, EstadoBot.COMPRANDO_ORDEN);
                         ejecutarCompraDirectaCreateStore(s);
                     } else {
-                        logCuenta(s, "[Vuelta " + s.vueltaActual + "] GET /int [200 OK - " + res.optInt("ms", 0) + " ms] -> Sin boton Ordinaria.");
+                        registrarPasoCuenta(s, "Sin botón intento " + s.vueltaActual);
                     }
                 } catch (Exception e) {
-                    logCuenta(s, "[Vuelta " + s.vueltaActual + "] GET /int verificado.");
+                    registrarPasoCuenta(s, "Sin botón intento " + s.vueltaActual);
                 }
             });
         }, 150);
     }
 
-    /**
-     * Pide el HTML de /int/create, extrae _token, _form_sig, tasa_usd, saldo_usd y las cuentas,
-     * y envía inmediatamente el POST a /int/store sin renderizar ningún formulario.
-     */
     private void ejecutarCompraDirectaCreateStore(final SesionBot s) {
         if (!s.estaCorriendo() || s.peticionRedEnCurso) return;
         s.peticionRedEnCurso = true;
         s.tiempoEstadoMs = System.currentTimeMillis();
         s.intentoCreate++;
 
-        logCuenta(s, "[XHR 1/2] Solicitando firma _form_sig en POST /int/create (Intento #" + s.intentoCreate + ")...");
+        registrarPasoCuenta(s, "Rellenando formulario");
 
         String jsCreateAndStore =
                 "window.__vbt_buy_res = 'WAIT';" +
@@ -2187,7 +2208,7 @@ public class MainActivity extends Activity {
                 "    });" +
                 "    var html = await rCreate.text();" +
                 "    if (rCreate.status !== 200 || html.indexOf('presentando inconvenientes') !== -1 || html.indexOf('no podemos procesar') !== -1) {" +
-                "      window.__vbt_buy_res = JSON.stringify({ step: 'CREATE_ERR', status: rCreate.status });" +
+                "      window.__vbt_buy_res = JSON.stringify({ step: 'CREATE_ERR' });" +
                 "      return;" +
                 "    }" +
                 "    if (html.indexOf('eval(function(p,a,c,k,e,d)') !== -1 && html.indexOf('_form_sig') === -1) {" +
@@ -2205,7 +2226,7 @@ public class MainActivity extends Activity {
                 "    var inSig = doc.querySelector('input[name=\"_form_sig\"]');" +
                 "    var inOper = doc.querySelector('input[name=\"oper\"]');" +
                 "    if (!inSig || !inSig.value) {" +
-                "      window.__vbt_buy_res = JSON.stringify({ step: 'NO_SIG', len: html.length });" +
+                "      window.__vbt_buy_res = JSON.stringify({ step: 'NO_SIG' });" +
                 "      return;" +
                 "    }" +
                 "    var formToken = inToken ? inToken.value : tok;" +
@@ -2223,11 +2244,9 @@ public class MainActivity extends Activity {
                 "    var monedaX = optHasta.getAttribute('data-moneda') || 'USD';" +
                 "    var mTasaUsd = html.match(/tasa_usd\\s*=\\s*parseFloat\\(['\"]([^'\"]+)['\"]\\)/);" +
                 "    var mTasaEur = html.match(/tasa_eur\\s*=\\s*parseFloat\\(['\"]([^'\"]+)['\"]\\)/);" +
-                "    var mSaldoUsd = html.match(/saldo_usd\\s*=\\s*parseFloat\\(['\"]([^'\"]+)['\"]\\)/);" +
                 "    var mCom = html.match(/com\\s*=\\s*parseFloat\\(['\"]([^'\"]+)['\"]\\)/);" +
                 "    var mCom2 = html.match(/com2\\s*=\\s*parseFloat\\(['\"]([^'\"]+)['\"]\\)/);" +
                 "    var tasaNum = (monedaX === 'EUR' && mTasaEur) ? parseFloat(mTasaEur[1]) : (mTasaUsd ? parseFloat(mTasaUsd[1]) : 0);" +
-                "    var saldoPool = mSaldoUsd ? parseFloat(mSaldoUsd[1]) : 999999;" +
                 "    var comPorc = mCom ? parseFloat(mCom[1]) : 0.50;" +
                 "    var com2Porc = mCom2 ? parseFloat(mCom2[1]) : 0;" +
                 "    var montoUsd = " + MONTO_MAX_USD + ";" +
@@ -2268,18 +2287,9 @@ public class MainActivity extends Activity {
                 "      credentials: 'same-origin'" +
                 "    });" +
                 "    var storeTxt = await rStore.text();" +
-                "    window.__vbt_buy_res = JSON.stringify({" +
-                "      step: 'STORE_DONE'," +
-                "      status: rStore.status," +
-                "      tasa: tasaStr," +
-                "      pool: saldoPool," +
-                "      dispBs: dispBs," +
-                "      montoUsd: montoStr," +
-                "      totalBs: totalBloquearStr," +
-                "      resp: storeTxt" +
-                "    });" +
+                "    window.__vbt_buy_res = JSON.stringify({ step: 'STORE_DONE', resp: storeTxt });" +
                 "  } catch(e) {" +
-                "    window.__vbt_buy_res = JSON.stringify({ step: 'EX', err: e.message });" +
+                "    window.__vbt_buy_res = JSON.stringify({ step: 'EX' });" +
                 "  }" +
                 "})();";
 
@@ -2288,13 +2298,13 @@ public class MainActivity extends Activity {
     }
 
     private void sondearResultadoCompraDirecta(final SesionBot s, final int intentoPoll) {
-        if (!s.estaCorriendo() || s.estadoActual != EstadoBot.COMPRANDO_XHR_STORE) {
+        if (!s.estaCorriendo() || s.estadoActual != EstadoBot.COMPRANDO_ORDEN) {
             s.peticionRedEnCurso = false;
             return;
         }
         handler.postDelayed(() -> {
             evaluarJS(s, "return window.__vbt_buy_res || 'WAIT';", raw -> {
-                if (!s.estaCorriendo() || s.estadoActual != EstadoBot.COMPRANDO_XHR_STORE) {
+                if (!s.estaCorriendo() || s.estadoActual != EstadoBot.COMPRANDO_ORDEN) {
                     s.peticionRedEnCurso = false;
                     return;
                 }
@@ -2303,7 +2313,7 @@ public class MainActivity extends Activity {
                         sondearResultadoCompraDirecta(s, intentoPoll + 1);
                     } else {
                         s.peticionRedEnCurso = false;
-                        logCuenta(s, "[TIMEOUT] /int/create sin respuesta. Reintentando...");
+                        cambiarEstado(s, EstadoBot.VIGILANDO_INTERVENCION);
                     }
                     return;
                 }
@@ -2319,48 +2329,27 @@ public class MainActivity extends Activity {
                     String step = res.optString("step", "");
 
                     if (step.equals("CHALLENGE_JS")) {
-                        logCuenta(s, "[COOKIE] Desafio JS de /int/create resuelto en memoria. Reenviando...");
                         s.tiempoEstadoMs = System.currentTimeMillis() - 600;
                         return;
                     }
 
                     if (step.equals("CREATE_ERR") || step.equals("NO_SIG")) {
                         if (s.intentoCreate < 2) {
-                            logCuenta(s, "[REINTENTO] /int/create devolvio error en Intento #1. Disparando Intento #2...");
+                            registrarPasoCuenta(s, "Clic en ordinaria");
                             s.tiempoEstadoMs = System.currentTimeMillis() - 500;
                         } else {
-                            logCuenta(s, "[ERROR] Fallo en ambos intentos de /int/create. Reiniciando sesion de la cuenta...");
                             s.intentoLogout = 0;
                             cambiarEstado(s, EstadoBot.CERRANDO_SESION);
                         }
                         return;
                     }
 
-                    if (step.equals("NO_ACCOUNTS")) {
-                        logCuenta(s, "[AVISO] El HTML de /int/create no incluyo cuentas (#desde / #hasta). Volviendo a /int...");
-                        cambiarEstado(s, EstadoBot.VIGILANDO_HTML_INT);
-                        return;
-                    }
-
                     if (step.equals("STORE_DONE")) {
-                        String tasa = res.optString("tasa", "0");
-                        double pool = res.optDouble("pool", 0);
-                        String montoUsd = res.optString("montoUsd", "300.00");
-                        String totalBs = res.optString("totalBs", "0,00");
                         String respRaw = res.optString("resp", "");
-
-                        logCuenta(s, String.format(Locale.US,
-                                "[XHR 2/2] POST /int/store -> Tasa: %s | Pool: %,.0f$ | Orden: %s$ (%s Bs)",
-                                tasa, pool, montoUsd, totalBs));
-
                         boolean compraOk = false;
-                        String msgBanco = respRaw;
                         try {
                             JSONObject jStore = new JSONObject(respRaw);
                             compraOk = jStore.optBoolean("ok", false);
-                            if (jStore.has("msg")) {
-                                msgBanco = jStore.optString("msg", respRaw);
-                            }
                         } catch (Exception ignored) {
                             if (respRaw.contains("\"ok\":true") || respRaw.toLowerCase().contains("exitosamente")) {
                                 compraOk = true;
@@ -2368,33 +2357,22 @@ public class MainActivity extends Activity {
                         }
 
                         if (compraOk) {
-                            logCuenta(s, "[COMPRA EXITOSA] Respuesta servidor: {\"ok\":true} -> ORDEN REGISTRADA!");
-                            sonarAlarma(true);
                             s.compraCompletada = true;
                             s.corriendo = false;
+                            registrarPasoCuenta(s, "Orden completada");
+                            sonarAlarma(true);
                             cambiarEstado(s, EstadoBot.DETENIDO);
-                            verificarSiTodasCompraron();
                         } else {
-                            logCuenta(s, "[SERVIDOR] " + msgBanco + " -> Continuando vigilancia en /int...");
-                            cambiarEstado(s, EstadoBot.VIGILANDO_HTML_INT);
+                            cambiarEstado(s, EstadoBot.VIGILANDO_INTERVENCION);
                         }
                     } else {
-                        cambiarEstado(s, EstadoBot.VIGILANDO_HTML_INT);
+                        cambiarEstado(s, EstadoBot.VIGILANDO_INTERVENCION);
                     }
                 } catch (Exception e) {
-                    cambiarEstado(s, EstadoBot.VIGILANDO_HTML_INT);
+                    cambiarEstado(s, EstadoBot.VIGILANDO_INTERVENCION);
                 }
             });
         }, 150);
-    }
-
-    private void verificarSiTodasCompraron() {
-        for (SesionBot s : obtenerSesionesActivas()) {
-            if (!s.compraCompletada) return;
-        }
-        log("[EXITO TOTAL] TODAS LAS CUENTAS REGISTRADAS COMPRARON CON EXITO!");
-        actualizarEstilosIndicadoresNeon();
-        actualizarBotonesMandoSegunSeleccion();
     }
 
     private void ejecutarScriptLogout(SesionBot s) {
