@@ -137,6 +137,7 @@ public class MainActivity extends Activity {
         ESPERANDO_ESTABILIZAR_PASS,
         ENVIANDO_FASE2,
         ESPERANDO_CARGA_INICIO,
+        ESPERANDO_REINTENTO_SESION_ACTIVA,
         ESPERANDO_ESTABILIZAR_INICIO,
         NAVEGANDO_MENU,
         VIGILANDO,
@@ -154,6 +155,8 @@ public class MainActivity extends Activity {
         final int slotIndex;
         boolean registrada = false;
         boolean corriendo = false;
+        boolean detenerTrasCerrarSesion = false;
+        boolean sesionAbiertaEnServidor = false;
         boolean nombreOculto = false;
         boolean consolaDesplegada = false;
 
@@ -177,7 +180,7 @@ public class MainActivity extends Activity {
         TextView badgeEstadoCard;
         TextView lblSaldosCard;
         TextView lblSubtituloPasoCard;
-        ImageView btnPlayCard, btnStopCard, btnEyeCard, btnEditCard;
+        ImageView btnPlayCard, btnStopCard, btnLogoutCard, btnEyeCard, btnEditCard;
         LinearLayout contenedorConsolaCard;
         ScrollView scrollConsolaCard;
         TextView txtConsolaCard;
@@ -276,16 +279,8 @@ public class MainActivity extends Activity {
                 if (wv != null) {
                     wv.evaluateJavascript("if(typeof Logout==='function'){Logout();}", null);
                     wv.stopLoading();
-                    wv.clearCache(true);
-                    wv.clearHistory();
-                    wv.clearFormData();
                 }
-                limpiarDatosPerfilAislado(i);
             }
-            CookieManager cm = CookieManager.getInstance();
-            cm.removeAllCookies(null);
-            cm.flush();
-            WebStorage.getInstance().deleteAllData();
         } catch (Exception ignored) {}
         super.onDestroy();
     }
@@ -445,6 +440,19 @@ public class MainActivity extends Activity {
                 p.setStyle(Paint.Style.FILL);
                 RectF r = new RectF(s * 0.24f, s * 0.24f, s * 0.76f, s * 0.76f);
                 c.drawRoundRect(r, s * 0.12f, s * 0.12f, p);
+                break;
+            }
+            case "LOGOUT": {
+                p.setStyle(Paint.Style.STROKE);
+                Path door = new Path();
+                door.moveTo(s * 0.48f, s * 0.18f);
+                door.lineTo(s * 0.22f, s * 0.18f);
+                door.lineTo(s * 0.22f, s * 0.82f);
+                door.lineTo(s * 0.48f, s * 0.82f);
+                c.drawPath(door, p);
+                c.drawLine(s * 0.36f, s * 0.50f, s * 0.82f, s * 0.50f, p);
+                c.drawLine(s * 0.64f, s * 0.32f, s * 0.82f, s * 0.50f, p);
+                c.drawLine(s * 0.64f, s * 0.68f, s * 0.82f, s * 0.50f, p);
                 break;
             }
             case "EDIT": {
@@ -1000,21 +1008,30 @@ public class MainActivity extends Activity {
             lblPaso.setPadding(0, dp(2), 0, dp(10));
             card.addView(lblPaso);
 
-            // Fila 4: Los 4 botones de acción (▶ Iniciar | ■ Detener | 👁 Ocultar | ✎ Editar)
+            // Fila 4: Los 5 botones de acción (▶ Iniciar | ■ Detener | [→ Cerrar Sesión y Detener | 👁 Ocultar | ✎ Editar)
             LinearLayout filaAcciones = new LinearLayout(this);
             filaAcciones.setOrientation(LinearLayout.HORIZONTAL);
             filaAcciones.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
 
             ImageView bPlay = crearBotonAccionTarjeta("PLAY", "#14532D", "#4ADE80", () -> {
-                if (!sesion.estaCorriendo()) {
+                if (!sesion.estaCorriendo() || sesion.detenerTrasCerrarSesion) {
                     iniciarSesionIndividual(sesion, 0);
                 }
             });
 
             ImageView bStop = crearBotonAccionTarjeta("STOP", "#450A0A", "#F87171", () -> {
                 if (sesion.estaCorriendo()) {
-                    detenerSesionIndividual(sesion, true);
+                    // Si está adentro del banco y aún no está cerrando sesión, primero cierra sesión limpiamente antes de detenerse
+                    if (sesion.sesionAbiertaEnServidor && sesion.estadoActual != EstadoBot.CERRANDO_SESION && sesion.estadoActual != EstadoBot.REINICIANDO_RED) {
+                        cerrarSesionYDetenerCuenta(sesion);
+                    } else {
+                        detenerSesionInmediato(sesion, true);
+                    }
                 }
+            });
+
+            ImageView bLogoutStop = crearBotonAccionTarjeta("LOGOUT", "#431407", "#FB923C", () -> {
+                cerrarSesionYDetenerCuenta(sesion);
             });
 
             ImageView bEye = crearBotonAccionTarjeta("EYE", "#1E293B", "#38BDF8", () -> {
@@ -1030,10 +1047,11 @@ public class MainActivity extends Activity {
                 mostrarPopupEditorCuenta(sesion.slotIndex);
             });
 
-            LinearLayout.LayoutParams lpAct = new LinearLayout.LayoutParams(dp(42), dp(36));
-            lpAct.setMargins(dp(6), 0, 0, 0);
+            LinearLayout.LayoutParams lpAct = new LinearLayout.LayoutParams(dp(40), dp(36));
+            lpAct.setMargins(dp(5), 0, 0, 0);
             filaAcciones.addView(bPlay, lpAct);
             filaAcciones.addView(bStop, lpAct);
+            filaAcciones.addView(bLogoutStop, lpAct);
             filaAcciones.addView(bEye, lpAct);
             filaAcciones.addView(bEdit, lpAct);
             card.addView(filaAcciones);
@@ -1091,6 +1109,7 @@ public class MainActivity extends Activity {
             sesion.lblSubtituloPasoCard = lblPaso;
             sesion.btnPlayCard = bPlay;
             sesion.btnStopCard = bStop;
+            sesion.btnLogoutCard = bLogoutStop;
             sesion.btnEyeCard = bEye;
             sesion.btnEditCard = bEdit;
             sesion.contenedorConsolaCard = boxConsola;
@@ -1192,40 +1211,12 @@ public class MainActivity extends Activity {
                 Class<?> compatClass = Class.forName("androidx.webkit.WebViewCompat");
                 Method setProfile = compatClass.getMethod("setProfile", WebView.class, String.class);
                 setProfile.invoke(null, wv, "VigilanteSlot_" + (slotIdx + 1));
-                limpiarDatosPerfilAislado(slotIdx);
-            }
-        } catch (Throwable ignored) {}
-    }
-
-    private void limpiarDatosPerfilAislado(int slotIdx) {
-        try {
-            Class<?> featureClass = Class.forName("androidx.webkit.WebViewFeature");
-            Method isSupported = featureClass.getMethod("isFeatureSupported", String.class);
-            Boolean ok = (Boolean) isSupported.invoke(null, "MULTI_PROFILE");
-            if (ok != null && ok) {
-                Class<?> storeClass = Class.forName("androidx.webkit.ProfileStore");
-                Method getInstance = storeClass.getMethod("getInstance");
-                Object store = getInstance.invoke(null);
-                Method getOrCreate = storeClass.getMethod("getOrCreateProfile", String.class);
-                Object profile = getOrCreate.invoke(store, "VigilanteSlot_" + (slotIdx + 1));
-                if (profile != null) {
-                    Class<?> profileClass = Class.forName("androidx.webkit.Profile");
-                    CookieManager cm = (CookieManager) profileClass.getMethod("getCookieManager").invoke(profile);
-                    if (cm != null) {
-                        cm.removeAllCookies(null);
-                        cm.flush();
-                    }
-                    WebStorage ws = (WebStorage) profileClass.getMethod("getWebStorage").invoke(profile);
-                    if (ws != null) {
-                        ws.deleteAllData();
-                    }
-                }
             }
         } catch (Throwable ignored) {}
     }
 
     // =========================================================================================
-    // ACTUALIZACIÓN VISUAL DE TARJETAS Y SALDOS EN VIVO
+    // ACTUALIZACIÓN VISUAL DE TARJETAS Y SALDOS EN VIVO (BS Y USD)
     // =========================================================================================
     private ArrayList<SesionBot> obtenerSesionesRegistradas() {
         ArrayList<SesionBot> lista = new ArrayList<>();
@@ -1351,48 +1342,59 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * Consulta en segundo plano /pg (Posición Global) y los selectores de cuenta
-     * para mantener el Saldo en Bs y en USD actualizado al instante en la tarjeta.
+     * Extrae en segundo plano el Saldo Disponible en Bs y USD desde Posición Global (/pg),
+     * desde el DOM actual y desde el endpoint de saldos de intervención.
      */
     private void actualizarSaldosEnSegundoPlano(final SesionBot s, boolean forzarAhora) {
         if (s == null || s.webViewOculto == null) return;
         long ahora = System.currentTimeMillis();
-        if (!forzarAhora && (ahora - s.ultimaActualizacionSaldoMs < 4000)) return;
+        if (!forzarAhora && (ahora - s.ultimaActualizacionSaldoMs < 3500)) return;
         s.ultimaActualizacionSaldoMs = ahora;
 
         String jsBalance =
                 "(async function(){" +
                 "  try {" +
-                "    function fmtM(v) {" +
+                "    function fmtNum(v) {" +
                 "      var n = parseFloat(v);" +
                 "      if (isNaN(n)) return null;" +
                 "      return n.toLocaleString('es-VE', {minimumFractionDigits: 2, maximumFractionDigits: 2});" +
                 "    }" +
-                "    var bs = null, usd = null;" +
+                "    function extraerDeTexto(txt) {" +
+                "      var res = { bs: null, usd: null };" +
+                "      if (!txt) return res;" +
+                "      var m1 = txt.match(/([0-9]{1,3}(?:\\.[0-9]{3})*,[0-9]{2})\\s*(?:Bs|VES)/i);" +
+                "      var m2 = txt.match(/(?:VES|Bs\\.?)[\\s:]*([0-9]{1,3}(?:\\.[0-9]{3})*,[0-9]{2})/i);" +
+                "      if (m1) res.bs = m1[1]; else if (m2) res.bs = m2[1];" +
+                "      var u1 = txt.match(/([0-9]{1,3}(?:\\.[0-9]{3})*,[0-9]{2})\\s*(?:USD|\\$)/i);" +
+                "      var u2 = txt.match(/(?:USD|TESORO DIGITAL\\$|\\$)[\\s:]*([0-9]{1,3}(?:\\.[0-9]{3})*,[0-9]{2})/i);" +
+                "      if (u1) res.usd = u1[1]; else if (u2) res.usd = u2[1];" +
+                "      return res;" +
+                "    }" +
                 "    var optD = document.querySelector('#desde option[data-disponible]');" +
                 "    var optH = document.querySelector('#hasta option[data-disponible]');" +
-                "    if (optD) bs = fmtM(optD.getAttribute('data-disponible'));" +
-                "    if (optH) usd = fmtM(optH.getAttribute('data-disponible'));" +
-                "    if (!bs || !usd) {" +
-                "      var meta = document.querySelector('meta[name=\"csrf-token\"]');" +
-                "      var tok = meta ? meta.getAttribute('content') : '';" +
-                "      var r = await fetch('https://tesoroenlinea.bt.com.ve/pg', {" +
-                "        method: 'GET'," +
-                "        headers: {'X-Requested-With': 'XMLHttpRequest', 'X-CSRF-TOKEN': tok}," +
-                "        credentials: 'same-origin'" +
-                "      });" +
-                "      if (r.status === 200) {" +
-                "        var html = await r.text();" +
-                "        var mBs = html.match(/(?:VES|Bs\\.?)[\\s\\S]{0,60}?([0-9]{1,3}(?:\\.[0-9]{3})*,[0-9]{2})/i);" +
-                "        var mUsd = html.match(/(?:USD|EUR|\\$)[\\s\\S]{0,60}?([0-9]{1,3}(?:\\.[0-9]{3})*,[0-9]{2})/i);" +
-                "        if (!bs && mBs) bs = mBs[1];" +
-                "        if (!usd && mUsd) usd = mUsd[1];" +
-                "      }" +
+                "    if (optD) window.__vbt_bs = fmtNum(optD.getAttribute('data-disponible'));" +
+                "    if (optH) window.__vbt_usd = fmtNum(optH.getAttribute('data-disponible'));" +
+                "    var domRes = extraerDeTexto(document.body ? document.body.innerText : '');" +
+                "    if (domRes.bs) window.__vbt_bs = domRes.bs;" +
+                "    if (domRes.usd) window.__vbt_usd = domRes.usd;" +
+                "    var meta = document.querySelector('meta[name=\"csrf-token\"]');" +
+                "    var tok = meta ? meta.getAttribute('content') : '';" +
+                "    var rPg = await fetch('https://tesoroenlinea.bt.com.ve/pg', {" +
+                "      method: 'GET'," +
+                "      headers: {'X-Requested-With': 'XMLHttpRequest', 'X-CSRF-TOKEN': tok}," +
+                "      credentials: 'same-origin'" +
+                "    });" +
+                "    if (rPg.status === 200) {" +
+                "      var htmlPg = await rPg.text();" +
+                "      var tmp = document.createElement('div');" +
+                "      tmp.innerHTML = htmlPg;" +
+                "      var pgRes = extraerDeTexto(tmp.innerText || htmlPg);" +
+                "      if (pgRes.bs) window.__vbt_bs = pgRes.bs;" +
+                "      if (pgRes.usd) window.__vbt_usd = pgRes.usd;" +
                 "    }" +
-                "    if (bs) window.__vbt_bs = bs;" +
-                "    if (usd) window.__vbt_usd = usd;" +
                 "  } catch(e){}" +
                 "})();";
+
         evaluarJS(s, jsBalance, null);
     }
 
@@ -1468,7 +1470,7 @@ public class MainActivity extends Activity {
     }
 
     // =========================================================================================
-    // GESTIÓN DE CREDENCIALES Y MONTO PERSONALIZADO (MÍNIMO 10, MÁXIMO 300, MÚLTIPLO DE 10)
+    // GESTIÓN DE CREDENCIALES Y MONTO PERSONALIZADO ("Escribe múltiplo de 10")
     // =========================================================================================
     private JSONArray obtenerArrayCuentasPrefs() {
         try {
@@ -1654,7 +1656,7 @@ public class MainActivity extends Activity {
         filaClv.addView(btnOjoClv, new LinearLayout.LayoutParams(dp(38), dp(38)));
         layout.addView(filaClv);
 
-        // RECUADRO DE MONTO A COMPRAR (Por defecto 300 -> Al tocarlo pasa a Monto personalizado)
+        // RECUADRO DE MONTO A COMPRAR ("300" por defecto -> Al tocarlo pasa a "Monto personalizado")
         TextView lblTitMonto = crearTexto("Monto a comprar ($):", "#38BDF8", 11.5f, true);
         lblTitMonto.setPadding(0, dp(2), 0, dp(4));
         layout.addView(lblTitMonto);
@@ -1664,20 +1666,23 @@ public class MainActivity extends Activity {
 
         final Button btnSelectorMonto = crearBoton(
                 modoPersonalizado[0] ? "Monto personalizado" : "300",
-                "#27272A", "#F4F4F5", 13, null);
+                "#27272A", modoPersonalizado[0] ? "#38BDF8" : "#F4F4F5", 13, null);
         LinearLayout.LayoutParams lpBtnMonto = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(38));
         lpBtnMonto.setMargins(0, 0, 0, dp(6));
         layout.addView(btnSelectorMonto, lpBtnMonto);
 
         final EditText edtMontoCustom = new EditText(this);
-        edtMontoCustom.setHint("Escribe monto múltiplo de 10 (10 a 300)");
-        edtMontoCustom.setHintTextColor(Color.parseColor("#94A3B8"));
+        edtMontoCustom.setHint("Escribe múltiplo de 10");
+        edtMontoCustom.setHintTextColor(Color.parseColor("#71717A")); // Gris oscuro limpio y legible
         edtMontoCustom.setTextColor(Color.parseColor("#4ADE80"));
+        edtMontoCustom.setTextSize(13.5f);
         edtMontoCustom.setInputType(InputType.TYPE_CLASS_NUMBER);
         edtMontoCustom.setBackground(fondoRedondeadoConBorde("#121316", "#0284C7", 6, 1));
         edtMontoCustom.setPadding(dp(10), dp(6), dp(10), dp(6));
-        edtMontoCustom.setText(String.valueOf(montoInicial));
+        if (modoPersonalizado[0]) {
+            edtMontoCustom.setText(String.valueOf(montoInicial));
+        }
         edtMontoCustom.setVisibility(modoPersonalizado[0] ? View.VISIBLE : View.GONE);
 
         LinearLayout.LayoutParams lpEdtMonto = new LinearLayout.LayoutParams(
@@ -1725,8 +1730,8 @@ public class MainActivity extends Activity {
                 if (montoFinal < 10 || montoFinal > 300 || (montoFinal % 10 != 0)) {
                     new AlertDialog.Builder(this)
                             .setTitle("Monto no válido")
-                            .setMessage("El monto debe ser mínimo 10, máximo 300 y múltiplo de 10 (por ejemplo: 10, 20, 30, 100, 120, 290, 300).")
-                            .setPositiveButton("Entendido", null)
+                            .setMessage("Tiene que ser múltiplo de 10 (mínimo 10 y máximo 300, por ejemplo: 10, 20, 30, 100, 120, 290, 300).")
+                            .setPositiveButton("Aceptar", null)
                             .show();
                     return;
                 }
@@ -1773,7 +1778,7 @@ public class MainActivity extends Activity {
 
         if (esEdicion) {
             Button btnBorrar = crearBotonConIcono("CLOSE", "Eliminar esta cuenta", "#450A0A", "#FCA5A5", 12, () -> {
-                detenerSesionIndividual(sesionEdit, false);
+                detenerSesionInmediato(sesionEdit, false);
                 sesionEdit.registrada = false;
                 sesionEdit.usuario = "";
                 sesionEdit.cedula = "";
@@ -1852,6 +1857,7 @@ public class MainActivity extends Activity {
             case ESPERANDO_CARGA_PASS:
             case ESPERANDO_ESTABILIZAR_PASS:
             case ENVIANDO_FASE2: return "CONTRASEÑA";
+            case ESPERANDO_REINTENTO_SESION_ACTIVA: return "SESIÓN ACTIVA";
             case ESPERANDO_CARGA_INICIO:
             case ESPERANDO_ESTABILIZAR_INICIO: return "POSICIÓN GLOBAL";
             case NAVEGANDO_MENU: return "INTERVENCIÓN";
@@ -1869,7 +1875,7 @@ public class MainActivity extends Activity {
     }
 
     // =========================================================================================
-    // ENCENDIDO Y DETENCIÓN CON DESFASE ANTI-BLOQUEO DE IP
+    // ENCENDIDO, DETENCIÓN Y CIERRE DE SESIÓN CON DETENCIÓN
     // =========================================================================================
     private void iniciarTodasLasCuentas() {
         ArrayList<SesionBot> reg = obtenerSesionesRegistradas();
@@ -1880,9 +1886,9 @@ public class MainActivity extends Activity {
         yaAvisoApertura = false;
         int delayEscalonado = 0;
         for (SesionBot s : reg) {
-            if (!s.estaCorriendo()) {
+            if (!s.estaCorriendo() || s.detenerTrasCerrarSesion) {
                 iniciarSesionIndividual(s, delayEscalonado);
-                delayEscalonado += 350; // Desfase ligero entre cuentas para no saturar la misma IP en el mismo milisegundo
+                delayEscalonado += 350;
             }
         }
     }
@@ -1890,7 +1896,11 @@ public class MainActivity extends Activity {
     private void detenerTodasLasCuentas() {
         for (SesionBot s : obtenerSesionesRegistradas()) {
             if (s.estaCorriendo()) {
-                detenerSesionIndividual(s, true);
+                if (s.sesionAbiertaEnServidor && s.estadoActual != EstadoBot.CERRANDO_SESION && s.estadoActual != EstadoBot.REINICIANDO_RED) {
+                    cerrarSesionYDetenerCuenta(s);
+                } else {
+                    detenerSesionInmediato(s, true);
+                }
             }
         }
         lblReloginVal.setText(minutosRelogin + " min (--:--)");
@@ -1898,6 +1908,7 @@ public class MainActivity extends Activity {
 
     private void iniciarSesionIndividual(final SesionBot s, int delayMs) {
         s.corriendo = true;
+        s.detenerTrasCerrarSesion = false;
         s.compraCompletada = false;
         s.vueltaActual = 0;
         s.intentoLogout = 0;
@@ -1913,8 +1924,22 @@ public class MainActivity extends Activity {
         }, delayMs);
     }
 
-    private void detenerSesionIndividual(SesionBot s, boolean registrarEnLog) {
+    /**
+     * Cierra la sesión en el banco (cortando y reconectando la red interna las veces necesarias)
+     * y detiene el bot de esa cuenta apenas queda fuera de la sesión.
+     */
+    private void cerrarSesionYDetenerCuenta(SesionBot s) {
+        if (s == null || !s.registrada) return;
+        s.corriendo = true;
+        s.detenerTrasCerrarSesion = true;
+        s.intentoLogout = 0;
+        cambiarEstado(s, EstadoBot.CERRANDO_SESION);
+        registrarPasoCuenta(s, "Cerrando sesión para detener...");
+    }
+
+    private void detenerSesionInmediato(SesionBot s, boolean registrarEnLog) {
         s.corriendo = false;
+        s.detenerTrasCerrarSesion = false;
         s.tiempoInicioSesionMs = 0;
         s.cargandoRed = false;
         if (s.webViewOculto != null) {
@@ -1927,7 +1952,7 @@ public class MainActivity extends Activity {
     }
 
     // =========================================================================================
-    // CONTROL DE RED Y RELOJ PRINCIPAL DE ALTA VELOCIDAD
+    // CONTROL DE RED INTERNA (QUITAR Y PONER INTERNET AL NAVEGADOR DE LA CUENTA)
     // =========================================================================================
     @SuppressWarnings("deprecation")
     private boolean hayInternetDisponible() {
@@ -1985,6 +2010,10 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {}
     }
 
+    /**
+     * Quita y vuelve a colocar el internet internamente en el navegador de la cuenta
+     * para destrabar el cierre de sesión cuando el banco está colapsado.
+     */
     private void reiniciarConexionIndividual(final SesionBot s) {
         if (s == null || s.microCortePropio) return;
         s.microCortePropio = true;
@@ -1994,6 +2023,7 @@ public class MainActivity extends Activity {
             try {
                 wv.stopLoading();
                 wv.getSettings().setBlockNetworkLoads(true);
+                wv.setNetworkAvailable(false);
                 evaluarJS(s, "if(window.stop){try{window.stop();}catch(e){}}", null);
             } catch (Exception ignored) {}
         }
@@ -2002,10 +2032,11 @@ public class MainActivity extends Activity {
             if (wv != null) {
                 try {
                     wv.getSettings().setBlockNetworkLoads(false);
+                    wv.setNetworkAvailable(true);
                 } catch (Exception ignored) {}
             }
             s.microCortePropio = false;
-        }, 1100);
+        }, 1300);
     }
 
     private void evaluarJS(SesionBot s, String script, ValueCallback<String> callback) {
@@ -2058,6 +2089,7 @@ public class MainActivity extends Activity {
                 }
                 if (transcurridoSeg >= totalSeg) {
                     s.intentoLogout = 0;
+                    s.detenerTrasCerrarSesion = false;
                     cambiarEstado(s, EstadoBot.CERRANDO_SESION);
                 }
             }
@@ -2073,7 +2105,7 @@ public class MainActivity extends Activity {
     }
 
     // =========================================================================================
-    // MÁQUINA DE ESTADOS ULTRARRÁPIDA CON LECTURA CONSTANTE DE SALDOS BS/USD
+    // MÁQUINA DE ESTADOS CON LECTURA DE SALDOS BS/USD, AJUSTE DE MONTO Y LOGOUT REAL
     // =========================================================================================
     private void ejecutarPasoMaquinaEstados(final SesionBot sesion) {
         if (sesion == null || sesion.webViewOculto == null) return;
@@ -2082,8 +2114,10 @@ public class MainActivity extends Activity {
         String jsInspector =
                 "var ready = (document.readyState === 'complete');" +
                 "var bodyTxt = document.body ? document.body.innerText.toLowerCase() : '';" +
+                "var rawTxt = document.body ? document.body.innerText : '';" +
                 "var cargandoTxt = (bodyTxt.indexOf('cargando, por favor espera') !== -1 || bodyTxt.indexOf('procesando') !== -1);" +
                 "var modalLogout = (bodyTxt.indexOf('deseas cerrar tu sesión') !== -1 || bodyTxt.indexOf('deseas cerrar tu sesion') !== -1);" +
+                "var sesionActivaErr = (bodyTxt.indexOf('sesión activa') !== -1 || bodyTxt.indexOf('sesion activa') !== -1 || bodyTxt.indexOf('posee una sesión') !== -1 || bodyTxt.indexOf('posee una sesion') !== -1);" +
                 "var btnX = document.querySelector(\"button.close, .btn-close, [aria-label='Close']\");" +
                 "if (btnX && btnX.offsetParent !== null && !modalLogout) { btnX.click(); }" +
                 "var btnOk = Array.from(document.querySelectorAll('button, a')).find(el => el.innerText && (el.innerText.trim() === 'OK' || el.innerText.trim() === 'Aceptar'));" +
@@ -2101,7 +2135,6 @@ public class MainActivity extends Activity {
                 "var inconv = (bodyTxt.indexOf('presentando inconvenientes') !== -1 || bodyTxt.indexOf('no podemos procesar su solicitud') !== -1);" +
                 "var exito = bodyTxt.indexOf('registrada exitosamente') !== -1;" +
                 "var sinCupo = bodyTxt.indexOf('no hay asignación disponible') !== -1;" +
-                "var sesionActivaErr = (bodyTxt.indexOf('sesión activa') !== -1 || bodyTxt.indexOf('sesion activa') !== -1 || bodyTxt.indexOf('posee una sesión') !== -1);" +
                 "var optD = document.querySelector('#desde option[data-disponible]');" +
                 "var optH = document.querySelector('#hasta option[data-disponible]');" +
                 "if (optD) {" +
@@ -2112,6 +2145,10 @@ public class MainActivity extends Activity {
                 "  var nUsd = parseFloat(optH.getAttribute('data-disponible'));" +
                 "  if (!isNaN(nUsd)) window.__vbt_usd = nUsd.toLocaleString('es-VE', {minimumFractionDigits: 2, maximumFractionDigits: 2});" +
                 "}" +
+                "var mBsDom = rawTxt.match(/([0-9]{1,3}(?:\\.[0-9]{3})*,[0-9]{2})\\s*(?:Bs|VES)/i) || rawTxt.match(/(?:VES|Bs\\.?)[\\s:]*([0-9]{1,3}(?:\\.[0-9]{3})*,[0-9]{2})/i);" +
+                "var mUsdDom = rawTxt.match(/([0-9]{1,3}(?:\\.[0-9]{3})*,[0-9]{2})\\s*(?:USD|\\$)/i) || rawTxt.match(/(?:USD|TESORO DIGITAL\\$)[\\s:]*([0-9]{1,3}(?:\\.[0-9]{3})*,[0-9]{2})/i);" +
+                "if (mBsDom) window.__vbt_bs = mBsDom[1];" +
+                "if (mUsdDom) window.__vbt_usd = mUsdDom[1];" +
                 "return JSON.stringify({" +
                 "  ready: ready," +
                 "  cargando: cargandoTxt," +
@@ -2124,7 +2161,8 @@ public class MainActivity extends Activity {
                 "  modalLogout: modalLogout," +
                 "  inconv: inconv, exito: exito, sinCupo: sinCupo, sesionActivaErr: sesionActivaErr," +
                 "  bs: window.__vbt_bs || ''," +
-                "  usd: window.__vbt_usd || ''" +
+                "  usd: window.__vbt_usd || ''," +
+                "  ajusteLog: window.__vbt_ajuste_log || ''" +
                 "});";
 
         evaluarJS(sesion, jsInspector, raw -> {
@@ -2137,6 +2175,13 @@ public class MainActivity extends Activity {
                 JSONObject st = new JSONObject(clean);
                 String nuevoBs = st.optString("bs", "");
                 String nuevoUsd = st.optString("usd", "");
+                String ajusteLog = st.optString("ajusteLog", "");
+
+                if (!ajusteLog.isEmpty()) {
+                    evaluarJS(sesion, "window.__vbt_ajuste_log = '';", null);
+                    registrarPasoCuenta(sesion, ajusteLog);
+                }
+
                 boolean cambioSaldo = false;
                 if (!nuevoBs.isEmpty() && !nuevoBs.equals(sesion.saldoBs)) {
                     sesion.saldoBs = nuevoBs;
@@ -2182,16 +2227,14 @@ public class MainActivity extends Activity {
     ) {
         if (!s.estaCorriendo()) return;
 
-        // Si la sesión ya está adentro, mantiene los saldos Bs y USD actualizados en segundo plano
-        if (s.tiempoInicioSesionMs > 0) {
+        if (visInicioCompleto || visTablaInt || visMonto) {
+            s.sesionAbiertaEnServidor = true;
             actualizarSaldosEnSegundoPlano(s, false);
         }
 
         String cedSafe = s.cedula.replace("\\", "\\\\").replace("'", "\\'");
         String usrSafe = s.usuario.replace("\\", "\\\\").replace("'", "\\'");
         String clvSafe = s.contrasena.replace("\\", "\\\\").replace("'", "\\'");
-        String montoFormateado = s.montoCompra + ",00";
-        String strMontoEntero = String.valueOf(s.montoCompra);
 
         switch (s.estadoActual) {
 
@@ -2202,6 +2245,7 @@ public class MainActivity extends Activity {
                 }
                 if (paginaCompleta && visInicioCompleto) {
                     s.tiempoInicioSesionMs = ahora;
+                    s.sesionAbiertaEnServidor = true;
                     registrarPasoCuenta(s, "Sesión iniciada - Posición Global");
                     actualizarSaldosEnSegundoPlano(s, true);
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_INICIO);
@@ -2212,6 +2256,7 @@ public class MainActivity extends Activity {
                     return;
                 }
                 if (paginaCompleta && visDoc) {
+                    s.sesionAbiertaEnServidor = false;
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_LOGIN);
                     return;
                 }
@@ -2227,7 +2272,6 @@ public class MainActivity extends Activity {
                     cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
                     return;
                 }
-                // Estabilización rápida de 250ms para ganar velocidad en colapso
                 if (ahora - s.tiempoEstadoMs >= 250) {
                     cambiarEstado(s, EstadoBot.ENVIANDO_FASE1);
                 }
@@ -2264,6 +2308,11 @@ public class MainActivity extends Activity {
                 break;
 
             case ESPERANDO_CARGA_PASS:
+                if (haySesionActivaErr) {
+                    registrarPasoCuenta(s, "Sesión activa detectada - esperando 6s para reintentar");
+                    cambiarEstado(s, EstadoBot.ESPERANDO_REINTENTO_SESION_ACTIVA);
+                    return;
+                }
                 if (paginaCompleta && visPass) {
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_PASS);
                     return;
@@ -2277,6 +2326,11 @@ public class MainActivity extends Activity {
                 break;
 
             case ESPERANDO_ESTABILIZAR_PASS:
+                if (haySesionActivaErr) {
+                    registrarPasoCuenta(s, "Sesión activa detectada - esperando 6s para reintentar");
+                    cambiarEstado(s, EstadoBot.ESPERANDO_REINTENTO_SESION_ACTIVA);
+                    return;
+                }
                 if (!visPass) {
                     cambiarEstado(s, EstadoBot.ESPERANDO_CARGA_PASS);
                     return;
@@ -2311,23 +2365,31 @@ public class MainActivity extends Activity {
                 break;
 
             case ESPERANDO_CARGA_INICIO:
+                if (haySesionActivaErr) {
+                    registrarPasoCuenta(s, "Sesión activa detectada - esperando 6s para reintentar");
+                    cambiarEstado(s, EstadoBot.ESPERANDO_REINTENTO_SESION_ACTIVA);
+                    return;
+                }
                 if (paginaCompleta && visInicioCompleto) {
                     s.tiempoInicioSesionMs = ahora;
+                    s.sesionAbiertaEnServidor = true;
                     registrarPasoCuenta(s, "Sesión iniciada - Posición Global");
                     actualizarSaldosEnSegundoPlano(s, true);
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_INICIO);
                     return;
                 }
-                if (haySesionActivaErr) {
-                    s.tiempoEstadoMs = ahora;
-                    registrarPasoCuenta(s, "Iniciando sesión (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
-                    s.webViewOculto.loadUrl(URL_LOGIN);
-                    cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
-                    return;
-                }
                 if (ahora - s.tiempoEstadoMs > 10000 && paginaCompleta && visDoc) {
                     registrarPasoCuenta(s, "Iniciando sesión (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_LOGIN);
+                }
+                break;
+
+            case ESPERANDO_REINTENTO_SESION_ACTIVA:
+                if (ahora - s.tiempoEstadoMs >= 6000) {
+                    registrarPasoCuenta(s, "Iniciando sesión (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
+                    s.webViewOculto.stopLoading();
+                    s.webViewOculto.loadUrl(URL_LOGIN);
+                    cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
                 }
                 break;
 
@@ -2354,6 +2416,7 @@ public class MainActivity extends Activity {
 
             case VIGILANDO:
                 if (paginaCompleta && visDoc) {
+                    s.sesionAbiertaEnServidor = false;
                     registrarPasoCuenta(s, "Iniciando sesión (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_LOGIN);
                     return;
@@ -2410,6 +2473,7 @@ public class MainActivity extends Activity {
                 }
                 if (hayInconv || (paginaCompleta && ahora - s.tiempoEstadoMs > 4200)) {
                     s.intentoLogout = 0;
+                    s.detenerTrasCerrarSesion = false;
                     cambiarEstado(s, EstadoBot.CERRANDO_SESION);
                 }
                 break;
@@ -2423,17 +2487,37 @@ public class MainActivity extends Activity {
             case LLENANDO_COMPRA:
                 if (!s.accionEnCurso) {
                     s.accionEnCurso = true;
-                    registrarPasoCuenta(s, "Rellenando formulario (" + s.montoCompra + "$)");
-                    String jsCompra =
+                    registrarPasoCuenta(s, "Rellenando formulario");
+                    String jsCompraAutoMonto =
                             "var d = document.querySelector('#desde'); if(d && d.options.length > 1) { d.selectedIndex = 1; d.dispatchEvent(new Event('change', {bubbles:true})); }" +
                             "var h = document.querySelector('#hasta'); if(h && h.options.length > 1) { h.selectedIndex = 1; h.dispatchEvent(new Event('change', {bubbles:true})); }" +
                             "var o = document.querySelector('#origen'); if(o) { for(var i=0;i<o.options.length;i++){ if(o.options[i].text.includes('" + ORIGEN_FONDOS + "')){ o.selectedIndex=i; break; } } o.dispatchEvent(new Event('change', {bubbles:true})); }" +
                             "var dst = document.querySelector('#destino'); if(dst) { for(var j=0;j<dst.options.length;j++){ if(dst.options[j].text.includes('" + DESTINO_FONDOS + "')){ dst.selectedIndex=j; break; } } dst.dispatchEvent(new Event('change', {bubbles:true})); }" +
+                            "var montoFinalInt = " + s.montoCompra + ";" +
+                            "try {" +
+                            "  var dispBs = d && d.options[d.selectedIndex] ? parseFloat(d.options[d.selectedIndex].getAttribute('data-disponible') || '0') : 0;" +
+                            "  var tasaNum = (typeof tasa_usd !== 'undefined' && tasa_usd > 0) ? parseFloat(tasa_usd) : 0;" +
+                            "  if (tasaNum <= 0) {" +
+                            "    var elT = document.querySelector('#tasa');" +
+                            "    if (elT && elT.value) tasaNum = parseFloat(elT.value.replace(/\\./g, '').replace(',', '.'));" +
+                            "  }" +
+                            "  var comPorc = (typeof com !== 'undefined') ? parseFloat(com) : 0.50;" +
+                            "  if (dispBs > 0 && tasaNum > 0) {" +
+                            "    var factor = 1 + (comPorc / 100);" +
+                            "    var maxMultiplo10 = Math.floor((dispBs / (tasaNum * factor)) / 10) * 10;" +
+                            "    if (maxMultiplo10 >= 10 && maxMultiplo10 < montoFinalInt) {" +
+                            "      montoFinalInt = maxMultiplo10;" +
+                            "      window.__vbt_ajuste_log = 'Saldo Bs cubre hasta ' + montoFinalInt + '$ - ajustando monto automáticamente';" +
+                            "    }" +
+                            "  }" +
+                            "} catch(e){}" +
+                            "var strEntero = String(montoFinalInt);" +
+                            "var strCompleto = strEntero + ',00';" +
                             "var m = document.querySelector('#monto');" +
                             "var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;" +
                             "if(m) {" +
                             "  m.focus();" +
-                            "  var pasos = ['" + strMontoEntero.substring(0, 1) + "', '" + strMontoEntero + "', '" + montoFormateado + "'];" +
+                            "  var pasos = [strEntero.substring(0, 1), strEntero, strCompleto];" +
                             "  function escribirPaso(idx) {" +
                             "    if(idx < pasos.length) {" +
                             "      setter.call(m, pasos[idx]);" +
@@ -2441,12 +2525,14 @@ public class MainActivity extends Activity {
                             "      m.dispatchEvent(new KeyboardEvent('keyup', {bubbles:true}));" +
                             "      setTimeout(function(){ escribirPaso(idx + 1); }, 35);" +
                             "    } else {" +
-                            "      if(m.value.indexOf('" + strMontoEntero + "') === -1) {" +
-                            "        setter.call(m, '" + montoFormateado + "');" +
+                            "      if(m.value.indexOf(strEntero) === -1) {" +
+                            "        setter.call(m, strCompleto);" +
                             "        m.dispatchEvent(new Event('input', {bubbles:true}));" +
                             "      }" +
                             "      m.dispatchEvent(new Event('change', {bubbles:true}));" +
                             "      m.dispatchEvent(new Event('blur', {bubbles:true}));" +
+                            "      var elTot = document.querySelector('#total-03');" +
+                            "      if (elTot && elTot.value) { window.__vbt_ultimo_bloqueo_bs = elTot.value; }" +
                             "      setTimeout(function(){" +
                             "        var col = document.querySelector(\"a[href='javascript:mod.save()']\") || Array.from(document.querySelectorAll('a, button')).find(el => el.innerText && el.innerText.toLowerCase().includes('colocar orden'));" +
                             "        if(col) col.click();" +
@@ -2459,7 +2545,7 @@ public class MainActivity extends Activity {
                             "  }" +
                             "  setTimeout(function(){ escribirPaso(0); }, 100);" +
                             "}";
-                    evaluarJS(s, jsCompra, null);
+                    evaluarJS(s, jsCompraAutoMonto, null);
                     cambiarEstado(s, EstadoBot.COMPRANDO);
                 }
                 break;
@@ -2468,7 +2554,20 @@ public class MainActivity extends Activity {
                 if (hayExito) {
                     s.compraCompletada = true;
                     s.corriendo = false;
-                    // Actualiza inmediatamente el saldo en Bs y USD tras descontarse la compra
+                    // Descuenta en vivo los Bs bloqueados y refresca /pg para reflejar el nuevo saldo al instante
+                    evaluarJS(s,
+                            "try {" +
+                            "  var optD = document.querySelector('#desde option[data-disponible]');" +
+                            "  var tot = document.querySelector('#total-03');" +
+                            "  if (optD && tot && tot.value) {" +
+                            "    var dispActual = parseFloat(optD.getAttribute('data-disponible') || '0');" +
+                            "    var bloq = parseFloat(tot.value.replace(/\\./g, '').replace(',', '.'));" +
+                            "    if (!isNaN(dispActual) && !isNaN(bloq) && dispActual >= bloq) {" +
+                            "      var rest = dispActual - bloq;" +
+                            "      window.__vbt_bs = rest.toLocaleString('es-VE', {minimumFractionDigits: 2, maximumFractionDigits: 2});" +
+                            "    }" +
+                            "  }" +
+                            "} catch(e){}", null);
                     actualizarSaldosEnSegundoPlano(s, true);
                     registrarPasoCuenta(s, "Orden completada");
                     sonarAlarma(true);
@@ -2489,13 +2588,25 @@ public class MainActivity extends Activity {
                 }
                 break;
 
+            // =================================================================================
+            // CIERRE DE SESIÓN REAL (SIN BORRADO FORZADO: INTENTA -> QUITA/PONE RED -> REINTENTA)
+            // =================================================================================
             case CERRANDO_SESION:
                 if (paginaCompleta && (visDoc || visPass)) {
+                    s.sesionAbiertaEnServidor = false;
                     if (!visDoc) {
                         s.webViewOculto.loadUrl(URL_LOGIN);
                     }
-                    registrarPasoCuenta(s, "Iniciando sesión (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
-                    cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
+                    if (s.detenerTrasCerrarSesion) {
+                        s.corriendo = false;
+                        s.detenerTrasCerrarSesion = false;
+                        s.tiempoInicioSesionMs = 0;
+                        registrarPasoCuenta(s, "Sesión cerrada y cuenta detenida");
+                        cambiarEstado(s, EstadoBot.DETENIDO);
+                    } else {
+                        registrarPasoCuenta(s, "Iniciando sesión (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
+                        cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
+                    }
                     return;
                 }
                 if (!s.accionEnCurso) {
@@ -2504,23 +2615,15 @@ public class MainActivity extends Activity {
                     s.tiempoEstadoMs = ahora;
                     registrarPasoCuenta(s, "Cerrando sesión intento " + s.intentoLogout);
                     ejecutarScriptLogout(s);
-                } else if (ahora - s.tiempoEstadoMs > 3500) {
-                    if (s.intentoLogout >= 2) {
-                        // Si el banco está colapsado y no responde al segundo intento de Logout, limpia sesión aislada y fuerza entrada a /lg
-                        limpiarDatosPerfilAislado(s.slotIndex);
-                        s.webViewOculto.stopLoading();
-                        s.webViewOculto.loadUrl(URL_LOGIN);
-                        registrarPasoCuenta(s, "Iniciando sesión (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
-                        cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
-                    } else {
-                        cambiarEstado(s, EstadoBot.REINICIANDO_RED);
-                        reiniciarConexionIndividual(s);
-                    }
+                } else if (ahora - s.tiempoEstadoMs > 3800) {
+                    // Si la página está colapsada y no cerró en 3.8s, quita y pone el internet del navegador y vuelve a intentar
+                    cambiarEstado(s, EstadoBot.REINICIANDO_RED);
+                    reiniciarConexionIndividual(s);
                 }
                 break;
 
             case REINICIANDO_RED:
-                if (!s.microCortePropio && (ahora - s.tiempoEstadoMs >= 1200)) {
+                if (!s.microCortePropio && (ahora - s.tiempoEstadoMs >= 1350)) {
                     cambiarEstado(s, EstadoBot.CERRANDO_SESION);
                 }
                 break;
