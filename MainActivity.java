@@ -493,18 +493,15 @@ public class MainActivity extends Activity {
                     double val = 0;
 
                     if (t < 0.085) {
-                        // Fase 1: "Cha-" (Resorte mecánico del cajón de dinero y choque de monedas)
                         double envCha = Math.exp(-t * 42.0);
                         double noise = (rng.nextDouble() * 2.0 - 1.0) * 0.45;
                         double lever = 0.40 * Math.sin(2.0 * Math.PI * 1480.0 * t)
                                 + 0.35 * Math.sin(2.0 * Math.PI * 2960.0 * t);
-                        val = (noise + doublelever) * envCha;
+                        val = (noise + lever) * envCha;
                     } else if (t >= 0.085 && t < 0.115) {
-                        // Breve golpe de martillo sobre la campana (con tintineo de moneda)
                         double tc = t - 0.085;
                         val = 0.65 * Math.sin(2.0 * Math.PI * 3520.0 * tc) * Math.exp(-tc * 55.0);
                     } else {
-                        // Fase 2: "-Ching!" (Campana clásica aguda de caja registradora con armónicos de bronce)
                         double tb = t - 0.115;
                         double envBell = Math.exp(-tb * 5.8);
                         double envShimmer = Math.exp(-tb * 14.0);
