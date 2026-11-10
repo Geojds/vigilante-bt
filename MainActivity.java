@@ -496,7 +496,7 @@ public class MainActivity extends Activity {
                         // Fase 1: "Cha-" (Resorte mecánico del cajón de dinero y choque de monedas)
                         double envCha = Math.exp(-t * 42.0);
                         double noise = (rng.nextDouble() * 2.0 - 1.0) * 0.45;
-                        doublelever = 0.40 * Math.sin(2.0 * Math.PI * 1480.0 * t)
+                        double lever = 0.40 * Math.sin(2.0 * Math.PI * 1480.0 * t)
                                 + 0.35 * Math.sin(2.0 * Math.PI * 2960.0 * t);
                         val = (noise + doublelever) * envCha;
                     } else if (t >= 0.085 && t < 0.115) {
