@@ -39,7 +39,9 @@ import android.text.Spanned;
 import android.text.TextUtils;
 import android.text.method.HideReturnsTransformationMethod;
 import android.text.method.PasswordTransformationMethod;
+import android.text.style.ForegroundColorSpan;
 import android.text.style.ImageSpan;
+import android.text.style.RelativeSizeSpan;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
@@ -85,7 +87,7 @@ public class MainActivity extends Activity {
     private static final String DESTINO_FONDOS = "Ahorro";
     private static final int MAX_CUENTAS = 4;
     private final int[] OPCIONES_MINUTOS = {1, 3, 5, 10, 15, 20, 30};
-    private final int[] ESCALAS_ZOOM = {45, 60, 75, 90, 100};
+    private final int[] ESCALAS_ZOOM = {60, 75, 85, 100};
 
     // Contenedores principales
     private FrameLayout frameRoot;
@@ -110,12 +112,13 @@ public class MainActivity extends Activity {
     private ImageView imgPrevOscuro, imgPrevZafiro, imgPrevClaro;
     private TextView txtPrevOscuro, txtPrevZafiro, txtPrevClaro;
 
-    // Sub-paneles separados de Alertas y Vibración
-    private LinearLayout panelItemOrd, panelItemCompra, panelItemVib;
+    // Sub-paneles separados de Alertas, Vibración y Modo Turbo
+    private LinearLayout panelItemTurbo, panelItemOrd, panelItemCompra, panelItemVib;
+    private TextView lblItemTurbo, lblDescItemTurbo;
     private TextView lblItemOrd, lblDescItemOrd;
     private TextView lblItemCompra, lblDescItemCompra;
     private TextView lblItemVib, lblDescItemVib;
-    private Button btnToggleOrd, btnToggleCompra, btnToggleVib;
+    private Button btnToggleTurbo, btnToggleOrd, btnToggleCompra, btnToggleVib;
 
     // Contenedor de motores en tamaño real detrás del fondo cuando la tarjeta está cerrada
     private LinearLayout filaMotoresSup, filaMotoresInf;
@@ -138,6 +141,7 @@ public class MainActivity extends Activity {
 
     // Ajustes guardados: 0 = Oscuro, 1 = Azul Zafiro, 2 = Claro
     private int temaActual = 0;
+    private boolean modoTurboSinImagenes = false;
     private boolean alertaOrdinariaActiva = true;
     private boolean alertaCompraActiva = true;
     private boolean vibracionActiva = true;
@@ -200,17 +204,20 @@ public class MainActivity extends Activity {
         // Control de despliegue del panel (Navegador + Consola), memoria de consola y zoom
         boolean panelDesplegado = false;
         boolean mostrarConsolaEnPanel = true;
-        int zoomPorcentaje = 60;
+        int zoomPorcentaje = 75;
 
         String tipoDoc = "V";
         String cedula = "";
         String usuario = "";
         String contrasena = "";
         int montoCompra = 300;
+        int ultimoMontoAjustado = 0;
 
         String saldoBs = "--";
         String saldoUsd = "--";
         String csrfTokenGuardado = "";
+        long latenciaMs = 0;
+        long inicioCargaRedMs = 0;
         long ultimaActualizacionSaldoMs = 0;
         String ultimoPasoTexto = "Sin actividad todavía";
         String urlActualTexto = URL_LOGIN;
@@ -269,10 +276,13 @@ public class MainActivity extends Activity {
         }
 
         String textoSaldosMostrado() {
+            String strOrden = (ultimoMontoAjustado > 0 && ultimoMontoAjustado != montoCompra)
+                    ? (ultimoMontoAjustado + "$ (Ajustado de " + montoCompra + "$)")
+                    : (montoCompra + "$");
             if (nombreOculto) {
-                return "Bs: ****   •   USD: ****   •   Orden: " + montoCompra + "$";
+                return "Bs: ****   •   USD: ****   •   Orden: " + strOrden;
             }
-            return "Bs: " + saldoBs + "   •   USD: " + saldoUsd + "   •   Orden: " + montoCompra + "$";
+            return "Bs: " + saldoBs + "   •   USD: " + saldoUsd + "   •   Orden: " + strOrden;
         }
 
         boolean estaCorriendo() {
@@ -308,6 +318,7 @@ public class MainActivity extends Activity {
         prefs = getSharedPreferences("VigilanteBTPrefs", Context.MODE_PRIVATE);
 
         temaActual = prefs.getInt("tema_app_v2", 0);
+        modoTurboSinImagenes = prefs.getBoolean("modo_turbo_img", false);
         alertaOrdinariaActiva = prefs.getBoolean("alerta_ord", true);
         alertaCompraActiva = prefs.getBoolean("alerta_compra", true);
         vibracionActiva = prefs.getBoolean("vibracion_app", true);
@@ -315,7 +326,9 @@ public class MainActivity extends Activity {
         for (int i = 0; i < MAX_CUENTAS; i++) {
             sesiones[i] = new SesionBot(i);
             sesiones[i].mostrarConsolaEnPanel = prefs.getBoolean("mostrar_consola_slot_" + i, true);
-            sesiones[i].zoomPorcentaje = prefs.getInt("zoom_web_slot_" + i, 60);
+            int zGuardado = prefs.getInt("zoom_web_v2_slot_" + i, 75);
+            if (zGuardado < 60 || zGuardado > 100) zGuardado = 75;
+            sesiones[i].zoomPorcentaje = zGuardado;
         }
 
         construirInterfazCompleta();
@@ -888,6 +901,17 @@ public class MainActivity extends Activity {
         tv.setText(ss);
     }
 
+    private void ponerTituloTurboExperimental(TextView tv, String colorPrincipalHex) {
+        if (tv == null) return;
+        String base = "Modo Turbo sin Imágenes ";
+        String tag = "(Modo Experimental)";
+        SpannableString ss = new SpannableString(base + tag);
+        ss.setSpan(new ForegroundColorSpan(Color.parseColor(colorPrincipalHex)), 0, base.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        ss.setSpan(new ForegroundColorSpan(Color.parseColor("#94A3B8")), base.length(), ss.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        ss.setSpan(new RelativeSizeSpan(0.84f), base.length(), ss.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        tv.setText(ss);
+    }
+
     private Bitmap crearLogoTransparenteBT() {
         int s = 256;
         Bitmap bmp = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888);
@@ -1196,7 +1220,7 @@ public class MainActivity extends Activity {
         contenidoAjustes.setPadding(dp(14), dp(6), dp(14), dp(95));
 
         lblAjustesBig = crearTexto("Ajustes", "#F4F4F5", 21f, true);
-        lblAjustesSub = crearTexto("Personaliza la apariencia, alertas y vibración del bot.", "#A1A1AA", 11f, false);
+        lblAjustesSub = crearTexto("Personaliza la apariencia, modo turbo, alertas y vibración.", "#A1A1AA", 11f, false);
         lblAjustesSub.setPadding(0, dp(2), 0, dp(12));
         contenidoAjustes.addView(lblAjustesBig);
         contenidoAjustes.addView(lblAjustesSub);
@@ -1271,8 +1295,8 @@ public class MainActivity extends Activity {
         cardAlertasAjustes.setPadding(dp(14), dp(14), dp(14), dp(14));
         cardAlertasAjustes.setBackground(fondoRedondeadoConBorde("#18181B", "#27272A", 16, 1));
 
-        lblSubAlertas = crearTexto("Alertas y Vibración", "#F4F4F5", 15f, true);
-        lblDescAlertas = crearTexto("Avisos sonoros y vibración mientras el bot opera.", "#A1A1AA", 11f, false);
+        lblSubAlertas = crearTexto("Rendimiento, Alertas y Vibración", "#F4F4F5", 15f, true);
+        lblDescAlertas = crearTexto("Opciones de aceleración de carga y avisos sonoros.", "#A1A1AA", 11f, false);
         lblDescAlertas.setPadding(0, dp(2), 0, dp(12));
         cardAlertasAjustes.addView(lblSubAlertas);
         cardAlertasAjustes.addView(lblDescAlertas);
@@ -1281,6 +1305,30 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lpSubPanel.setMargins(0, 0, 0, dp(10));
 
+        // Panel Separado 0: Modo Turbo sin Imágenes Pesadas (Modo Experimental)
+        panelItemTurbo = new LinearLayout(this);
+        panelItemTurbo.setOrientation(LinearLayout.HORIZONTAL);
+        panelItemTurbo.setGravity(Gravity.CENTER_VERTICAL);
+        panelItemTurbo.setPadding(dp(14), dp(12), dp(12), dp(12));
+        LinearLayout colTxtTurbo = new LinearLayout(this);
+        colTxtTurbo.setOrientation(LinearLayout.VERTICAL);
+        lblItemTurbo = crearTexto("", "#F4F4F5", 13.5f, true);
+        ponerTituloTurboExperimental(lblItemTurbo, "#F4F4F5");
+        lblDescItemTurbo = crearTexto("Bloquea imágenes y banners pesados durante la intervención para acelerar compras y cierres de sesión.", "#A1A1AA", 10.5f, false);
+        lblDescItemTurbo.setPadding(0, dp(2), dp(8), 0);
+        colTxtTurbo.addView(lblItemTurbo);
+        colTxtTurbo.addView(lblDescItemTurbo);
+        btnToggleTurbo = crearBoton("", "#14532D", "#4ADE80", 10, () -> {
+            modoTurboSinImagenes = !modoTurboSinImagenes;
+            prefs.edit().putBoolean("modo_turbo_img", modoTurboSinImagenes).apply();
+            aplicarModoTurboEnWebViews();
+            actualizarBotonesAjustes();
+        });
+        panelItemTurbo.addView(colTxtTurbo, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        panelItemTurbo.addView(btnToggleTurbo, new LinearLayout.LayoutParams(dp(96), dp(34)));
+        cardAlertasAjustes.addView(panelItemTurbo, lpSubPanel);
+
+        // Panel Separado 1: Alerta de Ordinaria
         panelItemOrd = new LinearLayout(this);
         panelItemOrd.setOrientation(LinearLayout.HORIZONTAL);
         panelItemOrd.setGravity(Gravity.CENTER_VERTICAL);
@@ -1302,6 +1350,7 @@ public class MainActivity extends Activity {
         panelItemOrd.addView(btnToggleOrd, new LinearLayout.LayoutParams(dp(96), dp(34)));
         cardAlertasAjustes.addView(panelItemOrd, lpSubPanel);
 
+        // Panel Separado 2: Alerta Compra Exitosa
         panelItemCompra = new LinearLayout(this);
         panelItemCompra.setOrientation(LinearLayout.HORIZONTAL);
         panelItemCompra.setGravity(Gravity.CENTER_VERTICAL);
@@ -1323,6 +1372,7 @@ public class MainActivity extends Activity {
         panelItemCompra.addView(btnToggleCompra, new LinearLayout.LayoutParams(dp(96), dp(34)));
         cardAlertasAjustes.addView(panelItemCompra, lpSubPanel);
 
+        // Panel Separado 3: Vibración del Dispositivo
         panelItemVib = new LinearLayout(this);
         panelItemVib.setOrientation(LinearLayout.HORIZONTAL);
         panelItemVib.setGravity(Gravity.CENTER_VERTICAL);
@@ -1513,6 +1563,24 @@ public class MainActivity extends Activity {
         aplicarTemaVisual();
     }
 
+    private void aplicarModoTurboEnWebViews() {
+        for (int i = 0; i < MAX_CUENTAS; i++) {
+            SesionBot s = sesiones[i];
+            if (s != null && s.webViewOculto != null) {
+                try {
+                    WebSettings ws = s.webViewOculto.getSettings();
+                    ws.setBlockNetworkImage(modoTurboSinImagenes);
+                    ws.setLoadsImagesAutomatically(!modoTurboSinImagenes);
+                    if (modoTurboSinImagenes) {
+                        evaluarJS(s,
+                                "var imgs = document.querySelectorAll('img');" +
+                                "for(var i=0;i<imgs.length;i++){ imgs[i].style.display='none'; }", null);
+                    }
+                } catch (Exception ignored) {}
+            }
+        }
+    }
+
     private void aplicarTemaVisual() {
         String bgApp = colFondoApp();
         String bgCard = colFondoTarjeta();
@@ -1545,6 +1613,8 @@ public class MainActivity extends Activity {
         if (lblSubAlertas != null) lblSubAlertas.setTextColor(Color.parseColor(txtPri));
         if (lblDescAlertas != null) lblDescAlertas.setTextColor(Color.parseColor(txtSec));
 
+        if (lblItemTurbo != null) ponerTituloTurboExperimental(lblItemTurbo, txtPri);
+        if (lblDescItemTurbo != null) lblDescItemTurbo.setTextColor(Color.parseColor(txtSec));
         if (lblItemOrd != null) lblItemOrd.setTextColor(Color.parseColor(txtPri));
         if (lblDescItemOrd != null) lblDescItemOrd.setTextColor(Color.parseColor(txtSec));
         if (lblItemCompra != null) lblItemCompra.setTextColor(Color.parseColor(txtPri));
@@ -1567,6 +1637,7 @@ public class MainActivity extends Activity {
         if (cardTemaAjustes != null) cardTemaAjustes.setBackground(fondoRedondeadoConBorde(bgCard, borderCard, 16, 1));
         if (cardAlertasAjustes != null) cardAlertasAjustes.setBackground(fondoRedondeadoConBorde(bgCard, borderCard, 16, 1));
 
+        if (panelItemTurbo != null) panelItemTurbo.setBackground(fondoRedondeadoConBorde(bgSub, borderCard, 14, 1));
         if (panelItemOrd != null) panelItemOrd.setBackground(fondoRedondeadoConBorde(bgSub, borderCard, 14, 1));
         if (panelItemCompra != null) panelItemCompra.setBackground(fondoRedondeadoConBorde(bgSub, borderCard, 14, 1));
         if (panelItemVib != null) panelItemVib.setBackground(fondoRedondeadoConBorde(bgSub, borderCard, 14, 1));
@@ -1631,6 +1702,7 @@ public class MainActivity extends Activity {
     }
 
     private void actualizarBotonesAjustes() {
+        configurarBotonInterruptor(btnToggleTurbo, modoTurboSinImagenes);
         configurarBotonInterruptor(btnToggleOrd, alertaOrdinariaActiva);
         configurarBotonInterruptor(btnToggleCompra, alertaCompraActiva);
         configurarBotonInterruptor(btnToggleVib, vibracionActiva);
@@ -1709,26 +1781,25 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * Aplica el porcentaje de zoom tanto a nivel nativo del WebView como por CSS/Viewport
-     * para que la página del banco se vea completa y encajada de inmediato.
+     * Zoom proporcional limpio (sin setInitialScale ni width=1080 que encogían la página).
+     * 100% muestra el tamaño normal completo del teléfono; 85%, 75% y 60% alejan suavemente.
      */
     private void aplicarZoomWebView(final SesionBot s) {
         if (s == null || s.webViewOculto == null) return;
         final int zPct = s.zoomPorcentaje;
         runOnUiThread(() -> {
             try {
-                s.webViewOculto.setInitialScale(zPct);
                 String jsZoom =
-                        "var z = " + (zPct / 100.0) + ";" +
+                        "var z = '" + (zPct / 100.0) + "';" +
                         "var vp = document.querySelector('meta[name=\"viewport\"]');" +
                         "if (!vp) {" +
                         "  vp = document.createElement('meta');" +
                         "  vp.name = 'viewport';" +
                         "  if (document.head) document.head.appendChild(vp);" +
                         "}" +
-                        "if (vp) vp.setAttribute('content', 'width=1080, initial-scale=' + z + ', minimum-scale=0.25, maximum-scale=3.0, user-scalable=yes');" +
-                        "if (document.documentElement) document.documentElement.style.zoom = z;" +
-                        "if (document.body) { document.body.style.zoom = z; document.body.style.transformOrigin = 'top left'; }";
+                        "if (vp) vp.setAttribute('content', 'width=device-width, initial-scale=1.0, user-scalable=yes');" +
+                        "if (document.documentElement) document.documentElement.style.zoom = '1';" +
+                        "if (document.body) { document.body.style.zoom = z; }";
                 evaluarJS(s, jsZoom, null);
             } catch (Exception ignored) {}
         });
@@ -1744,7 +1815,7 @@ public class MainActivity extends Activity {
             }
         }
         s.zoomPorcentaje = ESCALAS_ZOOM[idxSiguiente];
-        prefs.edit().putInt("zoom_web_slot_" + s.slotIndex, s.zoomPorcentaje).apply();
+        prefs.edit().putInt("zoom_web_v2_slot_" + s.slotIndex, s.zoomPorcentaje).apply();
         actualizarBarraUrlTarjeta(s);
         aplicarZoomWebView(s);
     }
@@ -1828,7 +1899,7 @@ public class MainActivity extends Activity {
                 sincronizarVistaPanelCuenta(sesion);
             });
 
-            // Fila 1: Usuario + Estado
+            // Fila 1: Usuario + Estado con Ping en ms
             LinearLayout filaTopCard = new LinearLayout(this);
             filaTopCard.setOrientation(LinearLayout.HORIZONTAL);
             filaTopCard.setGravity(Gravity.CENTER_VERTICAL);
@@ -1969,7 +2040,7 @@ public class MainActivity extends Activity {
 
             boxDesplegable.addView(frameCon, lpFrameCon);
 
-            // Barra de navegación (Botón Atrás ← | Botón Reiniciar ↻ | Recuadro de URL | Botón Zoom 60%)
+            // Barra de navegación (Botón Atrás ← | Botón Reiniciar ↻ | Recuadro de URL | Botón Zoom)
             LinearLayout barraNav = new LinearLayout(this);
             barraNav.setOrientation(LinearLayout.HORIZONTAL);
             barraNav.setGravity(Gravity.CENTER_VERTICAL);
@@ -2024,7 +2095,7 @@ public class MainActivity extends Activity {
             txtUrl.setEllipsize(TextUtils.TruncateAt.END);
             ponerIconoYTexto(txtUrl, crearIconoVectorial("LOCK", "#94A3B8", 11), URL_LOGIN);
 
-            // Botón interactivo de Zoom (45% -> 60% -> 75% -> 90% -> 100%)
+            // Botón interactivo de Zoom (60% -> 75% -> 85% -> 100%)
             TextView btnZoom = crearTexto(sesion.zoomPorcentaje + "%", "#4ADE80", 9.5f, true);
             btnZoom.setPadding(dp(8), dp(2), dp(8), dp(2));
             btnZoom.setBackground(fondoRedondeadoConBorde("#14532D", "#22C55E", 8, 1));
@@ -2072,11 +2143,10 @@ public class MainActivity extends Activity {
             sesion.btnZoomUrlCard = btnZoom;
             sesion.marcoWebViewCard = marcoWv;
 
-            // 2. Motor WebView con soporte de Zoom real y compatibilidad para Emuladores
+            // 2. Motor WebView configurado con tamaño nativo limpio y Modo Turbo opcional
             WebView wv = new WebView(this);
             wv.setBackgroundColor(Color.parseColor("#18181B"));
             configurarPerfilAisladoWebView(wv, i);
-            wv.setInitialScale(sesion.zoomPorcentaje);
 
             wv.setOnTouchListener((v, event) -> {
                 v.getParent().requestDisallowInterceptTouchEvent(true);
@@ -2090,14 +2160,14 @@ public class MainActivity extends Activity {
             ws.setJavaScriptEnabled(true);
             ws.setDomStorageEnabled(true);
             ws.setDatabaseEnabled(true);
-            ws.setLoadWithOverviewMode(true);
-            ws.setUseWideViewPort(true);
+            ws.setLoadWithOverviewMode(false);
+            ws.setUseWideViewPort(false);
             ws.setTextZoom(100);
             ws.setSupportZoom(true);
             ws.setBuiltInZoomControls(true);
             ws.setDisplayZoomControls(false);
-            ws.setLoadsImagesAutomatically(true);
-            ws.setBlockNetworkImage(false);
+            ws.setLoadsImagesAutomatically(!modoTurboSinImagenes);
+            ws.setBlockNetworkImage(modoTurboSinImagenes);
             ws.setBlockNetworkLoads(false);
             ws.setCacheMode(WebSettings.LOAD_DEFAULT);
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -2118,7 +2188,7 @@ public class MainActivity extends Activity {
                     if (currentU != null && !currentU.isEmpty()) {
                         sesion.urlActualTexto = currentU;
                     }
-                    if (newProgress >= 40) {
+                    if (newProgress >= 50) {
                         aplicarZoomWebView(sesion);
                     }
                     actualizarBarraUrlTarjeta(sesion);
@@ -2130,6 +2200,7 @@ public class MainActivity extends Activity {
                 public void onPageStarted(WebView view, String url, Bitmap favicon) {
                     super.onPageStarted(view, url, favicon);
                     sesion.cargandoRed = true;
+                    sesion.inicioCargaRedMs = System.currentTimeMillis();
                     if (url != null && !url.isEmpty()) {
                         sesion.urlActualTexto = url;
                     }
@@ -2141,10 +2212,16 @@ public class MainActivity extends Activity {
                     super.onPageFinished(view, url);
                     sesion.cargandoRed = false;
                     sesion.progresoWeb = 100;
+                    if (sesion.inicioCargaRedMs > 0) {
+                        sesion.latenciaMs = Math.max(15, System.currentTimeMillis() - sesion.inicioCargaRedMs);
+                    }
                     if (url != null && !url.isEmpty()) {
                         sesion.urlActualTexto = url;
                     }
                     aplicarZoomWebView(sesion);
+                    if (modoTurboSinImagenes) {
+                        evaluarJS(sesion, "var imgs=document.querySelectorAll('img');for(var i=0;i<imgs.length;i++){imgs[i].style.display='none';}", null);
+                    }
                     actualizarBarraUrlTarjeta(sesion);
                 }
 
@@ -2277,9 +2354,12 @@ public class MainActivity extends Activity {
             s.badgeEstadoCard.setTextColor(Color.parseColor("#00FF66"));
             s.badgeEstadoCard.setBackground(fondoRedondeadoConBorde("#064E3B", "#00FF66", 10, 1));
         } else if (corriendo) {
-            s.badgeEstadoCard.setTextColor(Color.parseColor(temaActual == 1 ? "#38BDF8" : "#4ADE80"));
-            s.badgeEstadoCard.setBackground(fondoRedondeadoConBorde(temaActual == 1 ? "#1E3A8A" : "#14532D",
-                    temaActual == 1 ? "#38BDF8" : "#22C55E", 10, 1));
+            boolean pingAlto = (s.latenciaMs > 1800);
+            String colTxtBadge = pingAlto ? "#FBBF24" : (temaActual == 1 ? "#38BDF8" : "#4ADE80");
+            String colBgBadge = pingAlto ? "#451A03" : (temaActual == 1 ? "#1E3A8A" : "#14532D");
+            String colBorderBadge = pingAlto ? "#F59E0B" : (temaActual == 1 ? "#38BDF8" : "#22C55E");
+            s.badgeEstadoCard.setTextColor(Color.parseColor(colTxtBadge));
+            s.badgeEstadoCard.setBackground(fondoRedondeadoConBorde(colBgBadge, colBorderBadge, 10, 1));
         } else {
             s.badgeEstadoCard.setTextColor(Color.parseColor(txtSec));
             s.badgeEstadoCard.setBackground(fondoRedondeadoConBorde(bgSub, borderCard, 10, 1));
@@ -2424,6 +2504,7 @@ public class MainActivity extends Activity {
         String jsBalanceExacto =
                 "(async function(){" +
                 "  try {" +
+                "    var t0 = Date.now();" +
                 "    function parseMontoVE(str) {" +
                 "      if (!str) return NaN;" +
                 "      var s = String(str).trim();" +
@@ -2443,7 +2524,7 @@ public class MainActivity extends Activity {
                 "          var v = parseMontoVE(el.getAttribute('data-saldo'));" +
                 "          if (!isNaN(v)) { sumBs += v; okBs = true; }" +
                 "        });" +
-                "        if (okBs) window.__vbt_bs = fmtVE(sumBs);" +
+                "        if (okBs) { window.__vbt_bs = fmtVE(sumBs); window.__vbt_bs_num = sumBs; }" +
                 "      }" +
                 "      var usdList = root.querySelectorAll('.saldoDisp[data-moneda=\"USD\"]');" +
                 "      if (usdList.length > 0) {" +
@@ -2458,7 +2539,7 @@ public class MainActivity extends Activity {
                 "      var optH = root.querySelector('#hasta option[data-disponible]');" +
                 "      if (optD) {" +
                 "        var vd = parseMontoVE(optD.getAttribute('data-disponible'));" +
-                "        if (!isNaN(vd)) window.__vbt_bs = fmtVE(vd);" +
+                "        if (!isNaN(vd)) { window.__vbt_bs = fmtVE(vd); window.__vbt_bs_num = vd; }" +
                 "      }" +
                 "      if (optH) {" +
                 "        var vh = parseMontoVE(optH.getAttribute('data-disponible'));" +
@@ -2473,6 +2554,7 @@ public class MainActivity extends Activity {
                 "      headers: {'X-Requested-With': 'XMLHttpRequest', 'X-CSRF-TOKEN': tok}," +
                 "      credentials: 'same-origin'" +
                 "    });" +
+                "    window.__vbt_ping = Math.max(10, Date.now() - t0);" +
                 "    if (rPg.status === 200) {" +
                 "      var htmlPg = await rPg.text();" +
                 "      var parser = new DOMParser();" +
@@ -2613,6 +2695,7 @@ public class MainActivity extends Activity {
             sesiones[i].usuario = "";
             sesiones[i].contrasena = "";
             sesiones[i].montoCompra = 300;
+            sesiones[i].ultimoMontoAjustado = 0;
         }
 
         for (int i = 0; i < arr.length() && i < MAX_CUENTAS; i++) {
@@ -2832,6 +2915,7 @@ public class MainActivity extends Activity {
                 sesionEdit.usuario = u;
                 sesionEdit.contrasena = p;
                 sesionEdit.montoCompra = montoFinal;
+                sesionEdit.ultimoMontoAjustado = 0;
                 guardarArrayCuentasPrefs();
                 actualizarVisualTarjeta(sesionEdit);
                 dialog.dismiss();
@@ -2854,6 +2938,7 @@ public class MainActivity extends Activity {
                 nueva.usuario = u;
                 nueva.contrasena = p;
                 nueva.montoCompra = montoFinal;
+                nueva.ultimoMontoAjustado = 0;
                 nueva.saldoBs = "--";
                 nueva.saldoUsd = "--";
                 nueva.compraCompletada = false;
@@ -2926,29 +3011,34 @@ public class MainActivity extends Activity {
 
     private String nombreCortoEstado(SesionBot s) {
         if (s.compraCompletada) return "COMPLETADA";
+        String base;
         switch (s.estadoActual) {
             case DETENIDO: return "DETENIDO";
             case CARGANDO_LOGIN:
             case ESPERANDO_ESTABILIZAR_LOGIN:
-            case ENVIANDO_FASE1: return "INICIANDO";
+            case ENVIANDO_FASE1: base = "INICIANDO"; break;
             case ESPERANDO_CARGA_PASS:
             case ESPERANDO_ESTABILIZAR_PASS:
-            case ENVIANDO_FASE2: return "CONTRASEÑA";
-            case ESPERANDO_REINTENTO_SESION_ACTIVA: return "SESIÓN ACTIVA";
+            case ENVIANDO_FASE2: base = "CONTRASEÑA"; break;
+            case ESPERANDO_REINTENTO_SESION_ACTIVA: base = "SESIÓN ACTIVA"; break;
             case ESPERANDO_CARGA_INICIO:
-            case ESPERANDO_ESTABILIZAR_INICIO: return "POSICIÓN GLOBAL";
-            case NAVEGANDO_MENU: return "INTERVENCIÓN";
-            case VIGILANDO: return "VIGILANDO";
+            case ESPERANDO_ESTABILIZAR_INICIO: base = "POSICIÓN GLOBAL"; break;
+            case NAVEGANDO_MENU: base = "INTERVENCIÓN"; break;
+            case VIGILANDO: base = "VIGILANDO"; break;
             case ESPERANDO_FORM_INTENTO1:
             case LIMPIANDO_PANTALLA:
             case ESPERANDO_FORM_INTENTO2:
             case ESPERANDO_ESTABILIZAR_FORM:
             case LLENANDO_COMPRA:
-            case COMPRANDO: return "COMPRANDO";
+            case COMPRANDO: base = "COMPRANDO"; break;
             case CERRANDO_SESION:
-            case REINICIANDO_RED: return "CERRANDO SESIÓN";
-            default: return "ACTIVO";
+            case REINICIANDO_RED: base = "CERRANDO SESIÓN"; break;
+            default: base = "ACTIVO"; break;
         }
+        if (s.latenciaMs > 0) {
+            return base + " • " + s.latenciaMs + "ms";
+        }
+        return base;
     }
 
     // =========================================================================================
@@ -2984,6 +3074,7 @@ public class MainActivity extends Activity {
         s.corriendo = true;
         s.detenerTrasCerrarSesion = false;
         s.compraCompletada = false;
+        s.ultimoMontoAjustado = 0;
         s.intentoLogout = 0;
         cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
 
@@ -3176,7 +3267,7 @@ public class MainActivity extends Activity {
     }
 
     // =========================================================================================
-    // MÁQUINA DE ESTADOS CON RESPUESTA RÁPIDA EN MODO INTERACTIVE Y LOGOUT ANTI-COLAPSO
+    // MÁQUINA DE ESTADOS CON DISPARO DIRECTO mod.add(1)/mod.save(), AUTO-AJUSTE Y PING EN VIVO
     // =========================================================================================
     private void ejecutarPasoMaquinaEstados(final SesionBot sesion) {
         if (sesion == null || sesion.webViewOculto == null) return;
@@ -3208,6 +3299,8 @@ public class MainActivity extends Activity {
                 "var inconv = (bodyTxt.indexOf('presentando inconvenientes') !== -1 || bodyTxt.indexOf('no podemos procesar su solicitud') !== -1);" +
                 "var exito = bodyTxt.indexOf('registrada exitosamente') !== -1;" +
                 "var sinCupo = bodyTxt.indexOf('no hay asignación disponible') !== -1;" +
+                "var perfNav = (window.performance && performance.getEntriesByType) ? performance.getEntriesByType('navigation')[0] : null;" +
+                "var pingCalc = window.__vbt_ping || (perfNav && perfNav.responseEnd > 0 ? Math.round(perfNav.responseEnd - perfNav.requestStart) : 0);" +
                 "function parseMontoVE(str) {" +
                 "  if (!str) return NaN;" +
                 "  var s = String(str).trim();" +
@@ -3221,7 +3314,7 @@ public class MainActivity extends Activity {
                 "if (bsNodes.length > 0) {" +
                 "  var sumBs = 0, okBs = false;" +
                 "  bsNodes.forEach(function(el){ var v = parseMontoVE(el.getAttribute('data-saldo')); if(!isNaN(v)){ sumBs += v; okBs = true; } });" +
-                "  if (okBs) window.__vbt_bs = fmtVE(sumBs);" +
+                "  if (okBs) { window.__vbt_bs = fmtVE(sumBs); window.__vbt_bs_num = sumBs; }" +
                 "}" +
                 "var usdNodes = document.querySelectorAll('.saldoDisp[data-moneda=\"USD\"]');" +
                 "if (usdNodes.length > 0) {" +
@@ -3231,7 +3324,7 @@ public class MainActivity extends Activity {
                 "}" +
                 "var optD = document.querySelector('#desde option[data-disponible]');" +
                 "var optH = document.querySelector('#hasta option[data-disponible]');" +
-                "if (optD) { var vd = parseMontoVE(optD.getAttribute('data-disponible')); if (!isNaN(vd)) window.__vbt_bs = fmtVE(vd); }" +
+                "if (optD) { var vd = parseMontoVE(optD.getAttribute('data-disponible')); if (!isNaN(vd)) { window.__vbt_bs = fmtVE(vd); window.__vbt_bs_num = vd; } }" +
                 "if (optH) { var vh = parseMontoVE(optH.getAttribute('data-disponible')); if (!isNaN(vh)) window.__vbt_usd = fmtVE(vh); }" +
                 "return JSON.stringify({" +
                 "  ready: ready," +
@@ -3246,13 +3339,17 @@ public class MainActivity extends Activity {
                 "  inconv: inconv, exito: exito, sinCupo: sinCupo, sesionActivaErr: sesionActivaErr," +
                 "  logoutOk: !!window.__vbt_logout_ok," +
                 "  csrf: csrfActual || ''," +
+                "  ping: pingCalc || 0," +
+                "  montoAjustado: window.__vbt_monto_ajustado || 0," +
                 "  bs: window.__vbt_bs || ''," +
                 "  usd: window.__vbt_usd || ''" +
                 "});";
 
+        final long tInicioEval = System.currentTimeMillis();
         evaluarJS(sesion, jsInspector, raw -> {
             if (!sesion.estaCorriendo() || raw == null || raw.equals("null")) return;
             try {
+                long rttEval = Math.max(12, System.currentTimeMillis() - tInicioEval);
                 String clean = raw;
                 if (clean.startsWith("\"") && clean.endsWith("\"")) {
                     clean = clean.substring(1, clean.length() - 1).replace("\\\"", "\"");
@@ -3261,9 +3358,22 @@ public class MainActivity extends Activity {
                 String nuevoBs = st.optString("bs", "");
                 String nuevoUsd = st.optString("usd", "");
                 String csrfDetectado = st.optString("csrf", "");
+                long pingWeb = st.optLong("ping", 0);
+                int mAjustado = st.optInt("montoAjustado", 0);
+
+                if (pingWeb > 0) {
+                    sesion.latenciaMs = pingWeb;
+                } else if (sesion.latenciaMs == 0) {
+                    sesion.latenciaMs = rttEval;
+                }
 
                 if (!csrfDetectado.isEmpty()) {
                     sesion.csrfTokenGuardado = csrfDetectado;
+                }
+
+                if (mAjustado > 0 && mAjustado != sesion.ultimoMontoAjustado) {
+                    sesion.ultimoMontoAjustado = mAjustado;
+                    registrarPasoCuenta(sesion, "Auto-Ajuste por saldo en Bs: orden ajustada a " + mAjustado + "$");
                 }
 
                 boolean cambioSaldo = false;
@@ -3287,7 +3397,6 @@ public class MainActivity extends Activity {
                 boolean visTabla = st.optBoolean("tablaInt");
                 boolean cargando = st.optBoolean("cargando");
 
-                // Si el elemento clave ya está en pantalla y no hay cartel de "cargando", actuar sin esperar imágenes lentas
                 boolean elementoCriticoListo = (visDoc || visPass || visMonto || visOrd || visInicio || visTabla) && !cargando;
                 boolean navCompleta = (!sesion.cargandoRed && sesion.progresoWeb >= 100) || elementoCriticoListo;
                 boolean ready = st.optBoolean("ready") && navCompleta;
@@ -3531,7 +3640,7 @@ public class MainActivity extends Activity {
                     return;
                 }
                 if (paginaCompleta && visOrd) {
-                    registrarPasoCuenta(s, "Clic en ordinaria");
+                    registrarPasoCuenta(s, "Disparo directo en Ordinaria (mod.add)");
                     if (!yaAvisoApertura) {
                         yaAvisoApertura = true;
                         sonarAlertaOrdinaria();
@@ -3562,7 +3671,7 @@ public class MainActivity extends Activity {
             case LIMPIANDO_PANTALLA:
                 if (paginaCompleta && visTablaInt && (ahora - s.tiempoEstadoMs >= 1400)) {
                     if (visOrd) {
-                        registrarPasoCuenta(s, "Clic en ordinaria");
+                        registrarPasoCuenta(s, "Disparo directo en Ordinaria (mod.add)");
                         clicarOrdinariaJS(s);
                         cambiarEstado(s, EstadoBot.ESPERANDO_FORM_INTENTO2);
                     } else {
@@ -3595,8 +3704,15 @@ public class MainActivity extends Activity {
             case LLENANDO_COMPRA:
                 if (!s.accionEnCurso) {
                     s.accionEnCurso = true;
-                    registrarPasoCuenta(s, "Rellenando formulario de compra");
+                    registrarPasoCuenta(s, "Rellenando formulario y verificando saldo Bs");
                     String jsCompraDirecta =
+                            "window.__vbt_monto_ajustado = 0;" +
+                            "function parseNumVE(str) {" +
+                            "  if (!str) return NaN;" +
+                            "  var s = String(str).trim();" +
+                            "  if (s.indexOf(',') !== -1) s = s.replace(/\\./g, '').replace(',', '.');" +
+                            "  return parseFloat(s);" +
+                            "}" +
                             "var d = document.querySelector('#desde'); if(d && d.options.length > 1) { d.selectedIndex = 1; d.dispatchEvent(new Event('change', {bubbles:true})); }" +
                             "var h = document.querySelector('#hasta'); if(h && h.options.length > 1) { h.selectedIndex = 1; h.dispatchEvent(new Event('change', {bubbles:true})); }" +
                             "var o = document.querySelector('#origen'); if(o) { for(var i=0;i<o.options.length;i++){ if(o.options[i].text.includes('" + ORIGEN_FONDOS + "')){ o.selectedIndex=i; break; } } o.dispatchEvent(new Event('change', {bubbles:true})); }" +
@@ -3605,7 +3721,47 @@ public class MainActivity extends Activity {
                             "var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;" +
                             "if(m) {" +
                             "  m.focus();" +
+                            "  var montoMeta = " + s.montoCompra + ";" +
                             "  var pasos = ['" + strEntero.substring(0, 1) + "', '" + strEntero + "', '" + strCompleto + "'];" +
+                            "  function dispararGuardadoOrden() {" +
+                            "    var confirmarInstantaneo = function() {" +
+                            "      var btnSi = document.querySelector('button.swal2-confirm') || Array.from(document.querySelectorAll('button, a')).find(el => el.innerText && (el.innerText.trim().toLowerCase() === 'si' || el.innerText.trim().toLowerCase() === 'sí'));" +
+                            "      if(btnSi && btnSi.offsetWidth > 0) { btnSi.click(); return true; }" +
+                            "      return false;" +
+                            "    };" +
+                            "    var obs = new MutationObserver(function(){ if(confirmarInstantaneo()) obs.disconnect(); });" +
+                            "    if(document.body) obs.observe(document.body, {childList:true, subtree:true});" +
+                            "    if (typeof mod !== 'undefined' && typeof mod.save === 'function') {" +
+                            "      try { mod.save(); } catch(e){}" +
+                            "    }" +
+                            "    var col = document.querySelector(\"a[href='javascript:mod.save()']\") || Array.from(document.querySelectorAll('a, button')).find(el => el.innerText && el.innerText.toLowerCase().includes('colocar orden'));" +
+                            "    if(col) { try { col.click(); } catch(e){} }" +
+                            "    setTimeout(confirmarInstantaneo, 150);" +
+                            "    setTimeout(confirmarInstantaneo, 350);" +
+                            "    setTimeout(function(){ try{obs.disconnect();}catch(e){} }, 3500);" +
+                            "  }" +
+                            "  function verificarSaldoYAjustar() {" +
+                            "    try {" +
+                            "      var optD = document.querySelector('#desde option:checked') || document.querySelector('#desde option[data-disponible]');" +
+                            "      var dispBs = optD ? parseNumVE(optD.getAttribute('data-disponible')) : (window.__vbt_bs_num || NaN);" +
+                            "      var totEl = document.querySelector('#total-03');" +
+                            "      var totalReqBs = totEl ? parseNumVE(totEl.value || totEl.innerText) : NaN;" +
+                            "      if (!isNaN(dispBs) && dispBs > 0 && !isNaN(totalReqBs) && totalReqBs > dispBs && montoMeta > 10) {" +
+                            "        var costoPorDolar = totalReqBs / montoMeta;" +
+                            "        var maxUsd = Math.floor(((dispBs * 0.998) / costoPorDolar) / 10) * 10;" +
+                            "        if (maxUsd >= 10 && maxUsd < montoMeta) {" +
+                            "          window.__vbt_monto_ajustado = maxUsd;" +
+                            "          var strNuevo = maxUsd + ',00';" +
+                            "          setter.call(m, strNuevo);" +
+                            "          m.dispatchEvent(new Event('input', {bubbles:true}));" +
+                            "          m.dispatchEvent(new KeyboardEvent('keyup', {bubbles:true}));" +
+                            "          m.dispatchEvent(new Event('change', {bubbles:true}));" +
+                            "          m.dispatchEvent(new Event('blur', {bubbles:true}));" +
+                            "        }" +
+                            "      }" +
+                            "    } catch(e){}" +
+                            "    setTimeout(dispararGuardadoOrden, 100);" +
+                            "  }" +
                             "  function escribirPaso(idx) {" +
                             "    if(idx < pasos.length) {" +
                             "      setter.call(m, pasos[idx]);" +
@@ -3619,23 +3775,10 @@ public class MainActivity extends Activity {
                             "      }" +
                             "      m.dispatchEvent(new Event('change', {bubbles:true}));" +
                             "      m.dispatchEvent(new Event('blur', {bubbles:true}));" +
-                            "      var confirmarInstantaneo = function() {" +
-                            "        var btnSi = document.querySelector('button.swal2-confirm') || Array.from(document.querySelectorAll('button, a')).find(el => el.innerText && (el.innerText.trim().toLowerCase() === 'si' || el.innerText.trim().toLowerCase() === 'sí'));" +
-                            "        if(btnSi && btnSi.offsetWidth > 0) { btnSi.click(); return true; }" +
-                            "        return false;" +
-                            "      };" +
-                            "      var obs = new MutationObserver(function(){ if(confirmarInstantaneo()) obs.disconnect(); });" +
-                            "      if(document.body) obs.observe(document.body, {childList:true, subtree:true});" +
-                            "      setTimeout(function(){" +
-                            "        var col = document.querySelector(\"a[href='javascript:mod.save()']\") || Array.from(document.querySelectorAll('a, button')).find(el => el.innerText && el.innerText.toLowerCase().includes('colocar orden'));" +
-                            "        if(col) col.click();" +
-                            "        setTimeout(confirmarInstantaneo, 180);" +
-                            "        setTimeout(confirmarInstantaneo, 400);" +
-                            "        setTimeout(function(){ try{obs.disconnect();}catch(e){} }, 3500);" +
-                            "      }, 140);" +
+                            "      setTimeout(verificarSaldoYAjustar, 110);" +
                             "    }" +
                             "  }" +
-                            "  setTimeout(function(){ escribirPaso(0); }, 60);" +
+                            "  setTimeout(function(){ escribirPaso(0); }, 50);" +
                             "}";
                     evaluarJS(s, jsCompraDirecta, null);
                     cambiarEstado(s, EstadoBot.COMPRANDO);
@@ -3660,7 +3803,7 @@ public class MainActivity extends Activity {
                             "  }" +
                             "} catch(e){}", null);
                     actualizarSaldosEnSegundoPlano(s, true);
-                    registrarPasoCuenta(s, "Orden completada");
+                    registrarPasoCuenta(s, "Orden completada exitosamente");
                     sonarAlertaCompraExitosa();
                     cambiarEstado(s, EstadoBot.DETENIDO);
                     return;
@@ -3705,7 +3848,6 @@ public class MainActivity extends Activity {
                     registrarPasoCuenta(s, "Cerrando sesión intento " + s.intentoLogout);
                     ejecutarScriptLogoutDirecto(s);
                 } else if (ahora - s.tiempoEstadoMs > 7000) {
-                    // En horas de colapso se dan 7 segundos completos antes de reiniciar el socket
                     cambiarEstado(s, EstadoBot.REINICIANDO_RED);
                     reiniciarConexionIndividual(s);
                 }
@@ -3719,12 +3861,6 @@ public class MainActivity extends Activity {
         }
     }
 
-    /**
-     * Cierre de sesión de alta prioridad (Anti-Colapso):
-     * 1. Detiene primero cualquier descarga colgada (window.stop) para liberar los sockets del navegador.
-     * 2. Usa el token CSRF guardado en memoria por si el DOM actual está lento o a medias.
-     * 3. Dispara en paralelo: sendBeacon + fetch(keepalive) + XHR + clic en confirmación.
-     */
     private void ejecutarScriptLogoutDirecto(SesionBot s) {
         String csrfRespaldo = (s.csrfTokenGuardado != null) ? s.csrfTokenGuardado.replace("'", "") : "";
         if (s.webViewOculto != null) {
@@ -3788,10 +3924,19 @@ public class MainActivity extends Activity {
         evaluarJS(s, jsLogout, null);
     }
 
+    /**
+     * Disparo directo de mod.add(1) por encima del clic visual en el botón Ordinaria.
+     */
     private void clicarOrdinariaJS(SesionBot s) {
         String jsOrd =
-                "var b = document.querySelector(\"a.btn-tesoro-green, a[href*='mod.add(1)']\") || Array.from(document.querySelectorAll('.card-header a, .card-header button')).find(el => el.innerText && el.innerText.trim().toLowerCase() === 'ordinaria');" +
-                "if(b) b.click();";
+                "var ejecutado = false;" +
+                "if (typeof mod !== 'undefined' && typeof mod.add === 'function') {" +
+                "  try { mod.add(1); ejecutado = true; } catch(e){}" +
+                "}" +
+                "if (!ejecutado) {" +
+                "  var b = document.querySelector(\"a.btn-tesoro-green, a[href*='mod.add(1)']\") || Array.from(document.querySelectorAll('.card-header a, .card-header button')).find(el => el.innerText && el.innerText.trim().toLowerCase() === 'ordinaria');" +
+                "  if(b) b.click();" +
+                "}";
         evaluarJS(s, jsOrd, null);
     }
 
