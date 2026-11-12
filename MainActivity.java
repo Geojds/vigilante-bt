@@ -78,13 +78,16 @@ import android.widget.Toast;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.BufferedReader;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
-import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
+import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.text.SimpleDateFormat;
@@ -105,22 +108,21 @@ public class MainActivity extends Activity {
     private final int[] ESCALAS_ZOOM = {60, 75, 85, 100};
 
     // =========================================================================================
-    // CREDENCIALES DE LICENCIA DEL CLIENTE (PERSONALIZABLES POR TU GENERADOR DE APK)
+    // SISTEMA DE LICENCIAS EN LA NUBE (UN SOLO APK UNIVERSAL + CONTROL REMOTO DESDE TU PC)
     // =========================================================================================
-    private static final String LICENCIA_USUARIO_CLIENTE = "GEONAL";
-    private static final String LICENCIA_CLAVE_CLIENTE = "123456";
-    // Opcional: Si en el generador dejas "LIBRE", se vincula automáticamente al primer teléfono donde abran la cuenta.
-    // Si pones el ID del teléfono del cliente, solo abrirá en ese dispositivo exacto.
+    private static final String GH_REPO_OWNER = "Geojds";
+    private static final String GH_REPO_NAME = "vigilante-bt";
+    private static final String GH_TOKEN_B64 = "";
+    private static final String LICENCIA_USUARIO_CLIENTE = "geonaldiaz1";
+    private static final String LICENCIA_CLAVE_CLIENTE = "Valera25**";
     private static final String LICENCIA_DEVICE_ID_FIJO = "LIBRE";
-    private static final String CLAVE_MAESTRA_VENDEDOR = "MAESTRO777";
+    private static final String CLAVE_MAESTRA_VENDEDOR = "geonal11";
 
     // =========================================================================================
-    // CREDENCIALES DE PROXY RESIDENCIAL IPROYAL (OFUSCADAS EN BASE64 ANTI-INSPECCIÓN)
-    // Host: geo.iproyal.com | Puerto: 12321 | User: ftNVsXfGVrFN3Pq3 | Pass: SPWd2zTzmz3M8KNj
+    // CREDENCIALES DE PROXY RESIDENCIAL IPROYAL VENEZUELA (CIFRADAS EN BASE64)
     // =========================================================================================
     private static final String PRX_H_B64 = "Z2VvLmlwcm95YWwuY29t";
     private static final int PRX_PORT = 12321;
-    private static final String PRX_U_B64 = "ZnROVndYZkdWckZOM1BxMw=="; // fallback seguro si se usa directo
     private static final String PRX_USER_RAW = "ftNVsXfGVrFN3Pq3";
     private static final String PRX_PASS_RAW = "SPWd2zTzmz3M8KNj";
 
@@ -144,6 +146,7 @@ public class MainActivity extends Activity {
 
     // Pantalla de bloqueo / Login de Licencia del Cliente
     private LinearLayout loginClienteOverlay;
+    private TextView lblEstadoValidacionLic;
 
     // Tarjetas y textos adaptables al tema
     private TextView lblTituloApp, lblCuentasBig, lblCuentasSub;
@@ -181,13 +184,10 @@ public class MainActivity extends Activity {
     private ImageView navIconCuentas, navIconHistorial, navIconAjustes;
     private TextView navTxtCuentas, navTxtHistorial, navTxtAjustes;
 
-    // 0 = Cuentas, 1 = Historial, 2 = Ajustes
     private int pestanaInferiorActual = 0;
     private int filtroHistorialSlot = -1;
 
-    // Ajustes guardados: 0 = Oscuro, 1 = Azul Zafiro, 2 = Claro
     private int temaActual = 0;
-    // Modo Turbo activado por defecto de fábrica
     private boolean modoTurboSinImagenes = true;
     private boolean proxyRotativoActivo = true;
     private boolean alertaOrdinariaActiva = true;
@@ -200,6 +200,7 @@ public class MainActivity extends Activity {
     private boolean pulsoNeon = false;
     private boolean yaAvisoApertura = false;
     private boolean avisoSinInternetMostrado = false;
+    private long ultimaVerificacionNubeMs = 0;
     private ConnectivityManager.NetworkCallback networkCallback;
 
     private final ArrayList<EntradaLog> historialGlobalLogs = new ArrayList<>();
@@ -282,7 +283,6 @@ public class MainActivity extends Activity {
         int montoCompra = 300;
         int ultimoMontoAjustado = 0;
 
-        // Control de sesión de Proxy Residencial IPRoyal Venezuela por cuenta
         String idSesionProxy = "";
         int contadorRotacionesIp = 0;
         String ultimaTasaLeida = "--";
@@ -400,7 +400,6 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
-        // Protección Anti-Captura / Anti-Inspección de credenciales del Proxy desde PC
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
                 WebView.setWebContentsDebuggingEnabled(false);
@@ -410,7 +409,6 @@ public class MainActivity extends Activity {
         prefs = getSharedPreferences("VigilanteBTPrefs", Context.MODE_PRIVATE);
 
         temaActual = prefs.getInt("tema_app_v2", 0);
-        // Modo Turbo viene ACTIVADO por defecto al instalar el APK
         modoTurboSinImagenes = prefs.getBoolean("modo_turbo_default_on", true);
         proxyRotativoActivo = prefs.getBoolean("proxy_iproyal_on", true);
         alertaOrdinariaActiva = prefs.getBoolean("alerta_ord", true);
@@ -434,6 +432,7 @@ public class MainActivity extends Activity {
         cargarComprasExitosasGuardadas();
         aplicarTemaVisual();
         iniciarCicloReloj();
+        verificarSesionGuardadaEnNubeAlAbrir();
     }
 
     @Override
@@ -495,7 +494,6 @@ public class MainActivity extends Activity {
         s.contadorRotacionesIp++;
         ultimoSlotActivoRed = s.slotIndex;
 
-        // Limpieza profunda de XSRF-TOKEN, cookies de sesión, caché de autenticación y sessionStorage
         runOnUiThread(() -> {
             try {
                 CookieManager cm = CookieManager.getInstance();
@@ -530,10 +528,6 @@ public class MainActivity extends Activity {
         registrarPasoCuenta(s, "Cambio de IP completado (" + motivo + ") -> Nueva Sesión VE #" + idCorto);
     }
 
-    /**
-     * Levanta un túnel local en 127.0.0.1 que inyecta automáticamente la cabecera
-     * Proxy-Authorization de IPRoyal Venezuela en cada túnel HTTPS CONNECT del WebView.
-     */
     private void iniciarPuenteProxyLocalIPRoyal() {
         new Thread(() -> {
             try {
@@ -685,7 +679,7 @@ public class MainActivity extends Activity {
     }
 
     // =========================================================================================
-    // CANDADO ANTI-REVENTA POR DISPOSITIVO (DEVICE ID) Y VENTANA DE LOGIN DEL CLIENTE
+    // VALIDACIÓN EN TIEMPO REAL EN LA NUBE (GITHUB licencias.json) + CANDADO Y DESACTIVACIÓN
     // =========================================================================================
     @SuppressLint("HardwareIds")
     private String obtenerDeviceIdUnico() {
@@ -698,10 +692,233 @@ public class MainActivity extends Activity {
         return "VBT-" + Build.BOARD.toUpperCase(Locale.ROOT);
     }
 
+    private String decodificarTokenGitHub() {
+        try {
+            if (GH_TOKEN_B64 == null || GH_TOKEN_B64.isEmpty()) return "";
+            return new String(Base64.decode(GH_TOKEN_B64, Base64.DEFAULT), StandardCharsets.UTF_8).trim();
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private void mostrarAlertaCuentaDesactivada(String detalleExtra) {
+        runOnUiThread(() -> {
+            detenerTodasLasCuentas();
+            prefs.edit().putBoolean("sesion_cliente_recordada_v3", false).apply();
+            if (loginClienteOverlay != null) {
+                loginClienteOverlay.setVisibility(View.VISIBLE);
+            }
+            if (barraFlotante != null) {
+                barraFlotante.setVisibility(View.GONE);
+            }
+            new AlertDialog.Builder(MainActivity.this)
+                    .setTitle("Cuenta Desactivada")
+                    .setMessage(detalleExtra != null && !detalleExtra.isEmpty()
+                            ? detalleExtra
+                            : "Tu sesión no es válida o esta cuenta ha sido desactivada por el administrador.")
+                    .setPositiveButton("Aceptar", null)
+                    .show();
+        });
+    }
+
+    private void verificarSesionGuardadaEnNubeAlAbrir() {
+        boolean recordada = prefs.getBoolean("sesion_cliente_recordada_v3", false);
+        String usrGuardado = prefs.getString("usr_licencia_activa_v3", "");
+        String clvGuardada = prefs.getString("clv_licencia_activa_v3", "");
+        if (!recordada || usrGuardado.isEmpty()) return;
+
+        validarCredencialesEnNubeOLocal(usrGuardado, clvGuardada, true, true);
+    }
+
+    private void validarCredencialesEnNubeOLocal(final String usrInput, final String clvInput, final boolean recordarChecked, final boolean esChequeoSilencioso) {
+        final String miDeviceId = obtenerDeviceIdUnico();
+
+        // 1. Acceso inmediato con tu Clave Maestra de vendedor
+        if (clvInput.equals(CLAVE_MAESTRA_VENDEDOR)) {
+            prefs.edit()
+                    .putBoolean("sesion_cliente_recordada_v3", recordarChecked)
+                    .putString("usr_licencia_activa_v3", usrInput)
+                    .putString("clv_licencia_activa_v3", clvInput)
+                    .putString("device_id_vinculado_v3", "DESBLOQUEADO_MAESTRO")
+                    .apply();
+            if (loginClienteOverlay != null) loginClienteOverlay.setVisibility(View.GONE);
+            if (barraFlotante != null) barraFlotante.setVisibility(View.VISIBLE);
+            if (!esChequeoSilencioso) {
+                Toast.makeText(this, "Dispositivo autorizado con Clave Maestra", Toast.LENGTH_SHORT).show();
+            }
+            return;
+        }
+
+        if (!esChequeoSilencioso && lblEstadoValidacionLic != null) {
+            lblEstadoValidacionLic.setVisibility(View.VISIBLE);
+            lblEstadoValidacionLic.setText("Verificando licencia...");
+            lblEstadoValidacionLic.setTextColor(Color.parseColor("#38BDF8"));
+        }
+
+        new Thread(() -> {
+            String tokenGh = decodificarTokenGitHub();
+            boolean verificadoEnNube = false;
+
+            if (!tokenGh.isEmpty() || !GH_REPO_OWNER.isEmpty()) {
+                try {
+                    String apiUrl = "https://api.github.com/repos/" + GH_REPO_OWNER + "/" + GH_REPO_NAME + "/contents/licencias.json";
+                    HttpURLConnection conn = (HttpURLConnection) new URL(apiUrl).openConnection();
+                    conn.setUseCaches(false);
+                    conn.setConnectTimeout(7000);
+                    conn.setReadTimeout(7000);
+                    conn.setRequestMethod("GET");
+                    conn.setRequestProperty("Accept", "application/vnd.github.v3+json");
+                    if (!tokenGh.isEmpty()) {
+                        conn.setRequestProperty("Authorization", "token " + tokenGh);
+                    }
+
+                    int code = conn.getResponseCode();
+                    if (code == 200) {
+                        BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8));
+                        StringBuilder sb = new StringBuilder();
+                        String line;
+                        while ((line = br.readLine()) != null) sb.append(line);
+                        br.close();
+
+                        JSONObject metaJson = new JSONObject(sb.toString());
+                        String shaArchivo = metaJson.optString("sha", "");
+                        String contentB64 = metaJson.optString("content", "").replaceAll("\\s+", "");
+                        String jsonText = new String(Base64.decode(contentB64, Base64.DEFAULT), StandardCharsets.UTF_8);
+
+                        JSONArray listaUsuarios = new JSONArray(jsonText);
+                        verificadoEnNube = true;
+                        JSONObject usuarioEncontrado = null;
+
+                        for (int i = 0; i < listaUsuarios.length(); i++) {
+                            JSONObject obj = listaUsuarios.optJSONObject(i);
+                            if (obj != null && obj.optString("usuario", "").equalsIgnoreCase(usrInput)) {
+                                usuarioEncontrado = obj;
+                                break;
+                            }
+                        }
+
+                        if (usuarioEncontrado == null) {
+                            runOnUiThread(() -> {
+                                if (lblEstadoValidacionLic != null) lblEstadoValidacionLic.setVisibility(View.GONE);
+                                if (esChequeoSilencioso) {
+                                    mostrarAlertaCuentaDesactivada("Tu usuario ya no se encuentra activo en el sistema.");
+                                } else {
+                                    Toast.makeText(MainActivity.this, "Usuario no registrado", Toast.LENGTH_SHORT).show();
+                                }
+                            });
+                            return;
+                        }
+
+                        boolean estaActivo = usuarioEncontrado.optBoolean("activo", true);
+                        if (!estaActivo) {
+                            mostrarAlertaCuentaDesactivada("Esta cuenta ha sido desactivada. Tu sesión ya no es válida.");
+                            return;
+                        }
+
+                        String claveReal = usuarioEncontrado.optString("clave", "");
+                        if (!claveReal.equals(clvInput)) {
+                            runOnUiThread(() -> {
+                                if (lblEstadoValidacionLic != null) lblEstadoValidacionLic.setVisibility(View.GONE);
+                                if (esChequeoSilencioso) {
+                                    mostrarAlertaCuentaDesactivada("La contraseña de tu cuenta fue modificada. Inicia sesión nuevamente.");
+                                } else {
+                                    Toast.makeText(MainActivity.this, "Contraseña incorrecta", Toast.LENGTH_SHORT).show();
+                                }
+                            });
+                            return;
+                        }
+
+                        String deviceRegistrado = usuarioEncontrado.optString("device", "LIBRE").trim();
+                        if (!deviceRegistrado.equalsIgnoreCase("LIBRE")
+                                && !deviceRegistrado.isEmpty()
+                                && !deviceRegistrado.equalsIgnoreCase(miDeviceId)) {
+                            runOnUiThread(() -> {
+                                if (lblEstadoValidacionLic != null) lblEstadoValidacionLic.setVisibility(View.GONE);
+                                mostrarAlertaCuentaDesactivada("Este usuario ya está vinculado a otro teléfono (ID: " + deviceRegistrado + ").");
+                            });
+                            return;
+                        }
+
+                        // Si estaba en LIBRE y hay token de GitHub, registra automáticamente el ID de este teléfono en la nube
+                        if (deviceRegistrado.equalsIgnoreCase("LIBRE") && !tokenGh.isEmpty() && !shaArchivo.isEmpty()) {
+                            try {
+                                usuarioEncontrado.put("device", miDeviceId);
+                                String nuevoContenidoB64 = Base64.encodeToString(
+                                        listaUsuarios.toString(2).getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
+                                JSONObject bodyPut = new JSONObject();
+                                bodyPut.put("message", "Vincular dispositivo " + usrInput);
+                                bodyPut.put("content", nuevoContenidoB64);
+                                bodyPut.put("sha", shaArchivo);
+
+                                HttpURLConnection putConn = (HttpURLConnection) new URL(apiUrl).openConnection();
+                                putConn.setConnectTimeout(7000);
+                                putConn.setReadTimeout(7000);
+                                putConn.setRequestMethod("PUT");
+                                putConn.setDoOutput(true);
+                                putConn.setRequestProperty("Accept", "application/vnd.github.v3+json");
+                                putConn.setRequestProperty("Authorization", "token " + tokenGh);
+                                putConn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+                                OutputStream os = putConn.getOutputStream();
+                                os.write(bodyPut.toString().getBytes(StandardCharsets.UTF_8));
+                                os.flush();
+                                os.close();
+                                putConn.getResponseCode();
+                            } catch (Exception ignored) {}
+                        }
+
+                        runOnUiThread(() -> {
+                            if (lblEstadoValidacionLic != null) lblEstadoValidacionLic.setVisibility(View.GONE);
+                            prefs.edit()
+                                    .putBoolean("sesion_cliente_recordada_v3", recordarChecked)
+                                    .putString("usr_licencia_activa_v3", usrInput)
+                                    .putString("clv_licencia_activa_v3", clvInput)
+                                    .putString("device_id_vinculado_v3", miDeviceId)
+                                    .apply();
+                            if (loginClienteOverlay != null) loginClienteOverlay.setVisibility(View.GONE);
+                            if (barraFlotante != null) barraFlotante.setVisibility(View.VISIBLE);
+                        });
+                        return;
+                    }
+                } catch (Exception ignored) {}
+            }
+
+            // 2. Respaldo local (por si aún no se ha creado licencias.json en GitHub)
+            if (!verificadoEnNube) {
+                runOnUiThread(() -> {
+                    if (lblEstadoValidacionLic != null) lblEstadoValidacionLic.setVisibility(View.GONE);
+                    if (esChequeoSilencioso) return;
+
+                    if (!usrInput.equalsIgnoreCase(LICENCIA_USUARIO_CLIENTE)) {
+                        Toast.makeText(MainActivity.this, "Usuario incorrecto", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    if (!clvInput.equals(LICENCIA_CLAVE_CLIENTE)) {
+                        Toast.makeText(MainActivity.this, "Contraseña incorrecta", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    if (!LICENCIA_DEVICE_ID_FIJO.equalsIgnoreCase("LIBRE")
+                            && !LICENCIA_DEVICE_ID_FIJO.equalsIgnoreCase(miDeviceId)) {
+                        mostrarAlertaCuentaDesactivada("Esta licencia pertenece a otro dispositivo (" + LICENCIA_DEVICE_ID_FIJO + ").");
+                        return;
+                    }
+
+                    prefs.edit()
+                            .putBoolean("sesion_cliente_recordada_v3", recordarChecked)
+                            .putString("usr_licencia_activa_v3", usrInput)
+                            .putString("clv_licencia_activa_v3", clvInput)
+                            .putString("device_id_vinculado_v3", miDeviceId)
+                            .apply();
+                    if (loginClienteOverlay != null) loginClienteOverlay.setVisibility(View.GONE);
+                    if (barraFlotante != null) barraFlotante.setVisibility(View.VISIBLE);
+                });
+            }
+        }).start();
+    }
+
     private LinearLayout construirOverlayLoginCliente() {
         final String miDeviceId = obtenerDeviceIdUnico();
-        boolean yaRecordado = prefs.getBoolean("cliente_licencia_recordada_" + LICENCIA_USUARIO_CLIENTE, false);
-        String deviceVinculado = prefs.getString("device_id_vinculado_" + LICENCIA_USUARIO_CLIENTE, "");
+        boolean yaRecordado = prefs.getBoolean("sesion_cliente_recordada_v3", false);
+        String deviceVinculado = prefs.getString("device_id_vinculado_v3", "");
 
         LinearLayout overlay = new LinearLayout(this);
         overlay.setOrientation(LinearLayout.VERTICAL);
@@ -715,7 +932,6 @@ public class MainActivity extends Activity {
 
         if (yaRecordado && (deviceVinculado.equals(miDeviceId) || deviceVinculado.equals("DESBLOQUEADO_MAESTRO"))) {
             overlay.setVisibility(View.GONE);
-            return overlay;
         }
 
         LinearLayout cardLogin = new LinearLayout(this);
@@ -730,15 +946,21 @@ public class MainActivity extends Activity {
         lpLogo.setMargins(0, 0, 0, dp(10));
         cardLogin.addView(logo, lpLogo);
 
+        // Título perfectamente centrado con el logo del Banco del Tesoro
         TextView tit = crearTexto("Acceso Vigilante BT", "#F8FAFC", 19f, true);
-        TextView sub = crearTexto("Ingresa el usuario y contraseña asignados a tu licencia.", "#93C5FD", 11.5f, false);
+        tit.setGravity(Gravity.CENTER);
+        cardLogin.addView(tit, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        TextView sub = crearTexto("Ingresa tu usuario y contraseña para continuar.", "#93C5FD", 11.5f, false);
         sub.setGravity(Gravity.CENTER);
         sub.setPadding(0, dp(4), 0, dp(14));
-        cardLogin.addView(tit);
-        cardLogin.addView(sub);
+        cardLogin.addView(sub, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        // Caja con el ID del Dispositivo (Candado Anti-Reventa)
+        // Caja con el ID del Dispositivo centrada
         TextView lblDev = crearTexto("ID de Dispositivo: " + miDeviceId + " (Toca para copiar)", "#38BDF8", 10.5f, true);
+        lblDev.setGravity(Gravity.CENTER);
         lblDev.setPadding(dp(12), dp(6), dp(12), dp(6));
         lblDev.setBackground(fondoRedondeadoConBorde("#0F172A", "#1E3A8A", 10, 1));
         lblDev.setOnClickListener(v -> {
@@ -753,93 +975,72 @@ public class MainActivity extends Activity {
         lpDev.setMargins(0, 0, 0, dp(14));
         cardLogin.addView(lblDev, lpDev);
 
+        // Campo "Usuario" con letra estilizada (13.5sp)
         final EditText edtUserLic = new EditText(this);
-        edtUserLic.setHint("Usuario de Licencia");
+        edtUserLic.setHint("Usuario");
+        edtUserLic.setTextSize(13.5f);
         edtUserLic.setHintTextColor(Color.parseColor("#64748B"));
         edtUserLic.setTextColor(Color.parseColor("#F8FAFC"));
         edtUserLic.setSingleLine(true);
         edtUserLic.setBackground(fondoRedondeadoConBorde("#0B0F19", "#334155", 10, 1));
-        edtUserLic.setPadding(dp(12), dp(10), dp(12), dp(10));
+        edtUserLic.setPadding(dp(12), dp(8), dp(12), dp(8));
         LinearLayout.LayoutParams lpInput = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(42));
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(40));
         lpInput.setMargins(0, 0, 0, dp(10));
         cardLogin.addView(edtUserLic, lpInput);
 
+        // Campo "Contraseña" con letra estilizada (13.5sp) que nunca se corta
         LinearLayout filaPassLic = new LinearLayout(this);
         filaPassLic.setOrientation(LinearLayout.HORIZONTAL);
+        filaPassLic.setGravity(Gravity.CENTER_VERTICAL);
+
         final EditText edtPassLic = new EditText(this);
-        edtPassLic.setHint("Contraseña de Licencia");
+        edtPassLic.setHint("Contraseña");
+        edtPassLic.setTextSize(13.5f);
         edtPassLic.setHintTextColor(Color.parseColor("#64748B"));
         edtPassLic.setTextColor(Color.parseColor("#F8FAFC"));
         edtPassLic.setSingleLine(true);
         edtPassLic.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         edtPassLic.setTransformationMethod(PasswordTransformationMethod.getInstance());
         edtPassLic.setBackground(fondoRedondeadoConBorde("#0B0F19", "#334155", 10, 1));
-        edtPassLic.setPadding(dp(12), dp(10), dp(12), dp(10));
+        edtPassLic.setPadding(dp(12), dp(8), dp(12), dp(8));
 
         final Button btnOjoLic = crearBotonConIcono("EYE_OFF", "", "#1E293B", "#F8FAFC", 12, null);
         btnOjoLic.setOnClickListener(v -> toggleCampoOjo(edtPassLic, btnOjoLic));
 
-        LinearLayout.LayoutParams lpEdtPass = new LinearLayout.LayoutParams(0, dp(42), 1f);
+        LinearLayout.LayoutParams lpEdtPass = new LinearLayout.LayoutParams(0, dp(40), 1f);
         lpEdtPass.setMargins(0, 0, dp(6), 0);
         filaPassLic.addView(edtPassLic, lpEdtPass);
-        filaPassLic.addView(btnOjoLic, new LinearLayout.LayoutParams(dp(42), dp(42)));
+        filaPassLic.addView(btnOjoLic, new LinearLayout.LayoutParams(dp(40), dp(40)));
         cardLogin.addView(filaPassLic, lpInput);
 
+        // Casilla "Recordar siempre"
         final CheckBox chkRecordar = new CheckBox(this);
-        chkRecordar.setText("Recordar siempre mi sesión en este teléfono");
+        chkRecordar.setText("Recordar siempre");
         chkRecordar.setTextColor(Color.parseColor("#E2E8F0"));
-        chkRecordar.setTextSize(11.5f);
+        chkRecordar.setTextSize(12f);
         chkRecordar.setChecked(true);
         LinearLayout.LayoutParams lpChk = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lpChk.setMargins(0, dp(2), 0, dp(14));
+        lpChk.setMargins(0, dp(2), 0, dp(10));
         cardLogin.addView(chkRecordar, lpChk);
 
-        Button btnEntrarLic = crearBotonConIcono("CHECK", "Entrar al Bot", "#2563EB", "#FFFFFF", 13, () -> {
+        lblEstadoValidacionLic = crearTexto("", "#38BDF8", 11f, true);
+        lblEstadoValidacionLic.setGravity(Gravity.CENTER);
+        lblEstadoValidacionLic.setVisibility(View.GONE);
+        lblEstadoValidacionLic.setPadding(0, 0, 0, dp(8));
+        cardLogin.addView(lblEstadoValidacionLic, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        // Botón "Iniciar sesión"
+        Button btnEntrarLic = crearBotonConIcono("CHECK", "Iniciar sesión", "#2563EB", "#FFFFFF", 13, () -> {
             String uIngresado = edtUserLic.getText().toString().trim();
             String pIngresada = edtPassLic.getText().toString().trim();
-
-            if (!uIngresado.equalsIgnoreCase(LICENCIA_USUARIO_CLIENTE)) {
-                Toast.makeText(this, "Usuario de licencia incorrecto", Toast.LENGTH_SHORT).show();
+            if (uIngresado.isEmpty() || pIngresada.isEmpty()) {
+                Toast.makeText(this, "Ingresa tu usuario y contraseña", Toast.LENGTH_SHORT).show();
                 return;
             }
-
-            // Si ingresa la Clave Maestra del Vendedor, autoriza este nuevo teléfono de inmediato
-            if (pIngresada.equals(CLAVE_MAESTRA_VENDEDOR)) {
-                prefs.edit()
-                        .putString("device_id_vinculado_" + LICENCIA_USUARIO_CLIENTE, "DESBLOQUEADO_MAESTRO")
-                        .putBoolean("cliente_licencia_recordada_" + LICENCIA_USUARIO_CLIENTE, chkRecordar.isChecked())
-                        .apply();
-                overlay.setVisibility(View.GONE);
-                barraFlotante.setVisibility(View.VISIBLE);
-                Toast.makeText(this, "Dispositivo autorizado con Clave Maestra", Toast.LENGTH_SHORT).show();
-                return;
-            }
-
-            if (!pIngresada.equals(LICENCIA_CLAVE_CLIENTE)) {
-                Toast.makeText(this, "Contraseña de licencia incorrecta", Toast.LENGTH_SHORT).show();
-                return;
-            }
-
-            // Verificación del Candado Anti-Reventa por Dispositivo
-            if (!LICENCIA_DEVICE_ID_FIJO.equalsIgnoreCase("LIBRE")
-                    && !LICENCIA_DEVICE_ID_FIJO.equalsIgnoreCase(miDeviceId)) {
-                new AlertDialog.Builder(this)
-                        .setTitle("Candado Anti-Reventa Activo")
-                        .setMessage("Esta licencia pertenece exclusivamente al dispositivo ID: " + LICENCIA_DEVICE_ID_FIJO + ".\n\nTu ID actual es: " + miDeviceId + ".\nSolicita autorización al vendedor si cambiaste de teléfono.")
-                        .setPositiveButton("Aceptar", null)
-                        .show();
-                return;
-            }
-
-            prefs.edit()
-                    .putString("device_id_vinculado_" + LICENCIA_USUARIO_CLIENTE, miDeviceId)
-                    .putBoolean("cliente_licencia_recordada_" + LICENCIA_USUARIO_CLIENTE, chkRecordar.isChecked())
-                    .apply();
-
-            overlay.setVisibility(View.GONE);
-            barraFlotante.setVisibility(View.VISIBLE);
+            validarCredencialesEnNubeOLocal(uIngresado, pIngresada, chkRecordar.isChecked(), false);
         });
         cardLogin.addView(btnEntrarLic, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(42)));
@@ -1610,7 +1811,6 @@ public class MainActivity extends Activity {
         filaBotonesGlobales.addView(btnDetenerTodas, lpBtnG);
         contenidoScrollCuentas.addView(filaBotonesGlobales, lpFilaGlob);
 
-        // Lista vertical de Tarjetas de cada cuenta
         contenedorTarjetasCuentas = new LinearLayout(this);
         contenedorTarjetasCuentas.setOrientation(LinearLayout.VERTICAL);
         contenidoScrollCuentas.addView(contenedorTarjetasCuentas, new LinearLayout.LayoutParams(
@@ -1699,7 +1899,6 @@ public class MainActivity extends Activity {
         lpScrollConsolaHist.setMargins(0, 0, 0, dp(16));
         vistaHistorialContainer.addView(scrollHistorialConsola, lpScrollConsolaHist);
 
-        // Bloque inferior de "Compras Exitosas con Comprobante, Tasa BCV y Código"
         lblTituloComprasExitosas = crearTexto("Compras Exitosas y Comprobantes", "#4ADE80", 16.5f, true);
         lblSubComprasExitosas = crearTexto("Registro automático con Tasa BCV y Código de Operación de la tabla.", "#A1A1AA", 11f, false);
         lblSubComprasExitosas.setPadding(0, dp(2), 0, dp(10));
@@ -2006,7 +2205,7 @@ public class MainActivity extends Activity {
         lpFloating.setMargins(0, 0, 0, dp(12));
         frameRoot.addView(barraFlotante, lpFloating);
 
-        // 5.5 VENTANA DE LOGIN DE LICENCIA DEL CLIENTE (CON CANDADO DE DISPOSITIVO)
+        // 5.5 VENTANA DE LOGIN DE LICENCIA DEL CLIENTE (CENTRADA Y ESTILIZADA)
         loginClienteOverlay = construirOverlayLoginCliente();
         frameRoot.addView(loginClienteOverlay);
 
@@ -2800,7 +2999,6 @@ public class MainActivity extends Activity {
                     actualizarBarraUrlTarjeta(sesion);
                 }
 
-                // Autenticación directa de respaldo por si el WebView solicita credenciales de IPRoyal
                 @Override
                 public void onReceivedHttpAuthRequest(WebView view, HttpAuthHandler handlerAuth, String host, String realm) {
                     if (handlerAuth != null) {
@@ -3936,6 +4134,19 @@ public class MainActivity extends Activity {
                 }
                 actualizarResumenYBotonesGlobales();
 
+                // Verificación periódica silenciosa en segundo plano por si desactivas al usuario desde tu PC
+                long ahoraCiclo = System.currentTimeMillis();
+                if (ahoraCiclo - ultimaVerificacionNubeMs > 30000) {
+                    ultimaVerificacionNubeMs = ahoraCiclo;
+                    if (loginClienteOverlay != null && loginClienteOverlay.getVisibility() != View.VISIBLE) {
+                        String uAct = prefs.getString("usr_licencia_activa_v3", "");
+                        String cAct = prefs.getString("clv_licencia_activa_v3", "");
+                        if (!uAct.isEmpty() && !cAct.isEmpty()) {
+                            validarCredencialesEnNubeOLocal(uAct, cAct, true, true);
+                        }
+                    }
+                }
+
                 boolean internetOk = hayInternetDisponible();
                 if (contarCuentasCorriendo() > 0) {
                     verificarTiemposDeSesionIndependientes(reg);
@@ -3954,11 +4165,6 @@ public class MainActivity extends Activity {
         }, 380);
     }
 
-    /**
-     * Incluye el Escudo Anti-Reinicio en Hora de Apertura:
-     * Si alguna cuenta detectó apertura (yaAvisoApertura) o está dentro del proceso de compra,
-     * congela el reinicio de sesión para nunca cerrar una cuenta mientras el mercado está abierto.
-     */
     private void verificarTiemposDeSesionIndependientes(ArrayList<SesionBot> reg) {
         long ahora = System.currentTimeMillis();
         long totalSeg = minutosRelogin * 60L;
@@ -4211,7 +4417,6 @@ public class MainActivity extends Activity {
 
         switch (s.estadoActual) {
 
-            // Enfriamiento exacto de 2 segundos en /lg tras el cambio de IP del Proxy
             case ENFRIANDO_CAMBIO_IP:
                 if (ahora - s.tiempoEstadoMs >= 2000) {
                     ultimoSlotActivoRed = s.slotIndex;
@@ -4430,7 +4635,6 @@ public class MainActivity extends Activity {
                     cambiarEstado(s, EstadoBot.ESPERANDO_FORM_INTENTO1);
                     return;
                 }
-                // Desfase humano anti-bloqueo por slot para que no choquen las 4 cuentas al mismo milisegundo
                 long esperaConJitter = (intervaloRefresco * 1000L) + (s.slotIndex * 220L);
                 if (paginaCompleta && (ahora - s.tiempoEstadoMs >= esperaConJitter)) {
                     s.tiempoEstadoMs = ahora;
@@ -4471,7 +4675,6 @@ public class MainActivity extends Activity {
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_FORM);
                     return;
                 }
-                // Si vuelve a salir "presentando inconvenientes" en el segundo intento, cierra sesión y rota la IP en /lg
                 if (hayInconv || (paginaCompleta && ahora - s.tiempoEstadoMs > 4500)) {
                     s.intentoLogout = 0;
                     s.detenerTrasCerrarSesion = false;
