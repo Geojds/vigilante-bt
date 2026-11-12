@@ -1314,7 +1314,7 @@ public class MainActivity extends Activity {
         colTxtTurbo.setOrientation(LinearLayout.VERTICAL);
         lblItemTurbo = crearTexto("", "#F4F4F5", 13.5f, true);
         ponerTituloTurboExperimental(lblItemTurbo, "#F4F4F5");
-        lblDescItemTurbo = crearTexto("Bloquea imágenes y banners pesados durante la intervención para acelerar compras y cierres de sesión.", "#A1A1AA", 10.5f, false);
+        lblDescItemTurbo = crearTexto("Oculta banners e imágenes pesadas durante la intervención para acelerar compras y cierres de sesión.", "#A1A1AA", 10.5f, false);
         lblDescItemTurbo.setPadding(0, dp(2), dp(8), 0);
         colTxtTurbo.addView(lblItemTurbo);
         colTxtTurbo.addView(lblDescItemTurbo);
@@ -1573,8 +1573,12 @@ public class MainActivity extends Activity {
                     ws.setLoadsImagesAutomatically(!modoTurboSinImagenes);
                     if (modoTurboSinImagenes) {
                         evaluarJS(s,
-                                "var imgs = document.querySelectorAll('img');" +
-                                "for(var i=0;i<imgs.length;i++){ imgs[i].style.display='none'; }", null);
+                                "var st = document.getElementById('__vbt_turbo_css');" +
+                                "if(!st){ st = document.createElement('style'); st.id='__vbt_turbo_css'; if(document.head) document.head.appendChild(st); }" +
+                                "if(st) st.innerHTML = 'img, svg:not(#fb), .carousel, .banner { opacity:0 !important; pointer-events:none !important; }';", null);
+                    } else {
+                        evaluarJS(s,
+                                "var st = document.getElementById('__vbt_turbo_css'); if(st) st.remove();", null);
                     }
                 } catch (Exception ignored) {}
             }
@@ -1780,10 +1784,6 @@ public class MainActivity extends Activity {
         navTxtAjustes.setTextColor(Color.parseColor(enAjustes ? "#FFFFFF" : txtInact));
     }
 
-    /**
-     * Zoom proporcional limpio (sin setInitialScale ni width=1080 que encogían la página).
-     * 100% muestra el tamaño normal completo del teléfono; 85%, 75% y 60% alejan suavemente.
-     */
     private void aplicarZoomWebView(final SesionBot s) {
         if (s == null || s.webViewOculto == null) return;
         final int zPct = s.zoomPorcentaje;
@@ -2220,7 +2220,10 @@ public class MainActivity extends Activity {
                     }
                     aplicarZoomWebView(sesion);
                     if (modoTurboSinImagenes) {
-                        evaluarJS(sesion, "var imgs=document.querySelectorAll('img');for(var i=0;i<imgs.length;i++){imgs[i].style.display='none';}", null);
+                        evaluarJS(sesion,
+                                "var st = document.getElementById('__vbt_turbo_css');" +
+                                "if(!st){ st = document.createElement('style'); st.id='__vbt_turbo_css'; if(document.head) document.head.appendChild(st); }" +
+                                "if(st) st.innerHTML = 'img, svg:not(#fb), .carousel, .banner { opacity:0 !important; pointer-events:none !important; }';", null);
                     }
                     actualizarBarraUrlTarjeta(sesion);
                 }
@@ -3109,11 +3112,8 @@ public class MainActivity extends Activity {
         s.corriendo = true;
         s.detenerTrasCerrarSesion = true;
         s.intentoLogout = 0;
-        if (s.webViewOculto != null) {
-            s.webViewOculto.stopLoading();
-        }
         cambiarEstado(s, EstadoBot.CERRANDO_SESION);
-        registrarPasoCuenta(s, "Cerrando sesión de forma prioritaria...");
+        registrarPasoCuenta(s, "Cerrando sesión...");
         ejecutarPasoMaquinaEstados(s);
     }
 
@@ -3267,7 +3267,7 @@ public class MainActivity extends Activity {
     }
 
     // =========================================================================================
-    // MÁQUINA DE ESTADOS CON DISPARO DIRECTO mod.add(1)/mod.save(), AUTO-AJUSTE Y PING EN VIVO
+    // MÁQUINA DE ESTADOS CON CIERRE DE SESIÓN CORREGIDO (SIN CLIC EN ÍCONO DE USUARIO)
     // =========================================================================================
     private void ejecutarPasoMaquinaEstados(final SesionBot sesion) {
         if (sesion == null || sesion.webViewOculto == null) return;
@@ -3323,7 +3323,7 @@ public class MainActivity extends Activity {
                 "  if (okUsd) window.__vbt_usd = fmtVE(sumUsd);" +
                 "}" +
                 "var optD = document.querySelector('#desde option[data-disponible]');" +
-                "var optH = document.querySelector('#hasta option[data-disponible]');" +
+                "var optH = rootOptH = document.querySelector('#hasta option[data-disponible]');" +
                 "if (optD) { var vd = parseMontoVE(optD.getAttribute('data-disponible')); if (!isNaN(vd)) { window.__vbt_bs = fmtVE(vd); window.__vbt_bs_num = vd; } }" +
                 "if (optH) { var vh = parseMontoVE(optH.getAttribute('data-disponible')); if (!isNaN(vh)) window.__vbt_usd = fmtVE(vh); }" +
                 "return JSON.stringify({" +
@@ -3841,13 +3841,23 @@ public class MainActivity extends Activity {
                     }
                     return;
                 }
+                // Si el cuadro "¿Deseas cerrar tu sesión?" está visible en pantalla, confirmar el botón "Sí" de inmediato
+                if (visModalLogout) {
+                    evaluarJS(s,
+                            "var bSi = document.querySelector('button.swal2-confirm') || Array.from(document.querySelectorAll('button, a')).find(el => el.innerText && (el.innerText.trim().toLowerCase() === 'si' || el.innerText.trim().toLowerCase() === 'sí'));" +
+                            "if (bSi && bSi.offsetWidth > 0 && !window.__vbt_si_clicked) {" +
+                            "  window.__vbt_si_clicked = true;" +
+                            "  bSi.click();" +
+                            "  setTimeout(function(){ window.__vbt_si_clicked = false; }, 1800);" +
+                            "}", null);
+                }
                 if (!s.accionEnCurso) {
                     s.accionEnCurso = true;
                     s.intentoLogout++;
                     s.tiempoEstadoMs = ahora;
                     registrarPasoCuenta(s, "Cerrando sesión intento " + s.intentoLogout);
                     ejecutarScriptLogoutDirecto(s);
-                } else if (ahora - s.tiempoEstadoMs > 7000) {
+                } else if (ahora - s.tiempoEstadoMs > 6500) {
                     cambiarEstado(s, EstadoBot.REINICIANDO_RED);
                     reiniciarConexionIndividual(s);
                 }
@@ -3861,72 +3871,85 @@ public class MainActivity extends Activity {
         }
     }
 
+    /**
+     * Cierre de sesión limpio y directo:
+     * 1. Cierra cualquier ventana emergente de "Usuario/Alerta" que esté estorbando.
+     * 2. Llama directamente a la función oficial Logout() o al botón rojo a[href='javascript:Logout()']
+     *    (sin tocar nunca el 4to ícono del menú superior que abría el modal de perfil de Usuario).
+     * 3. Un intervalo rápido de 60ms presiona automáticamente el botón verde "Sí" (swal2-confirm)
+     *    apenas aparece y permite que el navegador redirija limpiamente a /lg.
+     */
     private void ejecutarScriptLogoutDirecto(SesionBot s) {
         String csrfRespaldo = (s.csrfTokenGuardado != null) ? s.csrfTokenGuardado.replace("'", "") : "";
-        if (s.webViewOculto != null) {
-            try {
-                s.webViewOculto.stopLoading();
-            } catch (Exception ignored) {}
-        }
 
         String jsLogout =
                 "window.__vbt_logout_ok = false;" +
-                "try { if (window.stop) window.stop(); } catch(e){}" +
-                "(async function(){" +
-                "  var meta = document.querySelector('meta[name=\"csrf-token\"]');" +
-                "  var inTok = document.querySelector('input[name=\"_token\"]');" +
-                "  var tok = (meta && meta.getAttribute('content')) ? meta.getAttribute('content') : ((inTok && inTok.value) ? inTok.value : '" + csrfRespaldo + "');" +
-                "  var payload = tok ? ('_token=' + encodeURIComponent(tok)) : '';" +
+                "window.__vbt_si_clicked = false;" +
+                "(function(){" +
                 "  try {" +
-                "    if (navigator.sendBeacon && tok) {" +
-                "      var blob = new Blob([payload], {type: 'application/x-www-form-urlencoded; charset=UTF-8'});" +
-                "      navigator.sendBeacon('https://tesoroenlinea.bt.com.ve/logout', blob);" +
+                "    var cerrarModalesPrevios = document.querySelectorAll(\"button.close, .btn-close, [data-dismiss='modal']\");" +
+                "    for (var i = 0; i < cerrarModalesPrevios.length; i++) {" +
+                "      if (cerrarModalesPrevios[i].offsetWidth > 0) { try { cerrarModalesPrevios[i].click(); } catch(e){} }" +
                 "    }" +
                 "  } catch(e){}" +
-                "  try {" +
-                "    var btnSiExistente = document.querySelector('button.swal2-confirm') || Array.from(document.querySelectorAll('button, a')).find(el => el.innerText && (el.innerText.trim().toLowerCase() === 'si' || el.innerText.trim().toLowerCase() === 'sí'));" +
-                "    if (btnSiExistente && btnSiExistente.offsetWidth > 0) {" +
-                "      btnSiExistente.click();" +
-                "    } else {" +
-                "      if (typeof Logout === 'function') { try { Logout(); } catch(e){} }" +
-                "      var btnSalir = document.querySelector(\"a[href*='Logout' i], a[onclick*='Logout' i], header ul li:nth-child(4) a\");" +
-                "      if (btnSalir) { try { btnSalir.click(); } catch(e){} }" +
-                "      setTimeout(function(){" +
-                "        var si = document.querySelector('button.swal2-confirm') || Array.from(document.querySelectorAll('button, a')).find(el => el.innerText && (el.innerText.trim().toLowerCase() === 'si' || el.innerText.trim().toLowerCase() === 'sí' || el.innerText.trim().toLowerCase() === 'aceptar'));" +
-                "        if(si) si.click();" +
-                "      }, 220);" +
-                "    }" +
-                "  } catch(e){}" +
-                "  try {" +
-                "    var headers = {" +
-                "      'Accept': 'application/json, text/javascript, */*; q=0.01'," +
-                "      'X-Requested-With': 'XMLHttpRequest'," +
-                "      'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'" +
-                "    };" +
-                "    if (tok) headers['X-CSRF-TOKEN'] = tok;" +
-                "    var ctrl = new AbortController();" +
-                "    setTimeout(function(){ try { ctrl.abort(); } catch(e){} }, 6200);" +
-                "    var r = await fetch('https://tesoroenlinea.bt.com.ve/logout', {" +
-                "      method: 'POST'," +
-                "      headers: headers," +
-                "      body: payload," +
-                "      credentials: 'same-origin'," +
-                "      keepalive: true," +
-                "      signal: ctrl.signal" +
+                "  function clicarBotonSi() {" +
+                "    var bSi = document.querySelector('button.swal2-confirm') || Array.from(document.querySelectorAll('.swal2-actions button, button, a')).find(function(el){" +
+                "      if (!el || !el.innerText || el.offsetWidth <= 0) return false;" +
+                "      var t = el.innerText.trim().toLowerCase();" +
+                "      return t === 'si' || t === 'sí';" +
                 "    });" +
-                "    if (r.status === 200 || r.status === 302 || r.redirected) {" +
-                "      window.__vbt_logout_ok = true;" +
-                "      window.location.replace('https://tesoroenlinea.bt.com.ve/lg');" +
-                "      return;" +
+                "    if (bSi && bSi.offsetWidth > 0) {" +
+                "      window.__vbt_si_clicked = true;" +
+                "      bSi.click();" +
+                "      return true;" +
                 "    }" +
-                "  } catch(e){}" +
+                "    return false;" +
+                "  }" +
+                "  if (clicarBotonSi()) return;" +
+                "  var disparado = false;" +
+                "  if (typeof Logout === 'function') {" +
+                "    try { Logout(); disparado = true; } catch(e){}" +
+                "  }" +
+                "  if (!disparado) {" +
+                "    var btnSalir = document.querySelector(\"a[href='javascript:Logout()'], a[href*='Logout()'], a[onclick*='Logout']\");" +
+                "    if (btnSalir) { try { btnSalir.click(); disparado = true; } catch(e){} }" +
+                "  }" +
+                "  var intentos = 0;" +
+                "  var timerSi = setInterval(function(){" +
+                "    intentos++;" +
+                "    if (clicarBotonSi() || intentos > 25) {" +
+                "      clearInterval(timerSi);" +
+                "    }" +
+                "  }, 60);" +
+                "  setTimeout(function(){" +
+                "    if (window.location.pathname.indexOf('/lg') === -1) {" +
+                "      var meta = document.querySelector('meta[name=\"csrf-token\"]');" +
+                "      var inTok = document.querySelector('input[name=\"_token\"]');" +
+                "      var tok = (meta && meta.getAttribute('content')) ? meta.getAttribute('content') : ((inTok && inTok.value) ? inTok.value : '" + csrfRespaldo + "');" +
+                "      if (tok) {" +
+                "        fetch('https://tesoroenlinea.bt.com.ve/logout', {" +
+                "          method: 'POST'," +
+                "          headers: {" +
+                "            'Accept': 'application/json, text/javascript, */*; q=0.01'," +
+                "            'X-Requested-With': 'XMLHttpRequest'," +
+                "            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'," +
+                "            'X-CSRF-TOKEN': tok" +
+                "          }," +
+                "          body: '_token=' + encodeURIComponent(tok)," +
+                "          credentials: 'same-origin'" +
+                "        }).then(function(r){" +
+                "          if (r.status === 200 || r.status === 302 || r.redirected) {" +
+                "            window.__vbt_logout_ok = true;" +
+                "            window.location.replace('https://tesoroenlinea.bt.com.ve/lg');" +
+                "          }" +
+                "        }).catch(function(){});" +
+                "      }" +
+                "    }" +
+                "  }, 2400);" +
                 "})();";
         evaluarJS(s, jsLogout, null);
     }
 
-    /**
-     * Disparo directo de mod.add(1) por encima del clic visual en el botón Ordinaria.
-     */
     private void clicarOrdinariaJS(SesionBot s) {
         String jsOrd =
                 "var ejecutado = false;" +
