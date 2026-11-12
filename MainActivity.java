@@ -26,6 +26,7 @@ import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.NetworkInfo;
+import android.net.http.SslError;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -35,6 +36,7 @@ import android.os.Vibrator;
 import android.text.InputType;
 import android.text.SpannableString;
 import android.text.Spanned;
+import android.text.TextUtils;
 import android.text.method.HideReturnsTransformationMethod;
 import android.text.method.PasswordTransformationMethod;
 import android.text.style.ImageSpan;
@@ -46,6 +48,8 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.webkit.CookieManager;
+import android.webkit.RenderProcessGoneDetail;
+import android.webkit.SslErrorHandler;
 import android.webkit.ValueCallback;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -112,8 +116,9 @@ public class MainActivity extends Activity {
     private TextView lblItemVib, lblDescItemVib;
     private Button btnToggleOrd, btnToggleCompra, btnToggleVib;
 
-    // Contenedor de motores en tamaño real detrás del fondo
+    // Contenedor de motores en tamaño real detrás del fondo cuando la tarjeta está cerrada
     private LinearLayout filaMotoresSup, filaMotoresInf;
+    private final FrameLayout[] slotsFondoWebView = new FrameLayout[MAX_CUENTAS];
 
     // Cabecera, chips y controles
     private TextView badgeEstadoGlobal;
@@ -190,7 +195,10 @@ public class MainActivity extends Activity {
         boolean detenerTrasCerrarSesion = false;
         boolean sesionAbiertaEnServidor = false;
         boolean nombreOculto = false;
-        boolean consolaDesplegada = false;
+
+        // Control de despliegue del panel (Navegador + Consola) y memoria de consola
+        boolean panelDesplegado = false;
+        boolean mostrarConsolaEnPanel = true;
 
         String tipoDoc = "V";
         String cedula = "";
@@ -202,6 +210,7 @@ public class MainActivity extends Activity {
         String saldoUsd = "--";
         long ultimaActualizacionSaldoMs = 0;
         String ultimoPasoTexto = "Sin actividad todavía";
+        String urlActualTexto = URL_LOGIN;
 
         WebView webViewOculto;
 
@@ -211,10 +220,23 @@ public class MainActivity extends Activity {
         TextView lblSaldosCard;
         TextView lblSubtituloPasoCard;
         ImageView btnPlayCard, btnStopCard, btnLogoutCard, btnEyeCard, btnEditCard;
-        LinearLayout contenedorConsolaCard;
+
+        // Contenedor general desplegable al tocar al usuario
+        LinearLayout contenedorDesplegableCard;
+        TextView btnToggleConsolaMini;
+        FrameLayout frameConsolaInterna;
         ScrollView scrollConsolaCard;
         TextView txtConsolaCard;
         TextView btnLimpiarMiniCard;
+
+        // Controles del navegador integrado en la tarjeta
+        LinearLayout barraNavegadorCard;
+        ImageView btnNavBackCard;
+        ImageView btnNavReloadCard;
+        LinearLayout cajaUrlCard;
+        TextView txtUrlCard;
+        TextView badgeProgresoUrlCard;
+        FrameLayout marcoWebViewCard;
 
         EstadoBot estadoActual = EstadoBot.DETENIDO;
         int progresoWeb = 100;
@@ -289,6 +311,8 @@ public class MainActivity extends Activity {
 
         for (int i = 0; i < MAX_CUENTAS; i++) {
             sesiones[i] = new SesionBot(i);
+            // Recordar cómo dejó el usuario la consola (visible u oculta) la última vez
+            sesiones[i].mostrarConsolaEnPanel = prefs.getBoolean("mostrar_consola_slot_" + i, true);
         }
 
         construirInterfazCompleta();
@@ -344,43 +368,43 @@ public class MainActivity extends Activity {
     // PALETA DE COLORES POR TEMA (0 = OSCURO, 1 = AZUL ZAFIRO, 2 = CLARO)
     // =========================================================================================
     private String colFondoApp() {
-        if (temaActual == 1) return "#081226"; // Azul Zafiro Real profundo
-        if (temaActual == 2) return "#F1F5F9"; // Claro
-        return "#0F1115";                      // Oscuro
+        if (temaActual == 1) return "#081226";
+        if (temaActual == 2) return "#F1F5F9";
+        return "#0F1115";
     }
 
     private String colFondoTarjeta() {
-        if (temaActual == 1) return "#102142"; // Tarjeta Zafiro iluminada
-        if (temaActual == 2) return "#FFFFFF"; // Tarjeta Blanca
-        return "#18181B";                      // Tarjeta Oscura
+        if (temaActual == 1) return "#102142";
+        if (temaActual == 2) return "#FFFFFF";
+        return "#18181B";
     }
 
     private String colFondoSubPanel() {
-        if (temaActual == 1) return "#162C56"; // Sub-panel Zafiro
-        if (temaActual == 2) return "#F8FAFC"; // Sub-panel Claro
-        return "#202227";                      // Sub-panel Oscuro
+        if (temaActual == 1) return "#162C56";
+        if (temaActual == 2) return "#F8FAFC";
+        return "#202227";
     }
 
     private String colBordeTarjeta() {
-        if (temaActual == 1) return "#2563EB"; // Borde Zafiro Brillante
-        if (temaActual == 2) return "#CBD5E1"; // Borde Claro
-        return "#27272A";                      // Borde Oscuro
+        if (temaActual == 1) return "#2563EB";
+        if (temaActual == 2) return "#CBD5E1";
+        return "#27272A";
     }
 
     private String colAcentoTema() {
-        if (temaActual == 1) return "#4F46E5"; // Índigo / Zafiro Eléctrico
-        if (temaActual == 2) return "#0284C7"; // Azul Día
-        return "#0284C7";                      // Azul Vigilante
+        if (temaActual == 1) return "#4F46E5";
+        if (temaActual == 2) return "#0284C7";
+        return "#0284C7";
     }
 
     private String colBordeAcentoTema() {
-        if (temaActual == 1) return "#38BDF8"; // Cian Zafiro
+        if (temaActual == 1) return "#38BDF8";
         if (temaActual == 2) return "#0369A1";
         return "#38BDF8";
     }
 
     private String colBotonIniciarActivo() {
-        if (temaActual == 1) return "#0D9488"; // Verde Esmeralda-Zafiro
+        if (temaActual == 1) return "#0D9488";
         if (temaActual == 2) return "#16A34A";
         return "#16A34A";
     }
@@ -392,7 +416,7 @@ public class MainActivity extends Activity {
     }
 
     private String colBotonDetenerActivo() {
-        if (temaActual == 1) return "#E11D48"; // Carmesí Zafiro
+        if (temaActual == 1) return "#E11D48";
         if (temaActual == 2) return "#DC2626";
         return "#DC2626";
     }
@@ -456,9 +480,6 @@ public class MainActivity extends Activity {
         });
     }
 
-    /**
-     * Sonido cuando aparece el botón de Ordinaria.
-     */
     private void sonarAlertaOrdinaria() {
         vibrarDispositivo(false);
         if (!alertaOrdinariaActiva) return;
@@ -474,9 +495,6 @@ public class MainActivity extends Activity {
         }).start();
     }
 
-    /**
-     * Sonido "Cha-Ching!" de Caja Registradora (Suena 1 sola vez: resorte mecánico + monedas + campana).
-     */
     private void sonarAlertaCompraExitosa() {
         vibrarDispositivo(true);
         if (!alertaCompraActiva) return;
@@ -561,12 +579,10 @@ public class MainActivity extends Activity {
         String pillGreen = (tipoTema == 0) ? "#34D399" : (tipoTema == 1 ? "#38BDF8" : "#0284C7");
         String pillAccent = (tipoTema == 0) ? "#818CF8" : (tipoTema == 1 ? "#6366F1" : "#94A3B8");
 
-        // Fondo de la miniatura
         p.setStyle(Paint.Style.FILL);
         p.setColor(Color.parseColor(bgHex));
         c.drawRoundRect(new RectF(0, 0, w, h), dp(12), dp(12), p);
 
-        // Si es Azul Zafiro, dibuja puntos estrellados y destello zafiro como en la imagen de referencia
         if (tipoTema == 1) {
             Paint pGlow = new Paint(Paint.ANTI_ALIAS_FLAG);
             RadialGradient rg = new RadialGradient(w * 0.75f, h * 0.25f, w * 0.6f,
@@ -581,32 +597,26 @@ public class MainActivity extends Activity {
             c.drawCircle(w * 0.72f, h * 0.65f, dp(1), p);
         }
 
-        // Mini bloques internos simulando las barras y tarjetas de la app
         p.setColor(Color.parseColor(cardHex));
         c.drawRoundRect(new RectF(dp(8), dp(10), w - dp(8), h - dp(18)), dp(8), dp(8), p);
 
-        // Punto de estado superior izquierdo + barra de título
         p.setColor(Color.parseColor(pillAccent));
         c.drawCircle(dp(15), dp(19), dp(3), p);
         p.setColor(Color.parseColor(bar1Hex));
         c.drawRoundRect(new RectF(dp(22), dp(16), w * 0.62f, dp(22)), dp(3), dp(3), p);
 
-        // Segunda barra (verde/cian)
         p.setColor(Color.parseColor(pillGreen));
         c.drawRoundRect(new RectF(dp(13), dp(29), w * 0.56f, dp(36)), dp(3), dp(3), p);
 
-        // Tercera barra
         p.setColor(Color.parseColor(bar1Hex));
         p.setAlpha(180);
         c.drawRoundRect(new RectF(dp(13), dp(42), w * 0.50f, dp(47)), dp(2), dp(2), p);
         p.setAlpha(255);
 
-        // Cuarta barra con punto
         p.setColor(Color.parseColor(pillAccent));
         c.drawCircle(dp(15), dp(56), dp(2), p);
         c.drawRoundRect(new RectF(dp(20), dp(53), w * 0.54f, dp(59)), dp(3), dp(3), p);
 
-        // Puntos inferiores simulando la barra flotante
         for (int i = 0; i < 4; i++) {
             p.setColor(i == 0 ? Color.parseColor(pillGreen) : Color.parseColor(bar1Hex));
             p.setAlpha(i == 0 ? 255 : 100);
@@ -615,7 +625,6 @@ public class MainActivity extends Activity {
         }
         p.setAlpha(255);
 
-        // Círculo con check arriba a la derecha cuando el tema está seleccionado
         if (seleccionado) {
             float rChk = dp(8);
             float cx = w - dp(12);
@@ -834,6 +843,29 @@ public class MainActivity extends Activity {
                 c.drawPath(chk, p);
                 break;
             }
+            case "BACK": {
+                p.setStyle(Paint.Style.STROKE);
+                c.drawLine(s * 0.78f, s * 0.50f, s * 0.22f, s * 0.50f, p);
+                c.drawLine(s * 0.46f, s * 0.26f, s * 0.22f, s * 0.50f, p);
+                c.drawLine(s * 0.46f, s * 0.74f, s * 0.22f, s * 0.50f, p);
+                break;
+            }
+            case "RELOAD": {
+                p.setStyle(Paint.Style.STROKE);
+                RectF arcR = new RectF(s * 0.20f, s * 0.20f, s * 0.80f, s * 0.80f);
+                c.drawArc(arcR, 35f, 290f, false, p);
+                c.drawLine(s * 0.78f, s * 0.18f, s * 0.78f, s * 0.42f, p);
+                c.drawLine(s * 0.56f, s * 0.38f, s * 0.78f, s * 0.42f, p);
+                break;
+            }
+            case "LOCK": {
+                p.setStyle(Paint.Style.STROKE);
+                RectF body = new RectF(s * 0.24f, s * 0.46f, s * 0.76f, s * 0.84f);
+                c.drawRoundRect(body, s * 0.08f, s * 0.08f, p);
+                RectF shackle = new RectF(s * 0.33f, s * 0.20f, s * 0.67f, s * 0.54f);
+                c.drawArc(shackle, 180f, 180f, false, p);
+                break;
+            }
         }
 
         BitmapDrawable bd = new BitmapDrawable(getResources(), bmp);
@@ -901,7 +933,7 @@ public class MainActivity extends Activity {
         frameRoot.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        // Cuadrícula 2x2 de tamaño real detrás del fondo para que Android nunca pause los WebViews
+        // Cuadrícula 2x2 de tamaño real detrás del fondo cuando la cuenta tiene el navegador cerrado
         LinearLayout contenedorMotores2x2 = new LinearLayout(this);
         contenedorMotores2x2.setOrientation(LinearLayout.VERTICAL);
         filaMotoresSup = new LinearLayout(this);
@@ -922,7 +954,7 @@ public class MainActivity extends Activity {
         mainVertical.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        // 1. CABECERA SUPERIOR FIJA (El recuadro APAGADO solo se muestra en Cuentas)
+        // 1. CABECERA SUPERIOR FIJA
         LinearLayout topBar = new LinearLayout(this);
         topBar.setOrientation(LinearLayout.HORIZONTAL);
         topBar.setGravity(Gravity.CENTER_VERTICAL);
@@ -975,7 +1007,7 @@ public class MainActivity extends Activity {
         LinearLayout colTitCuentas = new LinearLayout(this);
         colTitCuentas.setOrientation(LinearLayout.VERTICAL);
         lblCuentasBig = crearTexto("Cuentas", "#F4F4F5", 21f, true);
-        lblCuentasSub = crearTexto("Toca cualquier cuenta para abrir o cerrar su consola en vivo.", "#A1A1AA", 11f, false);
+        lblCuentasSub = crearTexto("Toca cualquier cuenta para abrir su navegador y consola en vivo.", "#A1A1AA", 11f, false);
         colTitCuentas.addView(lblCuentasBig);
         colTitCuentas.addView(lblCuentasSub);
         filaHeaderCuentas.addView(colTitCuentas, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
@@ -1136,7 +1168,7 @@ public class MainActivity extends Activity {
         mainVertical.addView(vistaHistorialContainer, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        // 4. VISTA 3: "AJUSTES" (CON IMÁGENES DE EJEMPLO DE TEMA Y PANELES SEPARADOS GRANDES)
+        // 4. VISTA 3: "AJUSTES"
         vistaAjustesScroll = new ScrollView(this);
         vistaAjustesScroll.setFillViewport(true);
         vistaAjustesScroll.setVerticalScrollBarEnabled(false);
@@ -1152,7 +1184,6 @@ public class MainActivity extends Activity {
         contenidoAjustes.addView(lblAjustesBig);
         contenidoAjustes.addView(lblAjustesSub);
 
-        // Tarjeta 1: Apariencia con las 3 tarjetas de vista previa (Oscuro | Azul Zafiro | Claro)
         cardTemaAjustes = new LinearLayout(this);
         cardTemaAjustes.setOrientation(LinearLayout.VERTICAL);
         cardTemaAjustes.setPadding(dp(14), dp(14), dp(14), dp(14));
@@ -1170,7 +1201,6 @@ public class MainActivity extends Activity {
         LinearLayout filaTarjetasTema = new LinearLayout(this);
         filaTarjetasTema.setOrientation(LinearLayout.HORIZONTAL);
 
-        // Tarjeta Izquierda: Oscuro (0)
         cardPrevOscuro = new LinearLayout(this);
         cardPrevOscuro.setOrientation(LinearLayout.VERTICAL);
         cardPrevOscuro.setGravity(Gravity.CENTER_HORIZONTAL);
@@ -1184,7 +1214,6 @@ public class MainActivity extends Activity {
         cardPrevOscuro.addView(txtPrevOscuro);
         cardPrevOscuro.setOnClickListener(v -> cambiarTema(0));
 
-        // Tarjeta Medio: Azul Zafiro (1)
         cardPrevZafiro = new LinearLayout(this);
         cardPrevZafiro.setOrientation(LinearLayout.VERTICAL);
         cardPrevZafiro.setGravity(Gravity.CENTER_HORIZONTAL);
@@ -1198,7 +1227,6 @@ public class MainActivity extends Activity {
         cardPrevZafiro.addView(txtPrevZafiro);
         cardPrevZafiro.setOnClickListener(v -> cambiarTema(1));
 
-        // Tarjeta Derecha: Claro (2)
         cardPrevClaro = new LinearLayout(this);
         cardPrevClaro.setOrientation(LinearLayout.VERTICAL);
         cardPrevClaro.setGravity(Gravity.CENTER_HORIZONTAL);
@@ -1221,7 +1249,6 @@ public class MainActivity extends Activity {
         cardTemaAjustes.addView(filaTarjetasTema);
         contenidoAjustes.addView(cardTemaAjustes, lpCardAj);
 
-        // Tarjeta 2: "Alertas y Vibración" con paneles separados grandes
         cardAlertasAjustes = new LinearLayout(this);
         cardAlertasAjustes.setOrientation(LinearLayout.VERTICAL);
         cardAlertasAjustes.setPadding(dp(14), dp(14), dp(14), dp(14));
@@ -1237,7 +1264,6 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lpSubPanel.setMargins(0, 0, 0, dp(10));
 
-        // Panel Separado 1: Alerta de Ordinaria
         panelItemOrd = new LinearLayout(this);
         panelItemOrd.setOrientation(LinearLayout.HORIZONTAL);
         panelItemOrd.setGravity(Gravity.CENTER_VERTICAL);
@@ -1259,7 +1285,6 @@ public class MainActivity extends Activity {
         panelItemOrd.addView(btnToggleOrd, new LinearLayout.LayoutParams(dp(96), dp(34)));
         cardAlertasAjustes.addView(panelItemOrd, lpSubPanel);
 
-        // Panel Separado 2: Alerta Compra Exitosa
         panelItemCompra = new LinearLayout(this);
         panelItemCompra.setOrientation(LinearLayout.HORIZONTAL);
         panelItemCompra.setGravity(Gravity.CENTER_VERTICAL);
@@ -1281,7 +1306,6 @@ public class MainActivity extends Activity {
         panelItemCompra.addView(btnToggleCompra, new LinearLayout.LayoutParams(dp(96), dp(34)));
         cardAlertasAjustes.addView(panelItemCompra, lpSubPanel);
 
-        // Panel Separado 3: Vibración del Dispositivo
         panelItemVib = new LinearLayout(this);
         panelItemVib.setOrientation(LinearLayout.HORIZONTAL);
         panelItemVib.setGravity(Gravity.CENTER_VERTICAL);
@@ -1564,7 +1588,6 @@ public class MainActivity extends Activity {
         String txtPri = colTextoPrimario();
         String txtSec = colTextoSecundario();
 
-        // Estilo Oscuro (Izquierda)
         if (temaActual == 0) {
             cardPrevOscuro.setBackground(fondoRedondeadoConBorde("#1E1B4B", "#6366F1", 14, 2));
             txtPrevOscuro.setTextColor(Color.parseColor("#FFFFFF"));
@@ -1573,7 +1596,6 @@ public class MainActivity extends Activity {
             txtPrevOscuro.setTextColor(Color.parseColor(txtSec));
         }
 
-        // Estilo Azul Zafiro (Medio)
         if (temaActual == 1) {
             cardPrevZafiro.setBackground(fondoRedondeadoConBorde("#172554", "#38BDF8", 14, 2));
             txtPrevZafiro.setTextColor(Color.parseColor("#38BDF8"));
@@ -1582,7 +1604,6 @@ public class MainActivity extends Activity {
             txtPrevZafiro.setTextColor(Color.parseColor(txtSec));
         }
 
-        // Estilo Claro (Derecha)
         if (temaActual == 2) {
             cardPrevClaro.setBackground(fondoRedondeadoConBorde("#E0F2FE", "#0284C7", 14, 2));
             txtPrevClaro.setTextColor(Color.parseColor(txtPri));
@@ -1637,7 +1658,6 @@ public class MainActivity extends Activity {
         vistaHistorialContainer.setVisibility(nuevaPestana == 1 ? View.VISIBLE : View.GONE);
         vistaAjustesScroll.setVisibility(nuevaPestana == 2 ? View.VISIBLE : View.GONE);
 
-        // El recuadro de APAGADO / VIGILANDO solo se muestra en el panel de Cuentas
         if (badgeEstadoGlobal != null) {
             badgeEstadoGlobal.setVisibility(nuevaPestana == 0 ? View.VISIBLE : View.GONE);
         }
@@ -1671,10 +1691,75 @@ public class MainActivity extends Activity {
         navTxtAjustes.setTextColor(Color.parseColor(enAjustes ? "#FFFFFF" : txtInact));
     }
 
+    /**
+     * Sincroniza la vista del navegador y de la consola al abrir o cerrar la tarjeta del usuario.
+     * Recuerda automáticamente si el usuario dejó la consola visible u oculta.
+     */
+    private void sincronizarVistaPanelCuenta(SesionBot s) {
+        if (s == null || s.contenedorDesplegableCard == null) return;
+
+        s.contenedorDesplegableCard.setVisibility(s.panelDesplegado ? View.VISIBLE : View.GONE);
+
+        if (s.frameConsolaInterna != null) {
+            s.frameConsolaInterna.setVisibility(s.mostrarConsolaEnPanel ? View.VISIBLE : View.GONE);
+        }
+
+        if (s.btnToggleConsolaMini != null) {
+            s.btnToggleConsolaMini.setText(s.mostrarConsolaEnPanel ? "▲ Ocultar consola" : "▼ Mostrar consola");
+        }
+
+        if (s.webViewOculto != null) {
+            ViewGroup parentActual = (ViewGroup) s.webViewOculto.getParent();
+            FrameLayout destino = s.panelDesplegado ? s.marcoWebViewCard : slotsFondoWebView[s.slotIndex];
+            if (destino != null && parentActual != destino) {
+                if (parentActual != null) {
+                    parentActual.removeView(s.webViewOculto);
+                }
+                destino.addView(s.webViewOculto, new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            }
+        }
+
+        if (s.panelDesplegado && s.mostrarConsolaEnPanel && s.scrollConsolaCard != null) {
+            s.scrollConsolaCard.post(() -> s.scrollConsolaCard.fullScroll(View.FOCUS_DOWN));
+        }
+    }
+
+    private void actualizarBarraUrlTarjeta(SesionBot s) {
+        if (s == null) return;
+        runOnUiThread(() -> {
+            if (s.txtUrlCard != null) {
+                String u = (s.urlActualTexto == null || s.urlActualTexto.isEmpty()) ? URL_LOGIN : s.urlActualTexto;
+                ponerIconoYTexto(s.txtUrlCard, crearIconoVectorial("LOCK", colTextoSecundario(), 11), u);
+            }
+            if (s.badgeProgresoUrlCard != null) {
+                int p = Math.max(0, Math.min(100, s.progresoWeb));
+                s.badgeProgresoUrlCard.setText(p + "%");
+                if (p < 100) {
+                    s.badgeProgresoUrlCard.setTextColor(Color.parseColor("#38BDF8"));
+                    s.badgeProgresoUrlCard.setBackground(fondoRedondeado("#1E293B", 8));
+                } else {
+                    s.badgeProgresoUrlCard.setTextColor(Color.parseColor("#4ADE80"));
+                    s.badgeProgresoUrlCard.setBackground(fondoRedondeado("#14532D", 8));
+                }
+            }
+        });
+    }
+
     @SuppressLint({"SetJavaScriptEnabled", "ClickableViewAccessibility"})
     private void inicializarMotoresOcultos() {
         for (int i = 0; i < MAX_CUENTAS; i++) {
             final SesionBot sesion = sesiones[i];
+
+            FrameLayout slotFondo = new FrameLayout(this);
+            slotsFondoWebView[i] = slotFondo;
+            LinearLayout.LayoutParams lpSlotFondo = new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.MATCH_PARENT, 1f);
+            if (i < 2) {
+                filaMotoresSup.addView(slotFondo, lpSlotFondo);
+            } else {
+                filaMotoresInf.addView(slotFondo, lpSlotFondo);
+            }
 
             // 1. Construir Tarjeta de la Cuenta
             LinearLayout card = new LinearLayout(this);
@@ -1682,12 +1767,10 @@ public class MainActivity extends Activity {
             card.setPadding(dp(12), dp(10), dp(12), dp(10));
             card.setBackground(fondoRedondeadoConBorde("#18181B", "#27272A", 14, 1));
 
+            // Al tocar al usuario/tarjeta se abre o cierra el contenedor (Navegador + Consola según cómo lo dejó)
             card.setOnClickListener(v -> {
-                sesion.consolaDesplegada = !sesion.consolaDesplegada;
-                sesion.contenedorConsolaCard.setVisibility(sesion.consolaDesplegada ? View.VISIBLE : View.GONE);
-                if (sesion.consolaDesplegada && sesion.scrollConsolaCard != null) {
-                    sesion.scrollConsolaCard.post(() -> sesion.scrollConsolaCard.fullScroll(View.FOCUS_DOWN));
-                }
+                sesion.panelDesplegado = !sesion.panelDesplegado;
+                sincronizarVistaPanelCuenta(sesion);
             });
 
             // Fila 1: Usuario + Estado
@@ -1709,7 +1792,7 @@ public class MainActivity extends Activity {
             lblSaldos.setPadding(0, dp(4), 0, dp(2));
             card.addView(lblSaldos);
 
-            // Fila 3: Paso actual en vivo
+            // Fila 3: Paso actual en vivo (Siempre visible)
             TextView lblPaso = crearTexto("Sin actividad todavía", "#A1A1AA", 11.5f, false);
             lblPaso.setPadding(0, dp(1), 0, dp(6));
             card.addView(lblPaso);
@@ -1757,16 +1840,46 @@ public class MainActivity extends Activity {
             filaAcciones.addView(bEdit, lpAct);
             card.addView(filaAcciones);
 
-            // Fila 5: Consola desplegable interna
-            LinearLayout boxConsola = new LinearLayout(this);
-            boxConsola.setOrientation(LinearLayout.VERTICAL);
-            boxConsola.setVisibility(View.GONE);
-            boxConsola.setPadding(0, dp(8), 0, 0);
+            // Fila 5: CONTENEDOR DESPLEGABLE (Botoncito ocultar consola + Consola compacta + Navegador con barra URL)
+            LinearLayout boxDesplegable = new LinearLayout(this);
+            boxDesplegable.setOrientation(LinearLayout.VERTICAL);
+            boxDesplegable.setVisibility(View.GONE);
+            boxDesplegable.setPadding(0, dp(8), 0, 0);
+            boxDesplegable.setClickable(true);
 
-            FrameLayout frameConsolaInterna = new FrameLayout(this);
+            // 5.1 Barra superior con el botoncito pequeño para ocultar/mostrar la consola y recordarlo
+            LinearLayout filaCabeceraPanel = new LinearLayout(this);
+            filaCabeceraPanel.setOrientation(LinearLayout.HORIZONTAL);
+            filaCabeceraPanel.setGravity(Gravity.CENTER_VERTICAL);
+            filaCabeceraPanel.setPadding(0, 0, 0, dp(5));
+
+            TextView lblMiniTit = crearTexto("Vista en vivo", "#94A3B8", 10.5f, true);
+            filaCabeceraPanel.addView(lblMiniTit, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+            TextView btnToggleCon = new TextView(this);
+            btnToggleCon.setText(sesion.mostrarConsolaEnPanel ? "▲ Ocultar consola" : "▼ Mostrar consola");
+            btnToggleCon.setTextColor(Color.parseColor("#38BDF8"));
+            btnToggleCon.setTextSize(10f);
+            btnToggleCon.setTypeface(null, Typeface.BOLD);
+            btnToggleCon.setPadding(dp(9), dp(3), dp(9), dp(3));
+            btnToggleCon.setBackground(fondoRedondeadoConBorde("#1E293B", "#334155", 8, 1));
+            btnToggleCon.setOnClickListener(v -> {
+                sesion.mostrarConsolaEnPanel = !sesion.mostrarConsolaEnPanel;
+                prefs.edit().putBoolean("mostrar_consola_slot_" + sesion.slotIndex, sesion.mostrarConsolaEnPanel).apply();
+                sincronizarVistaPanelCuenta(sesion);
+            });
+            filaCabeceraPanel.addView(btnToggleCon);
+            boxDesplegable.addView(filaCabeceraPanel);
+
+            // 5.2 Consola compacta (85dp de alto para no ocupar tanto espacio)
+            FrameLayout frameCon = new FrameLayout(this);
+            LinearLayout.LayoutParams lpFrameCon = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(85));
+            lpFrameCon.setMargins(0, 0, 0, dp(7));
+
             ScrollView scrollCon = new ScrollView(this);
             scrollCon.setBackground(fondoRedondeadoConBorde("#0F1115", "#27272A", 10, 1));
-            scrollCon.setPadding(dp(10), dp(8), dp(10), dp(8));
+            scrollCon.setPadding(dp(10), dp(6), dp(10), dp(6));
 
             scrollCon.setOnTouchListener((v, event) -> {
                 v.getParent().requestDisallowInterceptTouchEvent(true);
@@ -1778,12 +1891,12 @@ public class MainActivity extends Activity {
 
             TextView txtCon = new TextView(this);
             txtCon.setTextColor(Color.parseColor("#E4E4E7"));
-            txtCon.setTextSize(10f);
+            txtCon.setTextSize(9.5f);
             txtCon.setTypeface(Typeface.MONOSPACE);
             scrollCon.addView(txtCon);
 
-            frameConsolaInterna.addView(scrollCon, new FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, dp(145)));
+            frameCon.addView(scrollCon, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
             TextView btnLimpiarMini = new TextView(this);
             btnLimpiarMini.setText("Limpiar");
@@ -1797,11 +1910,84 @@ public class MainActivity extends Activity {
             FrameLayout.LayoutParams lpLimp = new FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
                     Gravity.TOP | Gravity.END);
-            lpLimp.setMargins(0, dp(5), dp(6), 0);
-            frameConsolaInterna.addView(btnLimpiarMini, lpLimp);
+            lpLimp.setMargins(0, dp(4), dp(6), 0);
+            frameCon.addView(btnLimpiarMini, lpLimp);
 
-            boxConsola.addView(frameConsolaInterna);
-            card.addView(boxConsola);
+            boxDesplegable.addView(frameCon, lpFrameCon);
+
+            // 5.3 Barra de navegación (Botón Atrás ← | Botón Reiniciar ↻ | Recuadro de URL + %)
+            LinearLayout barraNav = new LinearLayout(this);
+            barraNav.setOrientation(LinearLayout.HORIZONTAL);
+            barraNav.setGravity(Gravity.CENTER_VERTICAL);
+            barraNav.setPadding(dp(6), dp(5), dp(6), dp(5));
+            barraNav.setBackground(fondoRedondeadoConBorde("#14161A", "#27272A", 10, 1));
+            LinearLayout.LayoutParams lpBarraNav = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lpBarraNav.setMargins(0, 0, 0, dp(6));
+
+            ImageView btnBack = new ImageView(this);
+            btnBack.setScaleType(ImageView.ScaleType.CENTER);
+            btnBack.setImageDrawable(crearIconoVectorial("BACK", "#E4E4E7", 15));
+            btnBack.setBackground(fondoRedondeado("#202227", 8));
+            btnBack.setOnClickListener(v -> {
+                if (sesion.webViewOculto != null) {
+                    if (sesion.webViewOculto.canGoBack()) {
+                        sesion.webViewOculto.goBack();
+                    } else {
+                        sesion.webViewOculto.loadUrl(URL_LOGIN);
+                    }
+                }
+            });
+
+            ImageView btnReload = new ImageView(this);
+            btnReload.setScaleType(ImageView.ScaleType.CENTER);
+            btnReload.setImageDrawable(crearIconoVectorial("RELOAD", "#E4E4E7", 15));
+            btnReload.setBackground(fondoRedondeado("#202227", 8));
+            btnReload.setOnClickListener(v -> {
+                if (sesion.webViewOculto != null) {
+                    String u = sesion.webViewOculto.getUrl();
+                    if (u == null || u.isEmpty()) {
+                        sesion.webViewOculto.loadUrl(URL_LOGIN);
+                    } else {
+                        sesion.webViewOculto.reload();
+                    }
+                }
+            });
+
+            LinearLayout.LayoutParams lpBtnNav = new LinearLayout.LayoutParams(dp(30), dp(28));
+            lpBtnNav.setMargins(0, 0, dp(5), 0);
+            barraNav.addView(btnBack, lpBtnNav);
+            barraNav.addView(btnReload, lpBtnNav);
+
+            LinearLayout cajaUrl = new LinearLayout(this);
+            cajaUrl.setOrientation(LinearLayout.HORIZONTAL);
+            cajaUrl.setGravity(Gravity.CENTER_VERTICAL);
+            cajaUrl.setPadding(dp(8), dp(4), dp(6), dp(4));
+            cajaUrl.setBackground(fondoRedondeadoConBorde("#0F1115", "#27272A", 14, 1));
+
+            TextView txtUrl = crearTexto("", "#E4E4E7", 10.5f, false);
+            txtUrl.setSingleLine(true);
+            txtUrl.setEllipsize(TextUtils.TruncateAt.END);
+            ponerIconoYTexto(txtUrl, crearIconoVectorial("LOCK", "#94A3B8", 11), URL_LOGIN);
+
+            TextView badgeProg = crearTexto("100%", "#4ADE80", 9.5f, true);
+            badgeProg.setPadding(dp(6), dp(2), dp(6), dp(2));
+            badgeProg.setBackground(fondoRedondeado("#14532D", 8));
+
+            cajaUrl.addView(txtUrl, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            cajaUrl.addView(badgeProg);
+            barraNav.addView(cajaUrl, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+            boxDesplegable.addView(barraNav, lpBarraNav);
+
+            // 5.4 Recuadro del Navegador Web en vivo (320dp de alto)
+            FrameLayout marcoWv = new FrameLayout(this);
+            marcoWv.setBackground(fondoRedondeadoConBorde("#0F1115", "#27272A", 10, 1));
+            marcoWv.setPadding(dp(2), dp(2), dp(2), dp(2));
+            boxDesplegable.addView(marcoWv, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(320)));
+
+            card.addView(boxDesplegable);
 
             sesion.cardView = card;
             sesion.lblUsuarioCard = lblUsr;
@@ -1813,15 +1999,35 @@ public class MainActivity extends Activity {
             sesion.btnLogoutCard = bLogoutStop;
             sesion.btnEyeCard = bEye;
             sesion.btnEditCard = bEdit;
-            sesion.contenedorConsolaCard = boxConsola;
+
+            sesion.contenedorDesplegableCard = boxDesplegable;
+            sesion.btnToggleConsolaMini = btnToggleCon;
+            sesion.frameConsolaInterna = frameCon;
             sesion.scrollConsolaCard = scrollCon;
             sesion.txtConsolaCard = txtCon;
             sesion.btnLimpiarMiniCard = btnLimpiarMini;
 
-            // 2. Motor WebView en tamaño real detrás del fondo
+            sesion.barraNavegadorCard = barraNav;
+            sesion.btnNavBackCard = btnBack;
+            sesion.btnNavReloadCard = btnReload;
+            sesion.cajaUrlCard = cajaUrl;
+            sesion.txtUrlCard = txtUrl;
+            sesion.badgeProgresoUrlCard = badgeProg;
+            sesion.marcoWebViewCard = marcoWv;
+
+            // 2. Motor WebView configurado para funcionar tanto en teléfonos como en Emuladores de PC
             WebView wv = new WebView(this);
             wv.setBackgroundColor(Color.parseColor("#18181B"));
             configurarPerfilAisladoWebView(wv, i);
+
+            // Permitir hacer scroll dentro del navegador sin que el ScrollView padre robe el gesto
+            wv.setOnTouchListener((v, event) -> {
+                v.getParent().requestDisallowInterceptTouchEvent(true);
+                if (event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL) {
+                    v.getParent().requestDisallowInterceptTouchEvent(false);
+                }
+                return false;
+            });
 
             WebSettings ws = wv.getSettings();
             ws.setJavaScriptEnabled(true);
@@ -1835,6 +2041,10 @@ public class MainActivity extends Activity {
             ws.setLoadsImagesAutomatically(true);
             ws.setBlockNetworkImage(false);
             ws.setBlockNetworkLoads(false);
+            ws.setCacheMode(WebSettings.LOAD_DEFAULT);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                ws.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+            }
             ws.setUserAgentString("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Slot/" + (i + 1));
 
             CookieManager cm = CookieManager.getInstance();
@@ -1846,6 +2056,11 @@ public class MainActivity extends Activity {
                 public void onProgressChanged(WebView view, int newProgress) {
                     sesion.progresoWeb = newProgress;
                     sesion.cargandoRed = (newProgress < 100);
+                    String currentU = view.getUrl();
+                    if (currentU != null && !currentU.isEmpty()) {
+                        sesion.urlActualTexto = currentU;
+                    }
+                    actualizarBarraUrlTarjeta(sesion);
                 }
             });
 
@@ -1854,6 +2069,10 @@ public class MainActivity extends Activity {
                 public void onPageStarted(WebView view, String url, Bitmap favicon) {
                     super.onPageStarted(view, url, favicon);
                     sesion.cargandoRed = true;
+                    if (url != null && !url.isEmpty()) {
+                        sesion.urlActualTexto = url;
+                    }
+                    actualizarBarraUrlTarjeta(sesion);
                 }
 
                 @Override
@@ -1861,6 +2080,19 @@ public class MainActivity extends Activity {
                     super.onPageFinished(view, url);
                     sesion.cargandoRed = false;
                     sesion.progresoWeb = 100;
+                    if (url != null && !url.isEmpty()) {
+                        sesion.urlActualTexto = url;
+                    }
+                    actualizarBarraUrlTarjeta(sesion);
+                }
+
+                // Solución clave para Emuladores de PC: aceptar certificados SSL intermedios del banco
+                @SuppressLint("WebViewClientOnReceivedSslError")
+                @Override
+                public void onReceivedSslError(WebView view, SslErrorHandler handlerSsl, SslError error) {
+                    if (handlerSsl != null) {
+                        handlerSsl.proceed();
+                    }
                 }
 
                 @Override
@@ -1868,27 +2100,20 @@ public class MainActivity extends Activity {
                     if (request != null && request.isForMainFrame()) {
                         sesion.cargandoRed = false;
                         sesion.progresoWeb = 100;
-                        view.stopLoading();
+                        actualizarBarraUrlTarjeta(sesion);
                     }
                 }
 
-                @SuppressWarnings("deprecation")
                 @Override
-                public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
-                    sesion.cargandoRed = false;
-                    sesion.progresoWeb = 100;
-                    view.stopLoading();
+                public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+                    return true;
                 }
             });
 
             sesion.webViewOculto = wv;
-            LinearLayout.LayoutParams lpWv = new LinearLayout.LayoutParams(
-                    0, ViewGroup.LayoutParams.MATCH_PARENT, 1f);
-            if (i < 2) {
-                filaMotoresSup.addView(wv, lpWv);
-            } else {
-                filaMotoresInf.addView(wv, lpWv);
-            }
+            slotFondo.addView(wv, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            sincronizarVistaPanelCuenta(sesion);
             wv.loadUrl(URL_LOGIN);
         }
     }
@@ -1953,6 +2178,7 @@ public class MainActivity extends Activity {
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             lpCard.setMargins(0, 0, 0, dp(9));
             contenedorTarjetasCuentas.addView(s.cardView, lpCard);
+            sincronizarVistaPanelCuenta(s);
             actualizarVisualTarjeta(s);
         }
 
@@ -1965,6 +2191,7 @@ public class MainActivity extends Activity {
         String bgCard = colFondoTarjeta();
         String bgSub = colFondoSubPanel();
         String borderCard = colBordeTarjeta();
+        String txtPri = colTextoPrimario();
         String txtSec = colTextoSecundario();
 
         Drawable dot = crearCirculoNeon(corriendo || s.compraCompletada, corriendo ? pulsoNeon : true, 11);
@@ -1975,7 +2202,6 @@ public class MainActivity extends Activity {
             s.lblUsuarioCard.setTextColor(Color.parseColor(txtSec));
         }
 
-        // Borde iluminado en Verde Neón brillante cuando completa la orden
         if (s.compraCompletada) {
             s.cardView.setBackground(fondoRedondeadoConBorde(temaActual == 2 ? "#DCFCE7" : "#0D2818", "#00FF66", 14, 2));
         } else if (corriendo) {
@@ -2006,7 +2232,7 @@ public class MainActivity extends Activity {
         s.lblSubtituloPasoCard.setText(s.ultimoPasoTexto);
         s.lblSubtituloPasoCard.setTextColor(Color.parseColor(
                 s.compraCompletada ? (temaActual == 2 ? "#15803D" : "#00FF66")
-                        : (corriendo ? colTextoPrimario() : txtSec)
+                        : (corriendo ? txtPri : txtSec)
         ));
 
         if (s.scrollConsolaCard != null) {
@@ -2016,7 +2242,34 @@ public class MainActivity extends Activity {
             s.txtConsolaCard.setTextColor(Color.parseColor(colTextoConsola()));
         }
 
-        // Colores de los 5 botones pequeños adaptados al tema actual
+        if (s.btnToggleConsolaMini != null) {
+            s.btnToggleConsolaMini.setText(s.mostrarConsolaEnPanel ? "▲ Ocultar consola" : "▼ Mostrar consola");
+            s.btnToggleConsolaMini.setTextColor(Color.parseColor(temaActual == 2 ? "#0284C7" : "#38BDF8"));
+            s.btnToggleConsolaMini.setBackground(fondoRedondeadoConBorde(bgSub, borderCard, 8, 1));
+        }
+
+        if (s.barraNavegadorCard != null) {
+            s.barraNavegadorCard.setBackground(fondoRedondeadoConBorde(bgSub, borderCard, 10, 1));
+        }
+        if (s.btnNavBackCard != null) {
+            s.btnNavBackCard.setBackground(fondoRedondeado(bgCard, 8));
+            s.btnNavBackCard.setImageDrawable(crearIconoVectorial("BACK", txtPri, 15));
+        }
+        if (s.btnNavReloadCard != null) {
+            s.btnNavReloadCard.setBackground(fondoRedondeado(bgCard, 8));
+            s.btnNavReloadCard.setImageDrawable(crearIconoVectorial("RELOAD", txtPri, 15));
+        }
+        if (s.cajaUrlCard != null) {
+            s.cajaUrlCard.setBackground(fondoRedondeadoConBorde(colFondoConsola(), borderCard, 14, 1));
+        }
+        if (s.txtUrlCard != null) {
+            s.txtUrlCard.setTextColor(Color.parseColor(txtPri));
+            ponerIconoYTexto(s.txtUrlCard, crearIconoVectorial("LOCK", txtSec, 11), s.urlActualTexto);
+        }
+        if (s.marcoWebViewCard != null) {
+            s.marcoWebViewCard.setBackground(fondoRedondeadoConBorde(colFondoConsola(), borderCard, 10, 1));
+        }
+
         String bgBtnPlay = temaActual == 1 ? "#134E4A" : (temaActual == 2 ? "#DCFCE7" : "#14532D");
         String fgBtnPlay = temaActual == 1 ? "#2DD4BF" : (temaActual == 2 ? "#15803D" : "#4ADE80");
         s.btnPlayCard.setBackground(fondoRedondeadoConBorde(bgBtnPlay, fgBtnPlay, 7, 1));
@@ -2042,7 +2295,7 @@ public class MainActivity extends Activity {
         s.btnEyeCard.setImageDrawable(crearIconoVectorial(s.nombreOculto ? "EYE_OFF" : "EYE", fgBtnEye, 12));
 
         String bgBtnEdit = bgSub;
-        String fgBtnEdit = colTextoPrimario();
+        String fgBtnEdit = txtPri;
         s.btnEditCard.setBackground(fondoRedondeadoConBorde(bgBtnEdit, borderCard, 7, 1));
         s.btnEditCard.setImageDrawable(crearIconoVectorial("EDIT", fgBtnEdit, 12));
     }
@@ -2225,7 +2478,7 @@ public class MainActivity extends Activity {
 
             if (s.txtConsolaCard != null && s.scrollConsolaCard != null) {
                 s.txtConsolaCard.append("[" + hora + "] " + mensajeClaro + "\n");
-                if (s.consolaDesplegada) {
+                if (s.panelDesplegado && s.mostrarConsolaEnPanel) {
                     s.scrollConsolaCard.post(() -> s.scrollConsolaCard.fullScroll(View.FOCUS_DOWN));
                 }
             }
@@ -2429,7 +2682,6 @@ public class MainActivity extends Activity {
         filaClv.addView(btnOjoClv, new LinearLayout.LayoutParams(dp(38), dp(38)));
         layout.addView(filaClv);
 
-        // RECUADRO DE MONTO A COMPRAR ("300" por defecto -> Al tocarlo pasa a "Monto personalizado")
         TextView lblTitMonto = crearTexto("Monto a comprar ($):", "#38BDF8", 11.5f, true);
         lblTitMonto.setPadding(0, dp(2), 0, dp(4));
         layout.addView(lblTitMonto);
@@ -2552,6 +2804,8 @@ public class MainActivity extends Activity {
         if (esEdicion) {
             Button btnBorrar = crearBotonConIcono("CLOSE", "Eliminar esta cuenta", "#450A0A", "#FCA5A5", 12, () -> {
                 pausarSesionSinCerrar(sesionEdit, false);
+                sesionEdit.panelDesplegado = false;
+                sincronizarVistaPanelCuenta(sesionEdit);
                 sesionEdit.registrada = false;
                 sesionEdit.usuario = "";
                 sesionEdit.cedula = "";
@@ -2661,10 +2915,6 @@ public class MainActivity extends Activity {
         lblReloginVal.setText(minutosRelogin + " min (--:--)");
     }
 
-    /**
-     * Activa inmediatamente la cuenta (cambiando su estado a CARGANDO_LOGIN desde el primer instante
-     * para que nunca se quede en DETENIDO) y continúa desde la pantalla donde esté o abre el login.
-     */
     private void iniciarSesionIndividual(final SesionBot s, int delayMs) {
         if (s == null || !s.registrada) return;
         s.corriendo = true;
