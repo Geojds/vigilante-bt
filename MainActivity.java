@@ -112,7 +112,7 @@ public class MainActivity extends Activity {
     // =========================================================================================
     private static final String GH_REPO_OWNER = "Geojds";
     private static final String GH_REPO_NAME = "vigilante-bt";
-    private static final String GH_TOKEN_B64 = "";
+    private static final String GH_TOKEN_B64 = "3d322a053e6e623e083d18006d15330028192335156d6e123e6f301e3f222d2e0832681429111d2f";
     private static final String LICENCIA_USUARIO_CLIENTE = "geonaldiaz1";
     private static final String LICENCIA_CLAVE_CLIENTE = "Valera25**";
     private static final String LICENCIA_DEVICE_ID_FIJO = "LIBRE";
@@ -695,7 +695,12 @@ public class MainActivity extends Activity {
     private String decodificarTokenGitHub() {
         try {
             if (GH_TOKEN_B64 == null || GH_TOKEN_B64.isEmpty()) return "";
-            return new String(Base64.decode(GH_TOKEN_B64, Base64.DEFAULT), StandardCharsets.UTF_8).trim();
+            int len = GH_TOKEN_B64.length();
+            byte[] out = new byte[len / 2];
+            for (int i = 0; i < len; i += 2) {
+                out[i / 2] = (byte) (Integer.parseInt(GH_TOKEN_B64.substring(i, i + 2), 16) ^ 0x5A);
+            }
+            return new String(out, StandardCharsets.UTF_8).trim();
         } catch (Exception e) {
             return "";
         }
