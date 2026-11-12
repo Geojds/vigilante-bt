@@ -3,6 +3,8 @@ package com.vigilantebt.app;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
@@ -33,15 +35,15 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
+import android.provider.Settings;
 import android.text.InputType;
 import android.text.SpannableString;
 import android.text.Spanned;
 import android.text.TextUtils;
 import android.text.method.HideReturnsTransformationMethod;
 import android.text.method.PasswordTransformationMethod;
-import android.text.style.ForegroundColorSpan;
 import android.text.style.ImageSpan;
-import android.text.style.RelativeSizeSpan;
+import android.util.Base64;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
@@ -50,15 +52,19 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.webkit.CookieManager;
+import android.webkit.HttpAuthHandler;
 import android.webkit.RenderProcessGoneDetail;
 import android.webkit.SslErrorHandler;
 import android.webkit.ValueCallback;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
+import android.webkit.WebStorage;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.webkit.WebViewDatabase;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
@@ -72,12 +78,21 @@ import android.widget.Toast;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.Iterator;
 import java.util.Locale;
+import java.util.concurrent.Executor;
 
 public class MainActivity extends Activity {
 
@@ -89,16 +104,46 @@ public class MainActivity extends Activity {
     private final int[] OPCIONES_MINUTOS = {1, 3, 5, 10, 15, 20, 30};
     private final int[] ESCALAS_ZOOM = {60, 75, 85, 100};
 
+    // =========================================================================================
+    // CREDENCIALES DE LICENCIA DEL CLIENTE (PERSONALIZABLES POR TU GENERADOR DE APK)
+    // =========================================================================================
+    private static final String LICENCIA_USUARIO_CLIENTE = "GEONAL";
+    private static final String LICENCIA_CLAVE_CLIENTE = "123456";
+    // Opcional: Si en el generador dejas "LIBRE", se vincula automáticamente al primer teléfono donde abran la cuenta.
+    // Si pones el ID del teléfono del cliente, solo abrirá en ese dispositivo exacto.
+    private static final String LICENCIA_DEVICE_ID_FIJO = "LIBRE";
+    private static final String CLAVE_MAESTRA_VENDEDOR = "MAESTRO777";
+
+    // =========================================================================================
+    // CREDENCIALES DE PROXY RESIDENCIAL IPROYAL (OFUSCADAS EN BASE64 ANTI-INSPECCIÓN)
+    // Host: geo.iproyal.com | Puerto: 12321 | User: ftNVsXfGVrFN3Pq3 | Pass: SPWd2zTzmz3M8KNj
+    // =========================================================================================
+    private static final String PRX_H_B64 = "Z2VvLmlwcm95YWwuY29t";
+    private static final int PRX_PORT = 12321;
+    private static final String PRX_U_B64 = "ZnROVndYZkdWckZOM1BxMw=="; // fallback seguro si se usa directo
+    private static final String PRX_USER_RAW = "ftNVsXfGVrFN3Pq3";
+    private static final String PRX_PASS_RAW = "SPWd2zTzmz3M8KNj";
+
+    private ServerSocket servidorPuenteLocal;
+    private int puertoPuenteLocal = 0;
+    private volatile int ultimoSlotActivoRed = 0;
+
     // Contenedores principales
     private FrameLayout frameRoot;
     private LinearLayout mainVertical;
     private ScrollView vistaCuentasScroll;
     private LinearLayout contenedorTarjetasCuentas;
+    private ScrollView vistaHistorialScroll;
     private LinearLayout vistaHistorialContainer;
     private LinearLayout barraFiltrosHistorial;
     private ScrollView scrollHistorialConsola;
     private TextView txtHistorialConsola;
+    private LinearLayout contenedorComprasExitosas;
+    private TextView lblTituloComprasExitosas, lblSubComprasExitosas;
     private ScrollView vistaAjustesScroll;
+
+    // Pantalla de bloqueo / Login de Licencia del Cliente
+    private LinearLayout loginClienteOverlay;
 
     // Tarjetas y textos adaptables al tema
     private TextView lblTituloApp, lblCuentasBig, lblCuentasSub;
@@ -112,13 +157,14 @@ public class MainActivity extends Activity {
     private ImageView imgPrevOscuro, imgPrevZafiro, imgPrevClaro;
     private TextView txtPrevOscuro, txtPrevZafiro, txtPrevClaro;
 
-    // Sub-paneles separados de Alertas, Vibración y Modo Turbo
-    private LinearLayout panelItemTurbo, panelItemOrd, panelItemCompra, panelItemVib;
+    // Sub-paneles separados de Modo Turbo, Proxy, Alertas y Vibración
+    private LinearLayout panelItemTurbo, panelItemProxy, panelItemOrd, panelItemCompra, panelItemVib;
     private TextView lblItemTurbo, lblDescItemTurbo;
+    private TextView lblItemProxy, lblDescItemProxy;
     private TextView lblItemOrd, lblDescItemOrd;
     private TextView lblItemCompra, lblDescItemCompra;
     private TextView lblItemVib, lblDescItemVib;
-    private Button btnToggleTurbo, btnToggleOrd, btnToggleCompra, btnToggleVib;
+    private Button btnToggleTurbo, btnToggleProxy, btnToggleOrd, btnToggleCompra, btnToggleVib;
 
     // Contenedor de motores en tamaño real detrás del fondo cuando la tarjeta está cerrada
     private LinearLayout filaMotoresSup, filaMotoresInf;
@@ -141,7 +187,9 @@ public class MainActivity extends Activity {
 
     // Ajustes guardados: 0 = Oscuro, 1 = Azul Zafiro, 2 = Claro
     private int temaActual = 0;
-    private boolean modoTurboSinImagenes = false;
+    // Modo Turbo activado por defecto de fábrica
+    private boolean modoTurboSinImagenes = true;
+    private boolean proxyRotativoActivo = true;
     private boolean alertaOrdinariaActiva = true;
     private boolean alertaCompraActiva = true;
     private boolean vibracionActiva = true;
@@ -155,6 +203,8 @@ public class MainActivity extends Activity {
     private ConnectivityManager.NetworkCallback networkCallback;
 
     private final ArrayList<EntradaLog> historialGlobalLogs = new ArrayList<>();
+    private final ArrayList<RegistroCompraExitosa> listaComprasExitosas = new ArrayList<>();
+    private final SecureRandom randomSesion = new SecureRandom();
 
     private static class EntradaLog {
         final int slotIndex;
@@ -170,8 +220,27 @@ public class MainActivity extends Activity {
         }
     }
 
+    private static class RegistroCompraExitosa {
+        final String usuario;
+        final String cedula;
+        final String fechaHora;
+        final String montoUsd;
+        final String tasaBcv;
+        final String codigoOperacion;
+
+        RegistroCompraExitosa(String usuario, String cedula, String fechaHora, String montoUsd, String tasaBcv, String codigoOperacion) {
+            this.usuario = usuario;
+            this.cedula = cedula;
+            this.fechaHora = fechaHora;
+            this.montoUsd = montoUsd;
+            this.tasaBcv = tasaBcv;
+            this.codigoOperacion = codigoOperacion;
+        }
+    }
+
     private enum EstadoBot {
         DETENIDO,
+        ENFRIANDO_CAMBIO_IP,
         CARGANDO_LOGIN,
         ESPERANDO_ESTABILIZAR_LOGIN,
         ENVIANDO_FASE1,
@@ -198,10 +267,10 @@ public class MainActivity extends Activity {
         boolean registrada = false;
         boolean corriendo = false;
         boolean detenerTrasCerrarSesion = false;
+        boolean rotarIpTrasCerrarSesion = false;
         boolean sesionAbiertaEnServidor = false;
         boolean nombreOculto = false;
 
-        // Control de despliegue del panel (Navegador + Consola), memoria de consola y zoom
         boolean panelDesplegado = false;
         boolean mostrarConsolaEnPanel = true;
         int zoomPorcentaje = 75;
@@ -212,6 +281,12 @@ public class MainActivity extends Activity {
         String contrasena = "";
         int montoCompra = 300;
         int ultimoMontoAjustado = 0;
+
+        // Control de sesión de Proxy Residencial IPRoyal Venezuela por cuenta
+        String idSesionProxy = "";
+        int contadorRotacionesIp = 0;
+        String ultimaTasaLeida = "--";
+        String ultimoCodigoOpLeido = "--";
 
         String saldoBs = "--";
         String saldoUsd = "--";
@@ -228,10 +303,10 @@ public class MainActivity extends Activity {
         TextView lblUsuarioCard;
         TextView badgeEstadoCard;
         TextView lblSaldosCard;
+        TextView lblProxyCard;
         TextView lblSubtituloPasoCard;
         ImageView btnPlayCard, btnStopCard, btnLogoutCard, btnEyeCard, btnEditCard;
 
-        // Contenedor general desplegable al tocar al usuario
         LinearLayout contenedorDesplegableCard;
         TextView btnToggleConsolaMini;
         FrameLayout frameConsolaInterna;
@@ -239,7 +314,6 @@ public class MainActivity extends Activity {
         TextView txtConsolaCard;
         TextView btnLimpiarMiniCard;
 
-        // Controles del navegador integrado en la tarjeta
         LinearLayout barraNavegadorCard;
         ImageView btnNavBackCard;
         ImageView btnNavReloadCard;
@@ -261,6 +335,7 @@ public class MainActivity extends Activity {
 
         SesionBot(int idx) {
             this.slotIndex = idx;
+            this.idSesionProxy = generarIdSesionProxyNuevo();
         }
 
         String nombreMostrado() {
@@ -277,12 +352,21 @@ public class MainActivity extends Activity {
 
         String textoSaldosMostrado() {
             String strOrden = (ultimoMontoAjustado > 0 && ultimoMontoAjustado != montoCompra)
-                    ? (ultimoMontoAjustado + "$ (Ajustado de " + montoCompra + "$)")
+                    ? (ultimoMontoAjustado + "$ (Ajustado)")
                     : (montoCompra + "$");
+            String strTasa = (!ultimaTasaLeida.equals("--")) ? ("  •  BCV: " + ultimaTasaLeida) : "";
             if (nombreOculto) {
-                return "Bs: ****   •   USD: ****   •   Orden: " + strOrden;
+                return "Bs: ****   •   USD: ****   •   Orden: " + strOrden + strTasa;
             }
-            return "Bs: " + saldoBs + "   •   USD: " + saldoUsd + "   •   Orden: " + strOrden;
+            return "Bs: " + saldoBs + "   •   USD: " + saldoUsd + "   •   Orden: " + strOrden + strTasa;
+        }
+
+        String textoEstadoProxyMostrado() {
+            if (!proxyRotativoActivo) {
+                return "🌐 Conexión Directa (Proxy desactivado)";
+            }
+            String idCorto = idSesionProxy.length() >= 6 ? idSesionProxy.substring(0, 6).toUpperCase() : idSesionProxy.toUpperCase();
+            return "🌐 IP Proxy VE Activa • Sesión #" + idCorto + " • Cambios IP: " + contadorRotacionesIp;
         }
 
         boolean estaCorriendo() {
@@ -315,10 +399,20 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+
+        // Protección Anti-Captura / Anti-Inspección de credenciales del Proxy desde PC
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+                WebView.setWebContentsDebuggingEnabled(false);
+            }
+        } catch (Exception ignored) {}
+
         prefs = getSharedPreferences("VigilanteBTPrefs", Context.MODE_PRIVATE);
 
         temaActual = prefs.getInt("tema_app_v2", 0);
-        modoTurboSinImagenes = prefs.getBoolean("modo_turbo_img", false);
+        // Modo Turbo viene ACTIVADO por defecto al instalar el APK
+        modoTurboSinImagenes = prefs.getBoolean("modo_turbo_default_on", true);
+        proxyRotativoActivo = prefs.getBoolean("proxy_iproyal_on", true);
         alertaOrdinariaActiva = prefs.getBoolean("alerta_ord", true);
         alertaCompraActiva = prefs.getBoolean("alerta_compra", true);
         vibracionActiva = prefs.getBoolean("vibracion_app", true);
@@ -331,16 +425,25 @@ public class MainActivity extends Activity {
             sesiones[i].zoomPorcentaje = zGuardado;
         }
 
+        iniciarPuenteProxyLocalIPRoyal();
         construirInterfazCompleta();
         inicializarMotoresOcultos();
+        aplicarConfiguracionProxyGlobal();
         registrarMonitorPasivoRed();
         cargarCuentasGuardadas();
+        cargarComprasExitosasGuardadas();
         aplicarTemaVisual();
         iniciarCicloReloj();
     }
 
     @Override
     protected void onDestroy() {
+        try {
+            if (servidorPuenteLocal != null && !servidorPuenteLocal.isClosed()) {
+                servidorPuenteLocal.close();
+            }
+        } catch (Exception ignored) {}
+
         try {
             ConnectivityManager cmNet = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
             if (cmNet != null && networkCallback != null) {
@@ -357,6 +460,393 @@ public class MainActivity extends Activity {
             }
         } catch (Exception ignored) {}
         super.onDestroy();
+    }
+
+    // =========================================================================================
+    // MOTOR DE PROXY RESIDENCIAL IPROYAL VENEZUELA (PUENTE LOCAL + ROTACIÓN DE IP POR SESIÓN)
+    // =========================================================================================
+    private String generarIdSesionProxyNuevo() {
+        String chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+        StringBuilder sb = new StringBuilder(8);
+        for (int i = 0; i < 8; i++) {
+            sb.append(chars.charAt(randomSesion.nextInt(chars.length())));
+        }
+        return sb.toString();
+    }
+
+    private String obtenerHostProxyIPRoyal() {
+        try {
+            return new String(Base64.decode(PRX_H_B64, Base64.DEFAULT), StandardCharsets.UTF_8).trim();
+        } catch (Exception e) {
+            return "geo.iproyal.com";
+        }
+    }
+
+    private String construirPasswordProxyVenezuela(SesionBot s) {
+        String sesId = (s != null && s.idSesionProxy != null && !s.idSesionProxy.isEmpty())
+                ? s.idSesionProxy
+                : "ve000001";
+        return PRX_PASS_RAW + "_country-ve_session-" + sesId + "_lifetime-15m";
+    }
+
+    private void rotarIpProxyParaCuenta(final SesionBot s, String motivo) {
+        if (s == null) return;
+        s.idSesionProxy = generarIdSesionProxyNuevo();
+        s.contadorRotacionesIp++;
+        ultimoSlotActivoRed = s.slotIndex;
+
+        // Limpieza profunda de XSRF-TOKEN, cookies de sesión, caché de autenticación y sessionStorage
+        runOnUiThread(() -> {
+            try {
+                CookieManager cm = CookieManager.getInstance();
+                cm.removeSessionCookies(null);
+                cm.removeAllCookies(null);
+                cm.flush();
+            } catch (Exception ignored) {}
+
+            try {
+                WebStorage.getInstance().deleteAllData();
+            } catch (Exception ignored) {}
+
+            try {
+                WebViewDatabase.getInstance(MainActivity.this).clearHttpAuthUsernamePassword();
+            } catch (Exception ignored) {}
+
+            if (s.webViewOculto != null) {
+                try {
+                    s.webViewOculto.clearCache(true);
+                    s.webViewOculto.clearHistory();
+                    evaluarJS(s,
+                            "try { window.sessionStorage.clear(); } catch(e){}" +
+                            "try { window.localStorage.clear(); } catch(e){}" +
+                            "try { document.cookie.split(';').forEach(function(c) { document.cookie = c.replace(/^ +/, '').replace(/=.*/, '=;expires=' + new Date().toUTCString() + ';path=/'); }); } catch(e){}",
+                            null);
+                } catch (Exception ignored) {}
+            }
+            actualizarVisualTarjeta(s);
+        });
+
+        String idCorto = s.idSesionProxy.substring(0, 6).toUpperCase();
+        registrarPasoCuenta(s, "Cambio de IP completado (" + motivo + ") -> Nueva Sesión VE #" + idCorto);
+    }
+
+    /**
+     * Levanta un túnel local en 127.0.0.1 que inyecta automáticamente la cabecera
+     * Proxy-Authorization de IPRoyal Venezuela en cada túnel HTTPS CONNECT del WebView.
+     */
+    private void iniciarPuenteProxyLocalIPRoyal() {
+        new Thread(() -> {
+            try {
+                servidorPuenteLocal = new ServerSocket(0);
+                puertoPuenteLocal = servidorPuenteLocal.getLocalPort();
+                runOnUiThread(this::aplicarConfiguracionProxyGlobal);
+
+                while (!servidorPuenteLocal.isClosed()) {
+                    final Socket cliente = servidorPuenteLocal.accept();
+                    new Thread(() -> manejarConexionPuenteProxy(cliente)).start();
+                }
+            } catch (Exception ignored) {}
+        }).start();
+    }
+
+    private void manejarConexionPuenteProxy(Socket clienteLocal) {
+        Socket remotoIPRoyal = null;
+        try {
+            clienteLocal.setSoTimeout(15000);
+            InputStream inCliente = clienteLocal.getInputStream();
+            OutputStream outCliente = clienteLocal.getOutputStream();
+
+            StringBuilder reqHeader = new StringBuilder();
+            int b;
+            while ((b = inCliente.read()) != -1) {
+                reqHeader.append((char) b);
+                int len = reqHeader.length();
+                if (len >= 4 && reqHeader.substring(len - 4).equals("\r\n\r\n")) {
+                    break;
+                }
+                if (len > 8192) break;
+            }
+
+            if (reqHeader.length() == 0) {
+                clienteLocal.close();
+                return;
+            }
+
+            int idxSlot = Math.max(0, Math.min(MAX_CUENTAS - 1, ultimoSlotActivoRed));
+            SesionBot sesionRef = sesiones[idxSlot];
+            String authRaw = PRX_USER_RAW + ":" + construirPasswordProxyVenezuela(sesionRef);
+            String authB64 = Base64.encodeToString(authRaw.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
+
+            String rawStr = reqHeader.toString();
+            int finPrimeraLinea = rawStr.indexOf("\r\n");
+            String reqModificada;
+            if (finPrimeraLinea != -1) {
+                reqModificada = rawStr.substring(0, finPrimeraLinea + 2)
+                        + "Proxy-Authorization: Basic " + authB64 + "\r\n"
+                        + "Proxy-Connection: Keep-Alive\r\n"
+                        + rawStr.substring(finPrimeraLinea + 2);
+            } else {
+                reqModificada = rawStr;
+            }
+
+            remotoIPRoyal = new Socket();
+            remotoIPRoyal.connect(new InetSocketAddress(obtenerHostProxyIPRoyal(), PRX_PORT), 12000);
+            remotoIPRoyal.setSoTimeout(20000);
+
+            final InputStream inRemoto = remotoIPRoyal.getInputStream();
+            final OutputStream outRemoto = remotoIPRoyal.getOutputStream();
+
+            outRemoto.write(reqModificada.getBytes(StandardCharsets.ISO_8859_1));
+            outRemoto.flush();
+
+            final Socket sockCliFinal = clienteLocal;
+            final Socket sockRemFinal = remotoIPRoyal;
+
+            Thread t1 = new Thread(() -> copiarFlujoSocket(inCliente, outRemoto, sockCliFinal, sockRemFinal));
+            Thread t2 = new Thread(() -> copiarFlujoSocket(inRemoto, outCliente, sockCliFinal, sockRemFinal));
+            t1.start();
+            t2.start();
+            t1.join();
+            t2.join();
+        } catch (Exception e) {
+            try { if (clienteLocal != null) clienteLocal.close(); } catch (Exception ignored) {}
+            try { if (remotoIPRoyal != null) remotoIPRoyal.close(); } catch (Exception ignored) {}
+        }
+    }
+
+    private void copiarFlujoSocket(InputStream in, OutputStream out, Socket s1, Socket s2) {
+        try {
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) != -1) {
+                out.write(buf, 0, n);
+                out.flush();
+            }
+        } catch (Exception ignored) {
+        } finally {
+            try { s1.close(); } catch (Exception ignored) {}
+            try { s2.close(); } catch (Exception ignored) {}
+        }
+    }
+
+    private void aplicarConfiguracionProxyGlobal() {
+        String hostFinal = (puertoPuenteLocal > 0) ? "127.0.0.1" : obtenerHostProxyIPRoyal();
+        int portFinal = (puertoPuenteLocal > 0) ? puertoPuenteLocal : PRX_PORT;
+
+        if (!proxyRotativoActivo) {
+            System.clearProperty("http.proxyHost");
+            System.clearProperty("http.proxyPort");
+            System.clearProperty("https.proxyHost");
+            System.clearProperty("https.proxyPort");
+            limpiarProxyControllerAndroidX();
+            return;
+        }
+
+        System.setProperty("http.proxyHost", hostFinal);
+        System.setProperty("http.proxyPort", String.valueOf(portFinal));
+        System.setProperty("https.proxyHost", hostFinal);
+        System.setProperty("https.proxyPort", String.valueOf(portFinal));
+
+        try {
+            Class<?> featureClass = Class.forName("androidx.webkit.WebViewFeature");
+            Method isSupported = featureClass.getMethod("isFeatureSupported", String.class);
+            Boolean ok = (Boolean) isSupported.invoke(null, "PROXY_OVERRIDE");
+            if (ok != null && ok) {
+                Class<?> builderClass = Class.forName("androidx.webkit.ProxyConfig$Builder");
+                Object builder = builderClass.getDeclaredConstructor().newInstance();
+                Method addProxyRule = builderClass.getMethod("addProxyRule", String.class);
+                addProxyRule.invoke(builder, hostFinal + ":" + portFinal);
+                Method buildMethod = builderClass.getMethod("build");
+                Object proxyConfig = buildMethod.invoke(builder);
+
+                Class<?> controllerClass = Class.forName("androidx.webkit.ProxyController");
+                Method getInstance = controllerClass.getMethod("getInstance");
+                Object controller = getInstance.invoke(null);
+                Class<?> proxyConfigClass = Class.forName("androidx.webkit.ProxyConfig");
+                Method setProxyOverride = controllerClass.getMethod("setProxyOverride", proxyConfigClass, Executor.class, Runnable.class);
+                setProxyOverride.invoke(controller, proxyConfig, (Executor) Runnable::run, (Runnable) () -> {});
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private void limpiarProxyControllerAndroidX() {
+        try {
+            Class<?> featureClass = Class.forName("androidx.webkit.WebViewFeature");
+            Method isSupported = featureClass.getMethod("isFeatureSupported", String.class);
+            Boolean ok = (Boolean) isSupported.invoke(null, "PROXY_OVERRIDE");
+            if (ok != null && ok) {
+                Class<?> controllerClass = Class.forName("androidx.webkit.ProxyController");
+                Method getInstance = controllerClass.getMethod("getInstance");
+                Object controller = getInstance.invoke(null);
+                Method clearProxy = controllerClass.getMethod("clearProxyOverride", Executor.class, Runnable.class);
+                clearProxy.invoke(controller, (Executor) Runnable::run, (Runnable) () -> {});
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    // =========================================================================================
+    // CANDADO ANTI-REVENTA POR DISPOSITIVO (DEVICE ID) Y VENTANA DE LOGIN DEL CLIENTE
+    // =========================================================================================
+    @SuppressLint("HardwareIds")
+    private String obtenerDeviceIdUnico() {
+        try {
+            String rawId = Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID);
+            if (rawId != null && rawId.length() >= 6) {
+                return rawId.toUpperCase(Locale.ROOT);
+            }
+        } catch (Exception ignored) {}
+        return "VBT-" + Build.BOARD.toUpperCase(Locale.ROOT);
+    }
+
+    private LinearLayout construirOverlayLoginCliente() {
+        final String miDeviceId = obtenerDeviceIdUnico();
+        boolean yaRecordado = prefs.getBoolean("cliente_licencia_recordada_" + LICENCIA_USUARIO_CLIENTE, false);
+        String deviceVinculado = prefs.getString("device_id_vinculado_" + LICENCIA_USUARIO_CLIENTE, "");
+
+        LinearLayout overlay = new LinearLayout(this);
+        overlay.setOrientation(LinearLayout.VERTICAL);
+        overlay.setGravity(Gravity.CENTER);
+        overlay.setBackgroundColor(Color.parseColor("#0B0F19"));
+        overlay.setPadding(dp(24), dp(24), dp(24), dp(24));
+        overlay.setClickable(true);
+        overlay.setElevation(dp(90));
+        overlay.setLayoutParams(new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        if (yaRecordado && (deviceVinculado.equals(miDeviceId) || deviceVinculado.equals("DESBLOQUEADO_MAESTRO"))) {
+            overlay.setVisibility(View.GONE);
+            return overlay;
+        }
+
+        LinearLayout cardLogin = new LinearLayout(this);
+        cardLogin.setOrientation(LinearLayout.VERTICAL);
+        cardLogin.setGravity(Gravity.CENTER_HORIZONTAL);
+        cardLogin.setPadding(dp(20), dp(22), dp(20), dp(20));
+        cardLogin.setBackground(fondoRedondeadoConBorde("#141C2F", "#2563EB", 18, 1));
+
+        ImageView logo = new ImageView(this);
+        logo.setImageBitmap(crearLogoTransparenteBT());
+        LinearLayout.LayoutParams lpLogo = new LinearLayout.LayoutParams(dp(54), dp(54));
+        lpLogo.setMargins(0, 0, 0, dp(10));
+        cardLogin.addView(logo, lpLogo);
+
+        TextView tit = crearTexto("Acceso Vigilante BT", "#F8FAFC", 19f, true);
+        TextView sub = crearTexto("Ingresa el usuario y contraseña asignados a tu licencia.", "#93C5FD", 11.5f, false);
+        sub.setGravity(Gravity.CENTER);
+        sub.setPadding(0, dp(4), 0, dp(14));
+        cardLogin.addView(tit);
+        cardLogin.addView(sub);
+
+        // Caja con el ID del Dispositivo (Candado Anti-Reventa)
+        TextView lblDev = crearTexto("ID de Dispositivo: " + miDeviceId + " (Toca para copiar)", "#38BDF8", 10.5f, true);
+        lblDev.setPadding(dp(12), dp(6), dp(12), dp(6));
+        lblDev.setBackground(fondoRedondeadoConBorde("#0F172A", "#1E3A8A", 10, 1));
+        lblDev.setOnClickListener(v -> {
+            ClipboardManager cb = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+            if (cb != null) {
+                cb.setPrimaryClip(ClipData.newPlainText("ID Dispositivo", miDeviceId));
+                Toast.makeText(this, "ID de Dispositivo copiado", Toast.LENGTH_SHORT).show();
+            }
+        });
+        LinearLayout.LayoutParams lpDev = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lpDev.setMargins(0, 0, 0, dp(14));
+        cardLogin.addView(lblDev, lpDev);
+
+        final EditText edtUserLic = new EditText(this);
+        edtUserLic.setHint("Usuario de Licencia");
+        edtUserLic.setHintTextColor(Color.parseColor("#64748B"));
+        edtUserLic.setTextColor(Color.parseColor("#F8FAFC"));
+        edtUserLic.setSingleLine(true);
+        edtUserLic.setBackground(fondoRedondeadoConBorde("#0B0F19", "#334155", 10, 1));
+        edtUserLic.setPadding(dp(12), dp(10), dp(12), dp(10));
+        LinearLayout.LayoutParams lpInput = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(42));
+        lpInput.setMargins(0, 0, 0, dp(10));
+        cardLogin.addView(edtUserLic, lpInput);
+
+        LinearLayout filaPassLic = new LinearLayout(this);
+        filaPassLic.setOrientation(LinearLayout.HORIZONTAL);
+        final EditText edtPassLic = new EditText(this);
+        edtPassLic.setHint("Contraseña de Licencia");
+        edtPassLic.setHintTextColor(Color.parseColor("#64748B"));
+        edtPassLic.setTextColor(Color.parseColor("#F8FAFC"));
+        edtPassLic.setSingleLine(true);
+        edtPassLic.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        edtPassLic.setTransformationMethod(PasswordTransformationMethod.getInstance());
+        edtPassLic.setBackground(fondoRedondeadoConBorde("#0B0F19", "#334155", 10, 1));
+        edtPassLic.setPadding(dp(12), dp(10), dp(12), dp(10));
+
+        final Button btnOjoLic = crearBotonConIcono("EYE_OFF", "", "#1E293B", "#F8FAFC", 12, null);
+        btnOjoLic.setOnClickListener(v -> toggleCampoOjo(edtPassLic, btnOjoLic));
+
+        LinearLayout.LayoutParams lpEdtPass = new LinearLayout.LayoutParams(0, dp(42), 1f);
+        lpEdtPass.setMargins(0, 0, dp(6), 0);
+        filaPassLic.addView(edtPassLic, lpEdtPass);
+        filaPassLic.addView(btnOjoLic, new LinearLayout.LayoutParams(dp(42), dp(42)));
+        cardLogin.addView(filaPassLic, lpInput);
+
+        final CheckBox chkRecordar = new CheckBox(this);
+        chkRecordar.setText("Recordar siempre mi sesión en este teléfono");
+        chkRecordar.setTextColor(Color.parseColor("#E2E8F0"));
+        chkRecordar.setTextSize(11.5f);
+        chkRecordar.setChecked(true);
+        LinearLayout.LayoutParams lpChk = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lpChk.setMargins(0, dp(2), 0, dp(14));
+        cardLogin.addView(chkRecordar, lpChk);
+
+        Button btnEntrarLic = crearBotonConIcono("CHECK", "Entrar al Bot", "#2563EB", "#FFFFFF", 13, () -> {
+            String uIngresado = edtUserLic.getText().toString().trim();
+            String pIngresada = edtPassLic.getText().toString().trim();
+
+            if (!uIngresado.equalsIgnoreCase(LICENCIA_USUARIO_CLIENTE)) {
+                Toast.makeText(this, "Usuario de licencia incorrecto", Toast.LENGTH_SHORT).show();
+                return;
+            }
+
+            // Si ingresa la Clave Maestra del Vendedor, autoriza este nuevo teléfono de inmediato
+            if (pIngresada.equals(CLAVE_MAESTRA_VENDEDOR)) {
+                prefs.edit()
+                        .putString("device_id_vinculado_" + LICENCIA_USUARIO_CLIENTE, "DESBLOQUEADO_MAESTRO")
+                        .putBoolean("cliente_licencia_recordada_" + LICENCIA_USUARIO_CLIENTE, chkRecordar.isChecked())
+                        .apply();
+                overlay.setVisibility(View.GONE);
+                barraFlotante.setVisibility(View.VISIBLE);
+                Toast.makeText(this, "Dispositivo autorizado con Clave Maestra", Toast.LENGTH_SHORT).show();
+                return;
+            }
+
+            if (!pIngresada.equals(LICENCIA_CLAVE_CLIENTE)) {
+                Toast.makeText(this, "Contraseña de licencia incorrecta", Toast.LENGTH_SHORT).show();
+                return;
+            }
+
+            // Verificación del Candado Anti-Reventa por Dispositivo
+            if (!LICENCIA_DEVICE_ID_FIJO.equalsIgnoreCase("LIBRE")
+                    && !LICENCIA_DEVICE_ID_FIJO.equalsIgnoreCase(miDeviceId)) {
+                new AlertDialog.Builder(this)
+                        .setTitle("Candado Anti-Reventa Activo")
+                        .setMessage("Esta licencia pertenece exclusivamente al dispositivo ID: " + LICENCIA_DEVICE_ID_FIJO + ".\n\nTu ID actual es: " + miDeviceId + ".\nSolicita autorización al vendedor si cambiaste de teléfono.")
+                        .setPositiveButton("Aceptar", null)
+                        .show();
+                return;
+            }
+
+            prefs.edit()
+                    .putString("device_id_vinculado_" + LICENCIA_USUARIO_CLIENTE, miDeviceId)
+                    .putBoolean("cliente_licencia_recordada_" + LICENCIA_USUARIO_CLIENTE, chkRecordar.isChecked())
+                    .apply();
+
+            overlay.setVisibility(View.GONE);
+            barraFlotante.setVisibility(View.VISIBLE);
+        });
+        cardLogin.addView(btnEntrarLic, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(42)));
+
+        overlay.addView(cardLogin, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        return overlay;
     }
 
     private int dp(int val) {
@@ -901,17 +1391,6 @@ public class MainActivity extends Activity {
         tv.setText(ss);
     }
 
-    private void ponerTituloTurboExperimental(TextView tv, String colorPrincipalHex) {
-        if (tv == null) return;
-        String base = "Modo Turbo sin Imágenes ";
-        String tag = "(Modo Experimental)";
-        SpannableString ss = new SpannableString(base + tag);
-        ss.setSpan(new ForegroundColorSpan(Color.parseColor(colorPrincipalHex)), 0, base.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        ss.setSpan(new ForegroundColorSpan(Color.parseColor("#94A3B8")), base.length(), ss.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        ss.setSpan(new RelativeSizeSpan(0.84f), base.length(), ss.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        tv.setText(ss);
-    }
-
     private Bitmap crearLogoTransparenteBT() {
         int s = 256;
         Bitmap bmp = Bitmap.createBitmap(s, s, Bitmap.Config.ARGB_8888);
@@ -951,7 +1430,7 @@ public class MainActivity extends Activity {
     }
 
     // =========================================================================================
-    // CONSTRUCCIÓN DE LA INTERFAZ COMPLETA (CUENTAS | HISTORIAL | AJUSTES)
+    // CONSTRUCCIÓN DE LA INTERFAZ COMPLETA (CUENTAS | HISTORIAL + COMPRAS | AJUSTES)
     // =========================================================================================
     @SuppressLint("SetJavaScriptEnabled")
     private void construirInterfazCompleta() {
@@ -1141,11 +1620,15 @@ public class MainActivity extends Activity {
         mainVertical.addView(vistaCuentasScroll, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        // 3. VISTA 2: "HISTORIAL" (Con limpieza selectiva por cuenta o global)
+        // 3. VISTA 2: "HISTORIAL" + SECCIÓN DE "COMPRAS EXITOSAS CON TASA BCV Y CÓDIGO" ABAJO
+        vistaHistorialScroll = new ScrollView(this);
+        vistaHistorialScroll.setFillViewport(true);
+        vistaHistorialScroll.setVerticalScrollBarEnabled(false);
+        vistaHistorialScroll.setVisibility(View.GONE);
+
         vistaHistorialContainer = new LinearLayout(this);
         vistaHistorialContainer.setOrientation(LinearLayout.VERTICAL);
         vistaHistorialContainer.setPadding(dp(14), dp(6), dp(14), dp(95));
-        vistaHistorialContainer.setVisibility(View.GONE);
 
         LinearLayout headerHist = new LinearLayout(this);
         headerHist.setOrientation(LinearLayout.HORIZONTAL);
@@ -1155,7 +1638,7 @@ public class MainActivity extends Activity {
         LinearLayout colTitHist = new LinearLayout(this);
         colTitHist.setOrientation(LinearLayout.VERTICAL);
         lblHistBig = crearTexto("Historial de Consola", "#F4F4F5", 20f, true);
-        lblHistSub = crearTexto("Actividad en tiempo real de las cuentas registradas", "#A1A1AA", 11f, false);
+        lblHistSub = crearTexto("Actividad en tiempo real y registro de compras aprobadas", "#A1A1AA", 11f, false);
         colTitHist.addView(lblHistBig);
         colTitHist.addView(lblHistSub);
         headerHist.addView(colTitHist, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
@@ -1197,16 +1680,39 @@ public class MainActivity extends Activity {
         scrollHistorialConsola = new ScrollView(this);
         scrollHistorialConsola.setBackground(fondoRedondeadoConBorde("#14161A", "#27272A", 12, 1));
         scrollHistorialConsola.setPadding(dp(12), dp(10), dp(12), dp(10));
+        scrollHistorialConsola.setOnTouchListener((v, event) -> {
+            v.getParent().requestDisallowInterceptTouchEvent(true);
+            if (event.getAction() == MotionEvent.ACTION_UP) {
+                v.getParent().requestDisallowInterceptTouchEvent(false);
+            }
+            return false;
+        });
+
         txtHistorialConsola = new TextView(this);
         txtHistorialConsola.setTextColor(Color.parseColor("#E4E4E7"));
         txtHistorialConsola.setTextSize(11f);
         txtHistorialConsola.setTypeface(Typeface.MONOSPACE);
         scrollHistorialConsola.addView(txtHistorialConsola);
 
-        vistaHistorialContainer.addView(scrollHistorialConsola, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        LinearLayout.LayoutParams lpScrollConsolaHist = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(290));
+        lpScrollConsolaHist.setMargins(0, 0, 0, dp(16));
+        vistaHistorialContainer.addView(scrollHistorialConsola, lpScrollConsolaHist);
 
-        mainVertical.addView(vistaHistorialContainer, new LinearLayout.LayoutParams(
+        // Bloque inferior de "Compras Exitosas con Comprobante, Tasa BCV y Código"
+        lblTituloComprasExitosas = crearTexto("Compras Exitosas y Comprobantes", "#4ADE80", 16.5f, true);
+        lblSubComprasExitosas = crearTexto("Registro automático con Tasa BCV y Código de Operación de la tabla.", "#A1A1AA", 11f, false);
+        lblSubComprasExitosas.setPadding(0, dp(2), 0, dp(10));
+        vistaHistorialContainer.addView(lblTituloComprasExitosas);
+        vistaHistorialContainer.addView(lblSubComprasExitosas);
+
+        contenedorComprasExitosas = new LinearLayout(this);
+        contenedorComprasExitosas.setOrientation(LinearLayout.VERTICAL);
+        vistaHistorialContainer.addView(contenedorComprasExitosas, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        vistaHistorialScroll.addView(vistaHistorialContainer);
+        mainVertical.addView(vistaHistorialScroll, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         // 4. VISTA 3: "AJUSTES"
@@ -1220,7 +1726,7 @@ public class MainActivity extends Activity {
         contenidoAjustes.setPadding(dp(14), dp(6), dp(14), dp(95));
 
         lblAjustesBig = crearTexto("Ajustes", "#F4F4F5", 21f, true);
-        lblAjustesSub = crearTexto("Personaliza la apariencia, modo turbo, alertas y vibración.", "#A1A1AA", 11f, false);
+        lblAjustesSub = crearTexto("Personaliza la apariencia, modo turbo, proxy, alertas y vibración.", "#A1A1AA", 11f, false);
         lblAjustesSub.setPadding(0, dp(2), 0, dp(12));
         contenidoAjustes.addView(lblAjustesBig);
         contenidoAjustes.addView(lblAjustesSub);
@@ -1295,8 +1801,8 @@ public class MainActivity extends Activity {
         cardAlertasAjustes.setPadding(dp(14), dp(14), dp(14), dp(14));
         cardAlertasAjustes.setBackground(fondoRedondeadoConBorde("#18181B", "#27272A", 16, 1));
 
-        lblSubAlertas = crearTexto("Rendimiento, Alertas y Vibración", "#F4F4F5", 15f, true);
-        lblDescAlertas = crearTexto("Opciones de aceleración de carga y avisos sonoros.", "#A1A1AA", 11f, false);
+        lblSubAlertas = crearTexto("Rendimiento, Proxy, Alertas y Vibración", "#F4F4F5", 15f, true);
+        lblDescAlertas = crearTexto("Opciones de aceleración, cambio automático de IP y avisos sonoros.", "#A1A1AA", 11f, false);
         lblDescAlertas.setPadding(0, dp(2), 0, dp(12));
         cardAlertasAjustes.addView(lblSubAlertas);
         cardAlertasAjustes.addView(lblDescAlertas);
@@ -1305,28 +1811,66 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lpSubPanel.setMargins(0, 0, 0, dp(10));
 
-        // Panel Separado 0: Modo Turbo sin Imágenes Pesadas (Modo Experimental)
+        // Panel Separado 0: Modo Turbo sin Imágenes (Activado por defecto y con confirmación antes de desactivar)
         panelItemTurbo = new LinearLayout(this);
         panelItemTurbo.setOrientation(LinearLayout.HORIZONTAL);
         panelItemTurbo.setGravity(Gravity.CENTER_VERTICAL);
         panelItemTurbo.setPadding(dp(14), dp(12), dp(12), dp(12));
         LinearLayout colTxtTurbo = new LinearLayout(this);
         colTxtTurbo.setOrientation(LinearLayout.VERTICAL);
-        lblItemTurbo = crearTexto("", "#F4F4F5", 13.5f, true);
-        ponerTituloTurboExperimental(lblItemTurbo, "#F4F4F5");
-        lblDescItemTurbo = crearTexto("Oculta banners e imágenes pesadas durante la intervención para acelerar compras y cierres de sesión.", "#A1A1AA", 10.5f, false);
+        lblItemTurbo = crearTexto("Modo Turbo sin Imágenes", "#F4F4F5", 13.5f, true);
+        lblDescItemTurbo = crearTexto("Oculta banners e imágenes pesadas al vigilar y comprar para máxima velocidad y ahorro de datos.", "#A1A1AA", 10.5f, false);
         lblDescItemTurbo.setPadding(0, dp(2), dp(8), 0);
         colTxtTurbo.addView(lblItemTurbo);
         colTxtTurbo.addView(lblDescItemTurbo);
         btnToggleTurbo = crearBoton("", "#14532D", "#4ADE80", 10, () -> {
-            modoTurboSinImagenes = !modoTurboSinImagenes;
-            prefs.edit().putBoolean("modo_turbo_img", modoTurboSinImagenes).apply();
-            aplicarModoTurboEnWebViews();
-            actualizarBotonesAjustes();
+            if (modoTurboSinImagenes) {
+                new AlertDialog.Builder(this)
+                        .setTitle("¿Desactivar Modo Turbo?")
+                        .setMessage("¿Estás seguro de desactivar el Modo Turbo?\n\nSi lo desactivas, la página del banco descargará todas las imágenes pesadas y cargará más lento durante la intervención.")
+                        .setPositiveButton("Desactivar", (d, w) -> {
+                            modoTurboSinImagenes = false;
+                            prefs.edit().putBoolean("modo_turbo_default_on", false).apply();
+                            aplicarModoTurboEnWebViews();
+                            actualizarBotonesAjustes();
+                        })
+                        .setNegativeButton("Cancelar", null)
+                        .show();
+            } else {
+                modoTurboSinImagenes = true;
+                prefs.edit().putBoolean("modo_turbo_default_on", true).apply();
+                aplicarModoTurboEnWebViews();
+                actualizarBotonesAjustes();
+            }
         });
         panelItemTurbo.addView(colTxtTurbo, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         panelItemTurbo.addView(btnToggleTurbo, new LinearLayout.LayoutParams(dp(96), dp(34)));
         cardAlertasAjustes.addView(panelItemTurbo, lpSubPanel);
+
+        // Panel Separado 0.5: Rotación Automática de IP (Proxy Venezuela Integrado)
+        panelItemProxy = new LinearLayout(this);
+        panelItemProxy.setOrientation(LinearLayout.HORIZONTAL);
+        panelItemProxy.setGravity(Gravity.CENTER_VERTICAL);
+        panelItemProxy.setPadding(dp(14), dp(12), dp(12), dp(12));
+        LinearLayout colTxtProxy = new LinearLayout(this);
+        colTxtProxy.setOrientation(LinearLayout.VERTICAL);
+        lblItemProxy = crearTexto("Rotación Automática de IP (Proxy VE)", "#F4F4F5", 13.5f, true);
+        lblDescItemProxy = crearTexto("Asigna IPs residenciales de Venezuela y cambia de IP en /lg si el banco restringe la sesión.", "#A1A1AA", 10.5f, false);
+        lblDescItemProxy.setPadding(0, dp(2), dp(8), 0);
+        colTxtProxy.addView(lblItemProxy);
+        colTxtProxy.addView(lblDescItemProxy);
+        btnToggleProxy = crearBoton("", "#14532D", "#4ADE80", 10, () -> {
+            proxyRotativoActivo = !proxyRotativoActivo;
+            prefs.edit().putBoolean("proxy_iproyal_on", proxyRotativoActivo).apply();
+            aplicarConfiguracionProxyGlobal();
+            actualizarBotonesAjustes();
+            for (SesionBot s : obtenerSesionesRegistradas()) {
+                actualizarVisualTarjeta(s);
+            }
+        });
+        panelItemProxy.addView(colTxtProxy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        panelItemProxy.addView(btnToggleProxy, new LinearLayout.LayoutParams(dp(96), dp(34)));
+        cardAlertasAjustes.addView(panelItemProxy, lpSubPanel);
 
         // Panel Separado 1: Alerta de Ordinaria
         panelItemOrd = new LinearLayout(this);
@@ -1462,6 +2006,10 @@ public class MainActivity extends Activity {
         lpFloating.setMargins(0, 0, 0, dp(12));
         frameRoot.addView(barraFlotante, lpFloating);
 
+        // 5.5 VENTANA DE LOGIN DE LICENCIA DEL CLIENTE (CON CANDADO DE DISPOSITIVO)
+        loginClienteOverlay = construirOverlayLoginCliente();
+        frameRoot.addView(loginClienteOverlay);
+
         // 6. PANTALLA DE ENTRADA EN GRIS OSCURO (#18181B)
         LinearLayout splashOverlay = new LinearLayout(this);
         splashOverlay.setOrientation(LinearLayout.VERTICAL);
@@ -1551,7 +2099,9 @@ public class MainActivity extends Activity {
                     .withEndAction(() -> {
                         splashOverlay.setVisibility(View.GONE);
                         splashWebView.destroy();
-                        barraFlotante.setVisibility(View.VISIBLE);
+                        if (loginClienteOverlay.getVisibility() != View.VISIBLE) {
+                            barraFlotante.setVisibility(View.VISIBLE);
+                        }
                     })
                     .start();
         }, 3000);
@@ -1607,6 +2157,13 @@ public class MainActivity extends Activity {
         if (lblAjustesBig != null) lblAjustesBig.setTextColor(Color.parseColor(txtPri));
         if (lblAjustesSub != null) lblAjustesSub.setTextColor(Color.parseColor(txtSec));
 
+        if (lblTituloComprasExitosas != null) {
+            lblTituloComprasExitosas.setTextColor(Color.parseColor(temaActual == 2 ? "#15803D" : "#4ADE80"));
+        }
+        if (lblSubComprasExitosas != null) {
+            lblSubComprasExitosas.setTextColor(Color.parseColor(txtSec));
+        }
+
         if (lblTRef != null) lblTRef.setTextColor(Color.parseColor(txtPri));
         if (lblTRel != null) lblTRel.setTextColor(Color.parseColor(txtPri));
         if (lblRefrescoVal != null) lblRefrescoVal.setTextColor(Color.parseColor(txtPri));
@@ -1617,8 +2174,10 @@ public class MainActivity extends Activity {
         if (lblSubAlertas != null) lblSubAlertas.setTextColor(Color.parseColor(txtPri));
         if (lblDescAlertas != null) lblDescAlertas.setTextColor(Color.parseColor(txtSec));
 
-        if (lblItemTurbo != null) ponerTituloTurboExperimental(lblItemTurbo, txtPri);
+        if (lblItemTurbo != null) lblItemTurbo.setTextColor(Color.parseColor(txtPri));
         if (lblDescItemTurbo != null) lblDescItemTurbo.setTextColor(Color.parseColor(txtSec));
+        if (lblItemProxy != null) lblItemProxy.setTextColor(Color.parseColor(txtPri));
+        if (lblDescItemProxy != null) lblDescItemProxy.setTextColor(Color.parseColor(txtSec));
         if (lblItemOrd != null) lblItemOrd.setTextColor(Color.parseColor(txtPri));
         if (lblDescItemOrd != null) lblDescItemOrd.setTextColor(Color.parseColor(txtSec));
         if (lblItemCompra != null) lblItemCompra.setTextColor(Color.parseColor(txtPri));
@@ -1642,6 +2201,7 @@ public class MainActivity extends Activity {
         if (cardAlertasAjustes != null) cardAlertasAjustes.setBackground(fondoRedondeadoConBorde(bgCard, borderCard, 16, 1));
 
         if (panelItemTurbo != null) panelItemTurbo.setBackground(fondoRedondeadoConBorde(bgSub, borderCard, 14, 1));
+        if (panelItemProxy != null) panelItemProxy.setBackground(fondoRedondeadoConBorde(bgSub, borderCard, 14, 1));
         if (panelItemOrd != null) panelItemOrd.setBackground(fondoRedondeadoConBorde(bgSub, borderCard, 14, 1));
         if (panelItemCompra != null) panelItemCompra.setBackground(fondoRedondeadoConBorde(bgSub, borderCard, 14, 1));
         if (panelItemVib != null) panelItemVib.setBackground(fondoRedondeadoConBorde(bgSub, borderCard, 14, 1));
@@ -1661,6 +2221,7 @@ public class MainActivity extends Activity {
         actualizarBotonesAjustes();
         actualizarEstiloBarraFlotante();
         actualizarResumenYBotonesGlobales();
+        reconstruirListaComprasExitosas();
         if (pestanaInferiorActual == 1) {
             reconstruirFiltrosHistorial();
         }
@@ -1707,6 +2268,7 @@ public class MainActivity extends Activity {
 
     private void actualizarBotonesAjustes() {
         configurarBotonInterruptor(btnToggleTurbo, modoTurboSinImagenes);
+        configurarBotonInterruptor(btnToggleProxy, proxyRotativoActivo);
         configurarBotonInterruptor(btnToggleOrd, alertaOrdinariaActiva);
         configurarBotonInterruptor(btnToggleCompra, alertaCompraActiva);
         configurarBotonInterruptor(btnToggleVib, vibracionActiva);
@@ -1748,7 +2310,7 @@ public class MainActivity extends Activity {
     private void cambiarPestanaInferior(int nuevaPestana) {
         pestanaInferiorActual = nuevaPestana;
         vistaCuentasScroll.setVisibility(nuevaPestana == 0 ? View.VISIBLE : View.GONE);
-        vistaHistorialContainer.setVisibility(nuevaPestana == 1 ? View.VISIBLE : View.GONE);
+        vistaHistorialScroll.setVisibility(nuevaPestana == 1 ? View.VISIBLE : View.GONE);
         vistaAjustesScroll.setVisibility(nuevaPestana == 2 ? View.VISIBLE : View.GONE);
 
         if (badgeEstadoGlobal != null) {
@@ -1758,6 +2320,7 @@ public class MainActivity extends Activity {
         if (nuevaPestana == 1) {
             reconstruirFiltrosHistorial();
             refrescarVistaHistorial();
+            reconstruirListaComprasExitosas();
         }
         actualizarEstiloBarraFlotante();
     }
@@ -1913,10 +2476,15 @@ public class MainActivity extends Activity {
             filaTopCard.addView(badgeEst);
             card.addView(filaTopCard);
 
-            // Fila 2: Saldos en vivo (Bs y USD) + Monto configurado
+            // Fila 2: Saldos en vivo (Bs y USD) + Monto configurado + Tasa BCV
             TextView lblSaldos = crearTexto("Bs: --   •   USD: --   •   Orden: 300$", "#38BDF8", 11f, true);
-            lblSaldos.setPadding(0, dp(4), 0, dp(2));
+            lblSaldos.setPadding(0, dp(4), 0, dp(1));
             card.addView(lblSaldos);
+
+            // Fila 2.5: Indicador de IP Actual y Estado del Proxy en cada tarjeta
+            TextView lblPrx = crearTexto(sesion.textoEstadoProxyMostrado(), "#34D399", 10f, true);
+            lblPrx.setPadding(0, dp(1), 0, dp(2));
+            card.addView(lblPrx);
 
             // Fila 3: Paso actual en vivo (Siempre visible)
             TextView lblPaso = crearTexto("Sin actividad todavía", "#A1A1AA", 11.5f, false);
@@ -1950,6 +2518,7 @@ public class MainActivity extends Activity {
                 if (pestanaInferiorActual == 1) {
                     reconstruirFiltrosHistorial();
                     refrescarVistaHistorial();
+                    reconstruirListaComprasExitosas();
                 }
             });
 
@@ -2056,6 +2625,7 @@ public class MainActivity extends Activity {
             btnBack.setBackground(fondoRedondeado("#202227", 8));
             btnBack.setOnClickListener(v -> {
                 if (sesion.webViewOculto != null) {
+                    ultimoSlotActivoRed = sesion.slotIndex;
                     if (sesion.webViewOculto.canGoBack()) {
                         sesion.webViewOculto.goBack();
                     } else {
@@ -2070,6 +2640,7 @@ public class MainActivity extends Activity {
             btnReload.setBackground(fondoRedondeado("#202227", 8));
             btnReload.setOnClickListener(v -> {
                 if (sesion.webViewOculto != null) {
+                    ultimoSlotActivoRed = sesion.slotIndex;
                     String u = sesion.webViewOculto.getUrl();
                     if (u == null || u.isEmpty()) {
                         sesion.webViewOculto.loadUrl(URL_LOGIN);
@@ -2095,7 +2666,6 @@ public class MainActivity extends Activity {
             txtUrl.setEllipsize(TextUtils.TruncateAt.END);
             ponerIconoYTexto(txtUrl, crearIconoVectorial("LOCK", "#94A3B8", 11), URL_LOGIN);
 
-            // Botón interactivo de Zoom (60% -> 75% -> 85% -> 100%)
             TextView btnZoom = crearTexto(sesion.zoomPorcentaje + "%", "#4ADE80", 9.5f, true);
             btnZoom.setPadding(dp(8), dp(2), dp(8), dp(2));
             btnZoom.setBackground(fondoRedondeadoConBorde("#14532D", "#22C55E", 8, 1));
@@ -2121,6 +2691,7 @@ public class MainActivity extends Activity {
             sesion.lblUsuarioCard = lblUsr;
             sesion.badgeEstadoCard = badgeEst;
             sesion.lblSaldosCard = lblSaldos;
+            sesion.lblProxyCard = lblPrx;
             sesion.lblSubtituloPasoCard = lblPaso;
             sesion.btnPlayCard = bPlay;
             sesion.btnStopCard = bStop;
@@ -2143,7 +2714,7 @@ public class MainActivity extends Activity {
             sesion.btnZoomUrlCard = btnZoom;
             sesion.marcoWebViewCard = marcoWv;
 
-            // 2. Motor WebView configurado con tamaño nativo limpio y Modo Turbo opcional
+            // 2. Motor WebView conectado al Proxy de IPRoyal Venezuela
             WebView wv = new WebView(this);
             wv.setBackgroundColor(Color.parseColor("#18181B"));
             configurarPerfilAisladoWebView(wv, i);
@@ -2199,6 +2770,7 @@ public class MainActivity extends Activity {
                 @Override
                 public void onPageStarted(WebView view, String url, Bitmap favicon) {
                     super.onPageStarted(view, url, favicon);
+                    ultimoSlotActivoRed = sesion.slotIndex;
                     sesion.cargandoRed = true;
                     sesion.inicioCargaRedMs = System.currentTimeMillis();
                     if (url != null && !url.isEmpty()) {
@@ -2226,6 +2798,14 @@ public class MainActivity extends Activity {
                                 "if(st) st.innerHTML = 'img, svg:not(#fb), .carousel, .banner { opacity:0 !important; pointer-events:none !important; }';", null);
                     }
                     actualizarBarraUrlTarjeta(sesion);
+                }
+
+                // Autenticación directa de respaldo por si el WebView solicita credenciales de IPRoyal
+                @Override
+                public void onReceivedHttpAuthRequest(WebView view, HttpAuthHandler handlerAuth, String host, String realm) {
+                    if (handlerAuth != null) {
+                        handlerAuth.proceed(PRX_USER_RAW, construirPasswordProxyVenezuela(sesion));
+                    }
                 }
 
                 @SuppressLint("WebViewClientOnReceivedSslError")
@@ -2371,6 +2951,13 @@ public class MainActivity extends Activity {
         if (s.lblSaldosCard != null) {
             s.lblSaldosCard.setText(s.textoSaldosMostrado());
             s.lblSaldosCard.setTextColor(Color.parseColor(temaActual == 2 ? "#0284C7" : "#38BDF8"));
+        }
+
+        if (s.lblProxyCard != null) {
+            s.lblProxyCard.setText(s.textoEstadoProxyMostrado());
+            s.lblProxyCard.setTextColor(Color.parseColor(proxyRotativoActivo
+                    ? (temaActual == 2 ? "#0D9488" : "#34D399")
+                    : txtSec));
         }
 
         s.lblSubtituloPasoCard.setText(s.ultimoPasoTexto);
@@ -2571,8 +3158,135 @@ public class MainActivity extends Activity {
     }
 
     // =========================================================================================
-    // HISTORIAL DE LA CONSOLA DE LAS CUENTAS
+    // HISTORIAL DE LA CONSOLA + REGISTRO DE COMPRAS EXITOSAS CON TASA BCV Y CÓDIGO
     // =========================================================================================
+    private void cargarComprasExitosasGuardadas() {
+        listaComprasExitosas.clear();
+        try {
+            String raw = prefs.getString("compras_exitosas_json", "[]");
+            JSONArray arr = new JSONArray(raw);
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject o = arr.optJSONObject(i);
+                if (o != null) {
+                    listaComprasExitosas.add(new RegistroCompraExitosa(
+                            o.optString("usuario", ""),
+                            o.optString("cedula", ""),
+                            o.optString("fechaHora", ""),
+                            o.optString("montoUsd", "300$"),
+                            o.optString("tasaBcv", "--"),
+                            o.optString("codigoOp", "--")
+                    ));
+                }
+            }
+        } catch (Exception ignored) {}
+        reconstruirListaComprasExitosas();
+    }
+
+    private void guardarComprasExitosasPrefs() {
+        JSONArray arr = new JSONArray();
+        for (RegistroCompraExitosa r : listaComprasExitosas) {
+            try {
+                JSONObject o = new JSONObject();
+                o.put("usuario", r.usuario);
+                o.put("cedula", r.cedula);
+                o.put("fechaHora", r.fechaHora);
+                o.put("montoUsd", r.montoUsd);
+                o.put("tasaBcv", r.tasaBcv);
+                o.put("codigoOp", r.codigoOperacion);
+                arr.put(o);
+            } catch (Exception ignored) {}
+        }
+        prefs.edit().putString("compras_exitosas_json", arr.toString()).apply();
+    }
+
+    private void registrarNuevaCompraExitosa(final SesionBot s, final String montoFinalStr, final String tasaStr, final String codigoStr) {
+        final String fechaHora = new SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale.getDefault()).format(new Date());
+        runOnUiThread(() -> {
+            listaComprasExitosas.add(0, new RegistroCompraExitosa(
+                    s.usuario,
+                    s.tipoDoc + "-" + s.cedula,
+                    fechaHora,
+                    montoFinalStr,
+                    (tasaStr == null || tasaStr.isEmpty()) ? s.ultimaTasaLeida : tasaStr,
+                    (codigoStr == null || codigoStr.isEmpty()) ? s.ultimoCodigoOpLeido : codigoStr
+            ));
+            if (listaComprasExitosas.size() > 60) {
+                listaComprasExitosas.remove(listaComprasExitosas.size() - 1);
+            }
+            guardarComprasExitosasPrefs();
+            reconstruirListaComprasExitosas();
+        });
+    }
+
+    private void reconstruirListaComprasExitosas() {
+        if (contenedorComprasExitosas == null) return;
+        contenedorComprasExitosas.removeAllViews();
+
+        String bgCard = colFondoTarjeta();
+        String bgSub = colFondoSubPanel();
+        String borderCard = colBordeTarjeta();
+        String txtPri = colTextoPrimario();
+        String txtSec = colTextoSecundario();
+
+        if (listaComprasExitosas.isEmpty()) {
+            TextView tvVacio = crearTexto("Aún no hay compras registradas en este dispositivo.", txtSec, 11.5f, false);
+            tvVacio.setPadding(dp(14), dp(14), dp(14), dp(14));
+            tvVacio.setBackground(fondoRedondeadoConBorde(bgCard, borderCard, 12, 1));
+            contenedorComprasExitosas.addView(tvVacio);
+            return;
+        }
+
+        for (final RegistroCompraExitosa item : listaComprasExitosas) {
+            LinearLayout cardCompra = new LinearLayout(this);
+            cardCompra.setOrientation(LinearLayout.VERTICAL);
+            cardCompra.setPadding(dp(12), dp(10), dp(12), dp(10));
+            cardCompra.setBackground(fondoRedondeadoConBorde(bgCard, "#22C55E", 12, 1));
+            LinearLayout.LayoutParams lpC = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lpC.setMargins(0, 0, 0, dp(8));
+
+            LinearLayout fila1 = new LinearLayout(this);
+            fila1.setOrientation(LinearLayout.HORIZONTAL);
+            fila1.setGravity(Gravity.CENTER_VERTICAL);
+
+            TextView tvUser = crearTexto("✅ " + item.usuario + " (" + item.cedula + ")", "#4ADE80", 13f, true);
+            TextView tvMonto = crearTexto(item.montoUsd, "#00FF66", 13.5f, true);
+            fila1.addView(tvUser, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            fila1.addView(tvMonto);
+            cardCompra.addView(fila1);
+
+            TextView tvDetalles = crearTexto(
+                    "Código Op: #" + item.codigoOperacion + "   •   Tasa BCV: " + item.tasaBcv + " Bs/$",
+                    txtPri, 11.5f, true);
+            tvDetalles.setPadding(0, dp(4), 0, dp(2));
+            cardCompra.addView(tvDetalles);
+
+            LinearLayout filaInf = new LinearLayout(this);
+            filaInf.setOrientation(LinearLayout.HORIZONTAL);
+            filaInf.setGravity(Gravity.CENTER_VERTICAL);
+
+            TextView tvFecha = crearTexto("Fecha: " + item.fechaHora + "  •  Estado: APROBADO", txtSec, 10.5f, false);
+            Button btnCopiarComprobante = crearBoton("Copiar", bgSub, "#38BDF8", 10, () -> {
+                String resumen = "✅ Compra Ordinaria Aprobada - Banco del Tesoro\n"
+                        + "👤 Cuenta: " + item.usuario + " (" + item.cedula + ")\n"
+                        + "💵 Monto Pactado: " + item.montoUsd + "\n"
+                        + "📊 Tasa BCV: " + item.tasaBcv + "\n"
+                        + "🔢 Código Operación: #" + item.codigoOperacion + "\n"
+                        + "🕒 Emisión: " + item.fechaHora;
+                ClipboardManager cb = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                if (cb != null) {
+                    cb.setPrimaryClip(ClipData.newPlainText("Comprobante BT", resumen));
+                    Toast.makeText(this, "Comprobante copiado al portapapeles", Toast.LENGTH_SHORT).show();
+                }
+            });
+            filaInf.addView(tvFecha, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            filaInf.addView(btnCopiarComprobante, new LinearLayout.LayoutParams(dp(68), dp(26)));
+            cardCompra.addView(filaInf);
+
+            contenedorComprasExitosas.addView(cardCompra, lpC);
+        }
+    }
+
     private void reconstruirFiltrosHistorial() {
         barraFiltrosHistorial.removeAllViews();
         String acento = colAcentoTema();
@@ -3017,6 +3731,7 @@ public class MainActivity extends Activity {
         String base;
         switch (s.estadoActual) {
             case DETENIDO: return "DETENIDO";
+            case ENFRIANDO_CAMBIO_IP: base = "CAMBIANDO IP (2s)"; break;
             case CARGANDO_LOGIN:
             case ESPERANDO_ESTABILIZAR_LOGIN:
             case ENVIANDO_FASE1: base = "INICIANDO"; break;
@@ -3058,7 +3773,7 @@ public class MainActivity extends Activity {
         for (SesionBot s : reg) {
             if (!s.estaCorriendo() || s.detenerTrasCerrarSesion) {
                 iniciarSesionIndividual(s, delayEscalonado);
-                delayEscalonado += 300;
+                delayEscalonado += 350;
             }
         }
     }
@@ -3074,15 +3789,17 @@ public class MainActivity extends Activity {
 
     private void iniciarSesionIndividual(final SesionBot s, int delayMs) {
         if (s == null || !s.registrada) return;
+        ultimoSlotActivoRed = s.slotIndex;
         s.corriendo = true;
         s.detenerTrasCerrarSesion = false;
+        s.rotarIpTrasCerrarSesion = false;
         s.compraCompletada = false;
         s.ultimoMontoAjustado = 0;
         s.intentoLogout = 0;
         cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
 
         if (!s.sesionAbiertaEnServidor) {
-            registrarPasoCuenta(s, "Iniciando sesión (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
+            registrarPasoCuenta(s, "Iniciando sesión con Proxy VE (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
         } else {
             registrarPasoCuenta(s, "Reanudando cuenta...");
         }
@@ -3100,6 +3817,7 @@ public class MainActivity extends Activity {
     private void pausarSesionSinCerrar(SesionBot s, boolean registrarEnLog) {
         s.corriendo = false;
         s.detenerTrasCerrarSesion = false;
+        s.rotarIpTrasCerrarSesion = false;
         s.accionEnCurso = false;
         if (registrarEnLog) {
             registrarPasoCuenta(s, "Cuenta detenida");
@@ -3111,6 +3829,7 @@ public class MainActivity extends Activity {
         if (s == null || !s.registrada) return;
         s.corriendo = true;
         s.detenerTrasCerrarSesion = true;
+        s.rotarIpTrasCerrarSesion = false;
         s.intentoLogout = 0;
         cambiarEstado(s, EstadoBot.CERRANDO_SESION);
         registrarPasoCuenta(s, "Cerrando sesión...");
@@ -3235,10 +3954,33 @@ public class MainActivity extends Activity {
         }, 380);
     }
 
+    /**
+     * Incluye el Escudo Anti-Reinicio en Hora de Apertura:
+     * Si alguna cuenta detectó apertura (yaAvisoApertura) o está dentro del proceso de compra,
+     * congela el reinicio de sesión para nunca cerrar una cuenta mientras el mercado está abierto.
+     */
     private void verificarTiemposDeSesionIndependientes(ArrayList<SesionBot> reg) {
         long ahora = System.currentTimeMillis();
         long totalSeg = minutosRelogin * 60L;
         long menorRestante = -1;
+
+        boolean hayAperturaOCompraActiva = yaAvisoApertura;
+        for (SesionBot s : reg) {
+            if (s.estaCorriendo() && (s.estadoActual == EstadoBot.ESPERANDO_FORM_INTENTO1
+                    || s.estadoActual == EstadoBot.LIMPIANDO_PANTALLA
+                    || s.estadoActual == EstadoBot.ESPERANDO_FORM_INTENTO2
+                    || s.estadoActual == EstadoBot.ESPERANDO_ESTABILIZAR_FORM
+                    || s.estadoActual == EstadoBot.LLENANDO_COMPRA
+                    || s.estadoActual == EstadoBot.COMPRANDO)) {
+                hayAperturaOCompraActiva = true;
+                break;
+            }
+        }
+
+        if (hayAperturaOCompraActiva) {
+            lblReloginVal.setText(minutosRelogin + " min (ESCUDO)");
+            return;
+        }
 
         for (SesionBot s : reg) {
             if (!s.estaCorriendo()) continue;
@@ -3252,6 +3994,7 @@ public class MainActivity extends Activity {
                 if (transcurridoSeg >= totalSeg) {
                     s.intentoLogout = 0;
                     s.detenerTrasCerrarSesion = false;
+                    s.rotarIpTrasCerrarSesion = false;
                     cambiarEstado(s, EstadoBot.CERRANDO_SESION);
                 }
             }
@@ -3267,7 +4010,7 @@ public class MainActivity extends Activity {
     }
 
     // =========================================================================================
-    // MÁQUINA DE ESTADOS CON CIERRE DE SESIÓN CORREGIDO (SIN CLIC EN ÍCONO DE USUARIO)
+    // MÁQUINA DE ESTADOS CON LECTURA DE TASA BCV / CÓDIGO DE TABLA Y ROTACIÓN DE IP EN /lg
     // =========================================================================================
     private void ejecutarPasoMaquinaEstados(final SesionBot sesion) {
         if (sesion == null || sesion.webViewOculto == null) return;
@@ -3301,6 +4044,17 @@ public class MainActivity extends Activity {
                 "var sinCupo = bodyTxt.indexOf('no hay asignación disponible') !== -1;" +
                 "var perfNav = (window.performance && performance.getEntriesByType) ? performance.getEntriesByType('navigation')[0] : null;" +
                 "var pingCalc = window.__vbt_ping || (perfNav && perfNav.responseEnd > 0 ? Math.round(perfNav.responseEnd - perfNav.requestStart) : 0);" +
+                "var codTabla = ''; var tasaTabla = '';" +
+                "try {" +
+                "  var primeraFila = document.querySelector('table tbody tr');" +
+                "  if (primeraFila) {" +
+                "    var celdas = primeraFila.querySelectorAll('td');" +
+                "    if (celdas.length >= 6) {" +
+                "      codTabla = (celdas[0].innerText || '').trim();" +
+                "      tasaTabla = (celdas[5].innerText || '').trim();" +
+                "    }" +
+                "  }" +
+                "} catch(e){}" +
                 "function parseMontoVE(str) {" +
                 "  if (!str) return NaN;" +
                 "  var s = String(str).trim();" +
@@ -3323,7 +4077,7 @@ public class MainActivity extends Activity {
                 "  if (okUsd) window.__vbt_usd = fmtVE(sumUsd);" +
                 "}" +
                 "var optD = document.querySelector('#desde option[data-disponible]');" +
-                "var optH = rootOptH = document.querySelector('#hasta option[data-disponible]');" +
+                "var optH = document.querySelector('#hasta option[data-disponible]');" +
                 "if (optD) { var vd = parseMontoVE(optD.getAttribute('data-disponible')); if (!isNaN(vd)) { window.__vbt_bs = fmtVE(vd); window.__vbt_bs_num = vd; } }" +
                 "if (optH) { var vh = parseMontoVE(optH.getAttribute('data-disponible')); if (!isNaN(vh)) window.__vbt_usd = fmtVE(vh); }" +
                 "return JSON.stringify({" +
@@ -3340,6 +4094,8 @@ public class MainActivity extends Activity {
                 "  logoutOk: !!window.__vbt_logout_ok," +
                 "  csrf: csrfActual || ''," +
                 "  ping: pingCalc || 0," +
+                "  codOp: codTabla || ''," +
+                "  tasaBcv: tasaTabla || ''," +
                 "  montoAjustado: window.__vbt_monto_ajustado || 0," +
                 "  bs: window.__vbt_bs || ''," +
                 "  usd: window.__vbt_usd || ''" +
@@ -3358,6 +4114,8 @@ public class MainActivity extends Activity {
                 String nuevoBs = st.optString("bs", "");
                 String nuevoUsd = st.optString("usd", "");
                 String csrfDetectado = st.optString("csrf", "");
+                String codOpLeido = st.optString("codOp", "");
+                String tasaBcvLeida = st.optString("tasaBcv", "");
                 long pingWeb = st.optLong("ping", 0);
                 int mAjustado = st.optInt("montoAjustado", 0);
 
@@ -3369,6 +4127,16 @@ public class MainActivity extends Activity {
 
                 if (!csrfDetectado.isEmpty()) {
                     sesion.csrfTokenGuardado = csrfDetectado;
+                }
+
+                boolean cambioInfoTabla = false;
+                if (!codOpLeido.isEmpty() && !codOpLeido.equals(sesion.ultimoCodigoOpLeido)) {
+                    sesion.ultimoCodigoOpLeido = codOpLeido;
+                    cambioInfoTabla = true;
+                }
+                if (!tasaBcvLeida.isEmpty() && !tasaBcvLeida.equals(sesion.ultimaTasaLeida)) {
+                    sesion.ultimaTasaLeida = tasaBcvLeida;
+                    cambioInfoTabla = true;
                 }
 
                 if (mAjustado > 0 && mAjustado != sesion.ultimoMontoAjustado) {
@@ -3385,7 +4153,7 @@ public class MainActivity extends Activity {
                     sesion.saldoUsd = nuevoUsd;
                     cambioSaldo = true;
                 }
-                if (cambioSaldo) {
+                if (cambioSaldo || cambioInfoTabla) {
                     actualizarVisualTarjeta(sesion);
                 }
 
@@ -3443,6 +4211,16 @@ public class MainActivity extends Activity {
 
         switch (s.estadoActual) {
 
+            // Enfriamiento exacto de 2 segundos en /lg tras el cambio de IP del Proxy
+            case ENFRIANDO_CAMBIO_IP:
+                if (ahora - s.tiempoEstadoMs >= 2000) {
+                    ultimoSlotActivoRed = s.slotIndex;
+                    s.webViewOculto.loadUrl(URL_LOGIN);
+                    registrarPasoCuenta(s, "Enfriamiento 2s completado - Iniciando sesión con nueva IP VE");
+                    cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
+                }
+                break;
+
             case CARGANDO_LOGIN:
                 if (paginaCompleta && visMonto && !hayInconv) {
                     if (s.tiempoInicioSesionMs == 0) s.tiempoInicioSesionMs = ahora;
@@ -3476,6 +4254,7 @@ public class MainActivity extends Activity {
                 }
                 if (ahora - s.tiempoEstadoMs > 12000) {
                     s.tiempoEstadoMs = ahora;
+                    ultimoSlotActivoRed = s.slotIndex;
                     s.webViewOculto.stopLoading();
                     s.webViewOculto.loadUrl(URL_LOGIN);
                 }
@@ -3494,6 +4273,7 @@ public class MainActivity extends Activity {
             case ENVIANDO_FASE1:
                 if (!s.accionEnCurso) {
                     s.accionEnCurso = true;
+                    ultimoSlotActivoRed = s.slotIndex;
                     String jsFase1 =
                             "var sel = document.querySelector('#tipodocben');" +
                             "if(sel) { for(var i=0; i<sel.options.length; i++) { if(sel.options[i].text.trim().toUpperCase() === '" + s.tipoDoc + "') { sel.selectedIndex = i; break; } } sel.dispatchEvent(new Event('change', {bubbles:true})); }" +
@@ -3557,6 +4337,7 @@ public class MainActivity extends Activity {
             case ENVIANDO_FASE2:
                 if (!s.accionEnCurso) {
                     s.accionEnCurso = true;
+                    ultimoSlotActivoRed = s.slotIndex;
                     registrarPasoCuenta(s, "Colocando contraseña");
                     String jsFase2 =
                             "var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;" +
@@ -3649,7 +4430,9 @@ public class MainActivity extends Activity {
                     cambiarEstado(s, EstadoBot.ESPERANDO_FORM_INTENTO1);
                     return;
                 }
-                if (paginaCompleta && (ahora - s.tiempoEstadoMs >= intervaloRefresco * 1000L)) {
+                // Desfase humano anti-bloqueo por slot para que no choquen las 4 cuentas al mismo milisegundo
+                long esperaConJitter = (intervaloRefresco * 1000L) + (s.slotIndex * 220L);
+                if (paginaCompleta && (ahora - s.tiempoEstadoMs >= esperaConJitter)) {
                     s.tiempoEstadoMs = ahora;
                     s.vueltaActual++;
                     registrarPasoCuenta(s, "Sin botón intento " + s.vueltaActual);
@@ -3671,7 +4454,7 @@ public class MainActivity extends Activity {
             case LIMPIANDO_PANTALLA:
                 if (paginaCompleta && visTablaInt && (ahora - s.tiempoEstadoMs >= 1400)) {
                     if (visOrd) {
-                        registrarPasoCuenta(s, "Disparo directo en Ordinaria (mod.add)");
+                        registrarPasoCuenta(s, "Segundo intento en Ordinaria (mod.add)");
                         clicarOrdinariaJS(s);
                         cambiarEstado(s, EstadoBot.ESPERANDO_FORM_INTENTO2);
                     } else {
@@ -3688,9 +4471,12 @@ public class MainActivity extends Activity {
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_FORM);
                     return;
                 }
+                // Si vuelve a salir "presentando inconvenientes" en el segundo intento, cierra sesión y rota la IP en /lg
                 if (hayInconv || (paginaCompleta && ahora - s.tiempoEstadoMs > 4500)) {
                     s.intentoLogout = 0;
                     s.detenerTrasCerrarSesion = false;
+                    s.rotarIpTrasCerrarSesion = true;
+                    registrarPasoCuenta(s, "Inconvenientes detectado - Cerrando sesión para cambiar IP");
                     cambiarEstado(s, EstadoBot.CERRANDO_SESION);
                 }
                 break;
@@ -3789,6 +4575,8 @@ public class MainActivity extends Activity {
                 if (hayExito) {
                     s.compraCompletada = true;
                     s.corriendo = false;
+                    int montoFinalCompra = (s.ultimoMontoAjustado > 0) ? s.ultimoMontoAjustado : s.montoCompra;
+                    registrarNuevaCompraExitosa(s, montoFinalCompra + ".00$", s.ultimaTasaLeida, s.ultimoCodigoOpLeido);
                     evaluarJS(s,
                             "try {" +
                             "  var optD = document.querySelector('#desde option[data-disponible]');" +
@@ -3803,7 +4591,7 @@ public class MainActivity extends Activity {
                             "  }" +
                             "} catch(e){}", null);
                     actualizarSaldosEnSegundoPlano(s, true);
-                    registrarPasoCuenta(s, "Orden completada exitosamente");
+                    registrarPasoCuenta(s, "Orden completada exitosamente (" + montoFinalCompra + "$)");
                     sonarAlertaCompraExitosa();
                     cambiarEstado(s, EstadoBot.DETENIDO);
                     return;
@@ -3832,16 +4620,21 @@ public class MainActivity extends Activity {
                     if (s.detenerTrasCerrarSesion) {
                         s.corriendo = false;
                         s.detenerTrasCerrarSesion = false;
+                        s.rotarIpTrasCerrarSesion = false;
                         s.tiempoInicioSesionMs = 0;
                         registrarPasoCuenta(s, "Sesión cerrada y cuenta detenida");
                         cambiarEstado(s, EstadoBot.DETENIDO);
+                    } else if (s.rotarIpTrasCerrarSesion && proxyRotativoActivo) {
+                        s.rotarIpTrasCerrarSesion = false;
+                        rotarIpProxyParaCuenta(s, "Restricción en Ordinaria");
+                        cambiarEstado(s, EstadoBot.ENFRIANDO_CAMBIO_IP);
                     } else {
+                        s.rotarIpTrasCerrarSesion = false;
                         registrarPasoCuenta(s, "Iniciando sesión (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
                         cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
                     }
                     return;
                 }
-                // Si el cuadro "¿Deseas cerrar tu sesión?" está visible en pantalla, confirmar el botón "Sí" de inmediato
                 if (visModalLogout) {
                     evaluarJS(s,
                             "var bSi = document.querySelector('button.swal2-confirm') || Array.from(document.querySelectorAll('button, a')).find(el => el.innerText && (el.innerText.trim().toLowerCase() === 'si' || el.innerText.trim().toLowerCase() === 'sí'));" +
@@ -3871,14 +4664,6 @@ public class MainActivity extends Activity {
         }
     }
 
-    /**
-     * Cierre de sesión limpio y directo:
-     * 1. Cierra cualquier ventana emergente de "Usuario/Alerta" que esté estorbando.
-     * 2. Llama directamente a la función oficial Logout() o al botón rojo a[href='javascript:Logout()']
-     *    (sin tocar nunca el 4to ícono del menú superior que abría el modal de perfil de Usuario).
-     * 3. Un intervalo rápido de 60ms presiona automáticamente el botón verde "Sí" (swal2-confirm)
-     *    apenas aparece y permite que el navegador redirija limpiamente a /lg.
-     */
     private void ejecutarScriptLogoutDirecto(SesionBot s) {
         String csrfRespaldo = (s.csrfTokenGuardado != null) ? s.csrfTokenGuardado.replace("'", "") : "";
 
@@ -3951,6 +4736,7 @@ public class MainActivity extends Activity {
     }
 
     private void clicarOrdinariaJS(SesionBot s) {
+        ultimoSlotActivoRed = s.slotIndex;
         String jsOrd =
                 "var ejecutado = false;" +
                 "if (typeof mod !== 'undefined' && typeof mod.add === 'function') {" +
@@ -3964,6 +4750,7 @@ public class MainActivity extends Activity {
     }
 
     private void irAIntervencionJS(SesionBot s) {
+        ultimoSlotActivoRed = s.slotIndex;
         String jsMenu =
                 "var sub = document.querySelector(\"a.sidebar-link[href='/int']\");" +
                 "if (sub && sub.offsetWidth > 0) {" +
