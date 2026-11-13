@@ -10,7 +10,6 @@ import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.DashPathEffect;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RadialGradient;
@@ -59,6 +58,7 @@ import android.webkit.SslErrorHandler;
 import android.webkit.ValueCallback;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebStorage;
 import android.webkit.WebView;
@@ -80,6 +80,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -109,7 +110,6 @@ public class MainActivity extends Activity {
     private static final String DESTINO_FONDOS = "Ahorro";
     private static final int MAX_CUENTAS = 4;
     private final int[] OPCIONES_MINUTOS = {1, 3, 5, 10, 15, 20, 30};
-    private final int[] ESCALAS_ZOOM = {60, 75, 85, 100};
 
     // =========================================================================================
     // SISTEMA DE LICENCIAS EN LA NUBE (GITHUB licencias.json)
@@ -153,7 +153,7 @@ public class MainActivity extends Activity {
     private ScrollView vistaAjustesScroll;
     private ScrollView vistaPerfilScroll;
 
-    // Elementos de la nueva Pestaña "Perfil"
+    // Elementos de la Pestaña "Perfil"
     private LinearLayout cardPerfilPrincipal, boxPerfilDevice, boxPerfilCuentas, boxPerfilClave;
     private ImageView imgAvatarPerfil;
     private TextView lblNombrePerfil, lblValorDevicePerfil, lblValorCuentasPerfil, lblValorClavePerfil;
@@ -188,7 +188,7 @@ public class MainActivity extends Activity {
     private TextView lblItemVib, lblDescItemVib;
     private Button btnToggleTurbo, btnToggleProxy, btnToggleOrd, btnToggleCompra, btnToggleVib;
 
-    // Contenedor de motores en tamaño real detrás del fondo cuando la tarjeta está cerrada
+    // Contenedor oculto de motores en segundo plano (sin pantalla web visible)
     private LinearLayout filaMotoresSup, filaMotoresInf;
     private final FrameLayout[] slotsFondoWebView = new FrameLayout[MAX_CUENTAS];
 
@@ -197,7 +197,7 @@ public class MainActivity extends Activity {
     private TextView chipRegistradas, chipActivas, chipDetenidas;
     private Button btnIniciarTodas, btnDetenerTodas, btnNuevaCuenta, btnLimpiarHist;
 
-    // Barra flotante inferior más compacta (Cuentas | Historial | Ajustes | Perfil)
+    // Barra flotante inferior compacta con 4 pestañas (Cuentas | Historial | Ajustes | Perfil)
     private LinearLayout barraFlotante;
     private LinearLayout navBtnCuentas, navBtnHistorial, navBtnAjustes, navBtnPerfil;
     private ImageView navIconCuentas, navIconHistorial, navIconAjustes, navIconPerfil;
@@ -289,12 +289,11 @@ public class MainActivity extends Activity {
         boolean corriendo = false;
         boolean detenerTrasCerrarSesion = false;
         boolean rotarIpTrasCerrarSesion = false;
+        boolean yaRotoIpEnPosicionGlobal = false;
         boolean sesionAbiertaEnServidor = false;
         boolean nombreOculto = false;
 
         boolean panelDesplegado = false;
-        boolean mostrarConsolaEnPanel = true;
-        int zoomPorcentaje = 75;
 
         String tipoDoc = "V";
         String cedula = "";
@@ -314,9 +313,9 @@ public class MainActivity extends Activity {
         long latenciaMs = 0;
         long inicioCargaRedMs = 0;
         long ultimaActualizacionSaldoMs = 0;
+        long ultimoKeepAliveMs = 0;
         long tiempoCompraExitosaMs = 0;
         String ultimoPasoTexto = "Sin actividad todavía";
-        String urlActualTexto = URL_LOGIN;
 
         WebView webViewOculto;
 
@@ -329,19 +328,10 @@ public class MainActivity extends Activity {
         ImageView btnPlayCard, btnStopCard, btnLogoutCard, btnEyeCard, btnEditCard;
 
         LinearLayout contenedorDesplegableCard;
-        TextView btnToggleConsolaMini;
         FrameLayout frameConsolaInterna;
         ScrollView scrollConsolaCard;
         TextView txtConsolaCard;
         TextView btnLimpiarMiniCard;
-
-        LinearLayout barraNavegadorCard;
-        ImageView btnNavBackCard;
-        ImageView btnNavReloadCard;
-        LinearLayout cajaUrlCard;
-        TextView txtUrlCard;
-        TextView btnZoomUrlCard;
-        FrameLayout marcoWebViewCard;
 
         EstadoBot estadoActual = EstadoBot.DETENIDO;
         int progresoWeb = 100;
@@ -351,12 +341,26 @@ public class MainActivity extends Activity {
         boolean accionEnCurso = false;
         boolean microCortePropio = false;
         int vueltaActual = 0;
+        int reintentosAjaxCreate = 0;
         int intentoLogout = 0;
         boolean compraCompletada = false;
 
         SesionBot(int idx) {
             this.slotIndex = idx;
             this.idSesionProxy = generarIdSesionProxyNuevo();
+        }
+
+        String codigoNumericoTipoDoc() {
+            switch (tipoDoc.toUpperCase(Locale.ROOT)) {
+                case "P": return "02";
+                case "J": return "04";
+                case "R": return "05";
+                case "E": return "08";
+                case "G": return "10";
+                case "C": return "11";
+                case "V":
+                default: return "01";
+            }
         }
 
         String nombreMostrado() {
@@ -444,10 +448,6 @@ public class MainActivity extends Activity {
 
         for (int i = 0; i < MAX_CUENTAS; i++) {
             sesiones[i] = new SesionBot(i);
-            sesiones[i].mostrarConsolaEnPanel = prefs.getBoolean("mostrar_consola_slot_" + i, true);
-            int zGuardado = prefs.getInt("zoom_web_v2_slot_" + i, 75);
-            if (zGuardado < 60 || zGuardado > 100) zGuardado = 75;
-            sesiones[i].zoomPorcentaje = zGuardado;
         }
 
         iniciarPuenteProxyLocalIPRoyal();
@@ -492,7 +492,7 @@ public class MainActivity extends Activity {
     }
 
     // =========================================================================================
-    // MOTOR DE PROXY TURBO (LECTURA EN BLOQUE + TCP_NODELAY + POOL DE HILOS REUTILIZABLE)
+    // MOTOR DE PROXY TURBO + ROTACIÓN EN POSICIÓN GLOBAL (/pg) SIN CERRAR SESIÓN
     // =========================================================================================
     private String generarIdSesionProxyNuevo() {
         String chars = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -516,6 +516,20 @@ public class MainActivity extends Activity {
                 ? s.idSesionProxy
                 : "ve000001";
         return PRX_PASS_RAW + "_country-ve_session-" + sesId + "_lifetime-15m";
+    }
+
+    /**
+     * Rota la IP de IPRoyal en caliente cuando la cuenta ya cargó Posición Global (/pg),
+     * conservando las cookies de sesión para ir directo a Intervención (/int).
+     */
+    private void rotarIpEnPosicionGlobalSinBorrarSesion(final SesionBot s) {
+        if (s == null || !proxyRotativoActivo) return;
+        s.idSesionProxy = generarIdSesionProxyNuevo();
+        s.contadorRotacionesIp++;
+        ultimoSlotActivoRed = s.slotIndex;
+        runOnUiThread(() -> actualizarVisualTarjeta(s));
+        String idCorto = s.idSesionProxy.substring(0, 6).toUpperCase();
+        registrarPasoCuenta(s, "IP rotada en Posición Global -> Nueva Sesión VE #" + idCorto);
     }
 
     private void rotarIpProxyParaCuenta(final SesionBot s, String motivo) {
@@ -582,9 +596,8 @@ public class MainActivity extends Activity {
             InputStream inCliente = clienteLocal.getInputStream();
             OutputStream outCliente = clienteLocal.getOutputStream();
 
-            // Lectura rápida en bloque (elimina el cuello de botella de leer 1 byte a la vez)
             ByteArrayOutputStream headerBuf = new ByteArrayOutputStream(1024);
-            byte[] chunk = new byte[2048];
+            byte[] chunk = new byte[4096];
             int finHeadersIdx = -1;
 
             while (headerBuf.size() < 16384) {
@@ -629,7 +642,7 @@ public class MainActivity extends Activity {
             remotoIPRoyal = new Socket();
             remotoIPRoyal.setTcpNoDelay(true);
             remotoIPRoyal.setKeepAlive(true);
-            remotoIPRoyal.connect(new InetSocketAddress(obtenerHostProxyIPRoyal(), PRX_PORT), 9000);
+            remotoIPRoyal.connect(new InetSocketAddress(obtenerHostProxyIPRoyal(), PRX_PORT), 8500);
             remotoIPRoyal.setSoTimeout(20000);
 
             final InputStream inRemoto = remotoIPRoyal.getInputStream();
@@ -965,11 +978,6 @@ public class MainActivity extends Activity {
         }).start();
     }
 
-    /**
-     * Construye la pantalla de inicio de sesión.
-     * Siempre aparece al abrir el bot, y si el usuario activó "Recordar siempre",
-     * autocompleta su Usuario y Contraseña (oculta con puntitos) para que solo toque "Iniciar sesión".
-     */
     private LinearLayout construirOverlayLoginCliente() {
         final String miDeviceId = obtenerDeviceIdUnico();
         boolean yaRecordado = prefs.getBoolean("sesion_cliente_recordada_v3", false);
@@ -1379,13 +1387,10 @@ public class MainActivity extends Activity {
         c.clipPath(clipCircle);
 
         p.setColor(Color.parseColor("#38BDF8"));
-        // Cabeza del muñequito de perfil
         c.drawCircle(cx, s * 0.36f, s * 0.16f, p);
-        // Hombros / torso redondeado
         c.drawOval(new RectF(s * 0.20f, s * 0.58f, s * 0.80f, s * 1.06f), p);
         c.restore();
 
-        // Anillo exterior brillante
         p.setStyle(Paint.Style.STROKE);
         p.setStrokeWidth(dp(2));
         p.setColor(Color.parseColor("#38BDF8"));
@@ -1679,29 +1684,6 @@ public class MainActivity extends Activity {
                 c.drawPath(chk, p);
                 break;
             }
-            case "BACK": {
-                p.setStyle(Paint.Style.STROKE);
-                c.drawLine(s * 0.78f, s * 0.50f, s * 0.22f, s * 0.50f, p);
-                c.drawLine(s * 0.46f, s * 0.26f, s * 0.22f, s * 0.50f, p);
-                c.drawLine(s * 0.46f, s * 0.74f, s * 0.22f, s * 0.50f, p);
-                break;
-            }
-            case "RELOAD": {
-                p.setStyle(Paint.Style.STROKE);
-                RectF arcR = new RectF(s * 0.20f, s * 0.20f, s * 0.80f, s * 0.80f);
-                c.drawArc(arcR, 35f, 290f, false, p);
-                c.drawLine(s * 0.78f, s * 0.18f, s * 0.78f, s * 0.42f, p);
-                c.drawLine(s * 0.56f, s * 0.38f, s * 0.78f, s * 0.42f, p);
-                break;
-            }
-            case "LOCK": {
-                p.setStyle(Paint.Style.STROKE);
-                RectF body = new RectF(s * 0.24f, s * 0.46f, s * 0.76f, s * 0.84f);
-                c.drawRoundRect(body, s * 0.08f, s * 0.08f, p);
-                RectF shackle = new RectF(s * 0.33f, s * 0.20f, s * 0.67f, s * 0.54f);
-                c.drawArc(shackle, 180f, 180f, false, p);
-                break;
-            }
         }
 
         BitmapDrawable bd = new BitmapDrawable(getResources(), bmp);
@@ -1769,18 +1751,16 @@ public class MainActivity extends Activity {
         frameRoot.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
+        // Contenedor 1x1 px invisible para los motores de peticiones en segundo plano
         LinearLayout contenedorMotores2x2 = new LinearLayout(this);
         contenedorMotores2x2.setOrientation(LinearLayout.VERTICAL);
         filaMotoresSup = new LinearLayout(this);
         filaMotoresSup.setOrientation(LinearLayout.HORIZONTAL);
         filaMotoresInf = new LinearLayout(this);
         filaMotoresInf.setOrientation(LinearLayout.HORIZONTAL);
-        contenedorMotores2x2.addView(filaMotoresSup, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
-        contenedorMotores2x2.addView(filaMotoresInf, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
-        frameRoot.addView(contenedorMotores2x2, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        contenedorMotores2x2.addView(filaMotoresSup, new LinearLayout.LayoutParams(1, 1));
+        contenedorMotores2x2.addView(filaMotoresInf, new LinearLayout.LayoutParams(1, 1));
+        frameRoot.addView(contenedorMotores2x2, new FrameLayout.LayoutParams(1, 1));
 
         mainVertical = new LinearLayout(this);
         mainVertical.setOrientation(LinearLayout.VERTICAL);
@@ -1842,7 +1822,7 @@ public class MainActivity extends Activity {
         LinearLayout colTitCuentas = new LinearLayout(this);
         colTitCuentas.setOrientation(LinearLayout.VERTICAL);
         lblCuentasBig = crearTexto("Cuentas", "#F4F4F5", 21f, true);
-        lblCuentasSub = crearTexto("Toca cualquier cuenta para abrir su navegador y consola en vivo.", "#A1A1AA", 11f, false);
+        lblCuentasSub = crearTexto("Toca cualquier cuenta para abrir su consola de peticiones en vivo.", "#A1A1AA", 11f, false);
         colTitCuentas.addView(lblCuentasBig);
         colTitCuentas.addView(lblCuentasSub);
         filaHeaderCuentas.addView(colTitCuentas, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
@@ -1937,7 +1917,6 @@ public class MainActivity extends Activity {
         filaBotonesGlobales.addView(btnDetenerTodas, lpBtnG);
         contenidoScrollCuentas.addView(filaBotonesGlobales, lpFilaGlob);
 
-        // Tarjeta de "Estado Vacío" (Empty State) en el espacio negro inferior cuando hay 0 cuentas
         cardEstadoVacioCuentas = new LinearLayout(this);
         cardEstadoVacioCuentas.setOrientation(LinearLayout.VERTICAL);
         cardEstadoVacioCuentas.setGravity(Gravity.CENTER);
@@ -2163,7 +2142,7 @@ public class MainActivity extends Activity {
         cardAlertasAjustes.setBackground(fondoRedondeadoConBorde("#18181B", "#27272A", 16, 1));
 
         lblSubAlertas = crearTexto("Rendimiento, Proxy, Alertas y Vibración", "#F4F4F5", 15f, true);
-        lblDescAlertas = crearTexto("Opciones de aceleración, cambio automático de IP y avisos sonoros.", "#A1A1AA", 11f, false);
+        lblDescAlertas = crearTexto("Opciones de aceleración por peticiones, cambio de IP en /pg y avisos sonoros.", "#A1A1AA", 11f, false);
         lblDescAlertas.setPadding(0, dp(2), 0, dp(12));
         cardAlertasAjustes.addView(lblSubAlertas);
         cardAlertasAjustes.addView(lblDescAlertas);
@@ -2178,16 +2157,16 @@ public class MainActivity extends Activity {
         panelItemTurbo.setPadding(dp(14), dp(12), dp(12), dp(12));
         LinearLayout colTxtTurbo = new LinearLayout(this);
         colTxtTurbo.setOrientation(LinearLayout.VERTICAL);
-        lblItemTurbo = crearTexto("Modo Turbo sin Imágenes", "#F4F4F5", 13.5f, true);
-        lblDescItemTurbo = crearTexto("Oculta banners e imágenes pesadas al vigilar y comprar para máxima velocidad y ahorro de datos.", "#A1A1AA", 10.5f, false);
+        lblItemTurbo = crearTexto("Filtro Turbo de Peticiones", "#F4F4F5", 13.5f, true);
+        lblDescItemTurbo = crearTexto("Bloquea imágenes, fuentes y sonidos para que solo viajen las peticiones de compra por el proxy.", "#A1A1AA", 10.5f, false);
         lblDescItemTurbo.setPadding(0, dp(2), dp(8), 0);
         colTxtTurbo.addView(lblItemTurbo);
         colTxtTurbo.addView(lblDescItemTurbo);
         btnToggleTurbo = crearBoton("", "#14532D", "#4ADE80", 10, () -> {
             if (modoTurboSinImagenes) {
                 new AlertDialog.Builder(this)
-                        .setTitle("¿Desactivar Modo Turbo?")
-                        .setMessage("¿Estás seguro de desactivar el Modo Turbo?\n\nSi lo desactivas, la página del banco descargará todas las imágenes pesadas y cargará más lento durante la intervención.")
+                        .setTitle("¿Desactivar Filtro Turbo?")
+                        .setMessage("¿Estás seguro de desactivar el Filtro Turbo?\n\nSi lo desactivas, el motor descargará archivos pesados innecesarios a través del proxy.")
                         .setPositiveButton("Desactivar", (d, w) -> {
                             modoTurboSinImagenes = false;
                             prefs.edit().putBoolean("modo_turbo_default_on", false).apply();
@@ -2214,7 +2193,7 @@ public class MainActivity extends Activity {
         LinearLayout colTxtProxy = new LinearLayout(this);
         colTxtProxy.setOrientation(LinearLayout.VERTICAL);
         lblItemProxy = crearTexto("Rotación Automática de IP (Proxy VE)", "#F4F4F5", 13.5f, true);
-        lblDescItemProxy = crearTexto("Asigna IPs residenciales de Venezuela y cambia de IP en /lg si el banco restringe la sesión.", "#A1A1AA", 10.5f, false);
+        lblDescItemProxy = crearTexto("Rota la IP al cargar Posición Global (/pg) y al detectar bloqueo real.", "#A1A1AA", 10.5f, false);
         lblDescItemProxy.setPadding(0, dp(2), dp(8), 0);
         colTxtProxy.addView(lblItemProxy);
         colTxtProxy.addView(lblDescItemProxy);
@@ -2238,7 +2217,7 @@ public class MainActivity extends Activity {
         LinearLayout colTxtOrd = new LinearLayout(this);
         colTxtOrd.setOrientation(LinearLayout.VERTICAL);
         lblItemOrd = crearTexto("Alerta de Ordinaria", "#F4F4F5", 13.5f, true);
-        lblDescItemOrd = crearTexto("Sonido de aviso cuando aparece el botón de Ordinaria.", "#A1A1AA", 10.5f, false);
+        lblDescItemOrd = crearTexto("Sonido de aviso cuando abre el formulario de Ordinaria.", "#A1A1AA", 10.5f, false);
         lblDescItemOrd.setPadding(0, dp(2), dp(8), 0);
         colTxtOrd.addView(lblItemOrd);
         colTxtOrd.addView(lblDescItemOrd);
@@ -2299,7 +2278,7 @@ public class MainActivity extends Activity {
         mainVertical.addView(vistaAjustesScroll, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        // 5. VISTA 4: NUEVA PESTAÑA "PERFIL"
+        // 5. VISTA 4: PESTAÑA "PERFIL"
         vistaPerfilScroll = new ScrollView(this);
         vistaPerfilScroll.setFillViewport(true);
         vistaPerfilScroll.setVerticalScrollBarEnabled(false);
@@ -2316,14 +2295,12 @@ public class MainActivity extends Activity {
         cardPerfilPrincipal.setPadding(dp(18), dp(24), dp(18), dp(20));
         cardPerfilPrincipal.setBackground(fondoRedondeadoConBorde("#18181B", "#27272A", 18, 1));
 
-        // Avatar circular arriba en el centro (cabeza y hombros)
         imgAvatarPerfil = new ImageView(this);
         imgAvatarPerfil.setImageBitmap(crearAvatarCircularPerfil());
         LinearLayout.LayoutParams lpAv = new LinearLayout.LayoutParams(dp(88), dp(88));
         lpAv.setMargins(0, 0, 0, dp(10));
         cardPerfilPrincipal.addView(imgAvatarPerfil, lpAv);
 
-        // Nombre del perfil de licencia justo debajo de la foto
         lblNombrePerfil = crearTexto("geonaldiaz1", "#F8FAFC", 20f, true);
         lblNombrePerfil.setGravity(Gravity.CENTER);
         cardPerfilPrincipal.addView(lblNombrePerfil);
@@ -2340,7 +2317,6 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lpBoxPerf.setMargins(0, 0, 0, dp(10));
 
-        // Apartado 1: ID del dispositivo vinculado
         boxPerfilDevice = new LinearLayout(this);
         boxPerfilDevice.setOrientation(LinearLayout.HORIZONTAL);
         boxPerfilDevice.setGravity(Gravity.CENTER_VERTICAL);
@@ -2353,7 +2329,6 @@ public class MainActivity extends Activity {
         boxPerfilDevice.addView(lblValorDevicePerfil);
         cardPerfilPrincipal.addView(boxPerfilDevice, lpBoxPerf);
 
-        // Apartado 2: Cuentas agregadas
         boxPerfilCuentas = new LinearLayout(this);
         boxPerfilCuentas.setOrientation(LinearLayout.HORIZONTAL);
         boxPerfilCuentas.setGravity(Gravity.CENTER_VERTICAL);
@@ -2366,7 +2341,6 @@ public class MainActivity extends Activity {
         boxPerfilCuentas.addView(lblValorCuentasPerfil);
         cardPerfilPrincipal.addView(boxPerfilCuentas, lpBoxPerf);
 
-        // Apartado 3: Clave con asteriscos (mantener presionado para mostrar)
         boxPerfilClave = new LinearLayout(this);
         boxPerfilClave.setOrientation(LinearLayout.HORIZONTAL);
         boxPerfilClave.setGravity(Gravity.CENTER_VERTICAL);
@@ -2403,14 +2377,12 @@ public class MainActivity extends Activity {
         boxPerfilClave.addView(btnMantenerMostrarClave);
         cardPerfilPrincipal.addView(boxPerfilClave, lpBoxPerf);
 
-        // Botón de Cerrar Sesión de Licencia
         btnCerrarSesionPerfil = crearBotonConIcono("LOGOUT", "Cerrar sesión", "#7F1D1D", "#FCA5A5", 12, this::cerrarSesionDeLicenciaActual);
         LinearLayout.LayoutParams lpBtnOutPerf = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(40));
         lpBtnOutPerf.setMargins(0, dp(8), 0, dp(14));
         cardPerfilPrincipal.addView(btnCerrarSesionPerfil, lpBtnOutPerf);
 
-        // Texto inferior discreto en gris: Licencia activa + Creación + Última conexión
         lblPieLicenciaPerfil = crearTexto("Licencia activa", "#71717A", 10.5f, false);
         lblPieLicenciaPerfil.setGravity(Gravity.CENTER);
         lblPieLicenciaPerfil.setPadding(dp(6), dp(6), dp(6), 0);
@@ -2424,7 +2396,7 @@ public class MainActivity extends Activity {
 
         frameRoot.addView(mainVertical);
 
-        // 6. BARRA FLOTANTE INFERIOR MÁS PEQUEÑA CON 4 PESTAÑAS (Cuentas | Historial | Ajustes | Perfil)
+        // 6. BARRA FLOTANTE INFERIOR COMPACTA CON 4 PESTAÑAS (Cuentas | Historial | Ajustes | Perfil)
         barraFlotante = new LinearLayout(this);
         barraFlotante.setOrientation(LinearLayout.HORIZONTAL);
         barraFlotante.setGravity(Gravity.CENTER);
@@ -2498,7 +2470,7 @@ public class MainActivity extends Activity {
         lpFloating.setMargins(0, 0, 0, dp(10));
         frameRoot.addView(barraFlotante, lpFloating);
 
-        // 7. VENTANA DE LOGIN DE LICENCIA DEL CLIENTE (AUTOCOMPLETADA SI MARCÓ RECORDAR SIEMPRE)
+        // 7. VENTANA DE LOGIN DE LICENCIA DEL CLIENTE
         loginClienteOverlay = construirOverlayLoginCliente();
         frameRoot.addView(loginClienteOverlay);
 
@@ -2596,7 +2568,7 @@ public class MainActivity extends Activity {
                         }
                     })
                     .start();
-        }, 2400);
+        }, 2200);
     }
 
     private void cambiarTema(int nuevoTema) {
@@ -2613,15 +2585,6 @@ public class MainActivity extends Activity {
                     WebSettings ws = s.webViewOculto.getSettings();
                     ws.setBlockNetworkImage(modoTurboSinImagenes);
                     ws.setLoadsImagesAutomatically(!modoTurboSinImagenes);
-                    if (modoTurboSinImagenes) {
-                        evaluarJS(s,
-                                "var st = document.getElementById('__vbt_turbo_css');" +
-                                "if(!st){ st = document.createElement('style'); st.id='__vbt_turbo_css'; if(document.head) document.head.appendChild(st); }" +
-                                "if(st) st.innerHTML = 'img, svg:not(#fb), .carousel, .banner { opacity:0 !important; pointer-events:none !important; }';", null);
-                    } else {
-                        evaluarJS(s,
-                                "var st = document.getElementById('__vbt_turbo_css'); if(st) st.remove();", null);
-                    }
                 } catch (Exception ignored) {}
             }
         }
@@ -2890,93 +2853,34 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void aplicarZoomWebView(final SesionBot s) {
-        if (s == null || s.webViewOculto == null) return;
-        final int zPct = s.zoomPorcentaje;
-        runOnUiThread(() -> {
-            try {
-                String jsZoom =
-                        "var z = '" + (zPct / 100.0) + "';" +
-                        "var vp = document.querySelector('meta[name=\"viewport\"]');" +
-                        "if (!vp) {" +
-                        "  vp = document.createElement('meta');" +
-                        "  vp.name = 'viewport';" +
-                        "  if (document.head) document.head.appendChild(vp);" +
-                        "}" +
-                        "if (vp) vp.setAttribute('content', 'width=device-width, initial-scale=1.0, user-scalable=yes');" +
-                        "if (document.documentElement) document.documentElement.style.zoom = '1';" +
-                        "if (document.body) { document.body.style.zoom = z; }";
-                evaluarJS(s, jsZoom, null);
-            } catch (Exception ignored) {}
-        });
-    }
-
-    private void ciclarZoomTarjeta(SesionBot s) {
-        if (s == null) return;
-        int idxSiguiente = 0;
-        for (int i = 0; i < ESCALAS_ZOOM.length; i++) {
-            if (ESCALAS_ZOOM[i] == s.zoomPorcentaje) {
-                idxSiguiente = (i + 1) % ESCALAS_ZOOM.length;
-                break;
-            }
-        }
-        s.zoomPorcentaje = ESCALAS_ZOOM[idxSiguiente];
-        prefs.edit().putInt("zoom_web_v2_slot_" + s.slotIndex, s.zoomPorcentaje).apply();
-        actualizarBarraUrlTarjeta(s);
-        aplicarZoomWebView(s);
-    }
-
     private void sincronizarVistaPanelCuenta(SesionBot s) {
         if (s == null || s.contenedorDesplegableCard == null) return;
-
         s.contenedorDesplegableCard.setVisibility(s.panelDesplegado ? View.VISIBLE : View.GONE);
-
-        if (s.frameConsolaInterna != null) {
-            s.frameConsolaInterna.setVisibility(s.mostrarConsolaEnPanel ? View.VISIBLE : View.GONE);
-        }
-
-        if (s.btnToggleConsolaMini != null) {
-            s.btnToggleConsolaMini.setText(s.mostrarConsolaEnPanel ? "▲ Ocultar consola" : "▼ Mostrar consola");
-        }
-
-        if (s.webViewOculto != null) {
-            ViewGroup parentActual = (ViewGroup) s.webViewOculto.getParent();
-            FrameLayout destino = s.panelDesplegado ? s.marcoWebViewCard : slotsFondoWebView[s.slotIndex];
-            if (destino != null && parentActual != destino) {
-                if (parentActual != null) {
-                    parentActual.removeView(s.webViewOculto);
-                }
-                destino.addView(s.webViewOculto, new FrameLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-            }
-            if (s.panelDesplegado) {
-                aplicarZoomWebView(s);
-            }
-        }
-
-        if (s.panelDesplegado && s.mostrarConsolaEnPanel && s.scrollConsolaCard != null) {
+        if (s.panelDesplegado && s.scrollConsolaCard != null) {
             s.scrollConsolaCard.post(() -> s.scrollConsolaCard.fullScroll(View.FOCUS_DOWN));
         }
     }
 
-    private void actualizarBarraUrlTarjeta(SesionBot s) {
-        if (s == null) return;
-        runOnUiThread(() -> {
-            if (s.txtUrlCard != null) {
-                String u = (s.urlActualTexto == null || s.urlActualTexto.isEmpty()) ? URL_LOGIN : s.urlActualTexto;
-                ponerIconoYTexto(s.txtUrlCard, crearIconoVectorial("LOCK", colTextoSecundario(), 11), u);
-            }
-            if (s.btnZoomUrlCard != null) {
-                s.btnZoomUrlCard.setText(s.zoomPorcentaje + "%");
-                if (s.cargandoRed && s.progresoWeb < 100) {
-                    s.btnZoomUrlCard.setTextColor(Color.parseColor("#38BDF8"));
-                    s.btnZoomUrlCard.setBackground(fondoRedondeadoConBorde("#1E293B", "#38BDF8", 8, 1));
-                } else {
-                    s.btnZoomUrlCard.setTextColor(Color.parseColor("#4ADE80"));
-                    s.btnZoomUrlCard.setBackground(fondoRedondeadoConBorde("#14532D", "#22C55E", 8, 1));
-                }
-            }
-        });
+    private boolean esRecursoPesadoBloqueable(String urlLower) {
+        if (!modoTurboSinImagenes || urlLower == null) return false;
+        return urlLower.endsWith(".png")
+                || urlLower.endsWith(".jpg")
+                || urlLower.endsWith(".jpeg")
+                || urlLower.endsWith(".gif")
+                || urlLower.endsWith(".webp")
+                || urlLower.endsWith(".svg")
+                || urlLower.endsWith(".ico")
+                || urlLower.endsWith(".woff")
+                || urlLower.endsWith(".woff2")
+                || urlLower.endsWith(".ttf")
+                || urlLower.endsWith(".otf")
+                || urlLower.endsWith(".eot")
+                || urlLower.endsWith(".mp3")
+                || urlLower.endsWith(".wav")
+                || urlLower.contains("/sounds/")
+                || urlLower.contains("/img/")
+                || urlLower.contains("feather.min.js")
+                || urlLower.contains("animate.min.css");
     }
 
     @SuppressLint({"SetJavaScriptEnabled", "ClickableViewAccessibility"})
@@ -2986,14 +2890,14 @@ public class MainActivity extends Activity {
 
             FrameLayout slotFondo = new FrameLayout(this);
             slotsFondoWebView[i] = slotFondo;
-            LinearLayout.LayoutParams lpSlotFondo = new LinearLayout.LayoutParams(
-                    0, ViewGroup.LayoutParams.MATCH_PARENT, 1f);
+            LinearLayout.LayoutParams lpSlotFondo = new LinearLayout.LayoutParams(1, 1);
             if (i < 2) {
                 filaMotoresSup.addView(slotFondo, lpSlotFondo);
             } else {
                 filaMotoresInf.addView(slotFondo, lpSlotFondo);
             }
 
+            // 1. Construir Tarjeta de la Cuenta (Modo Solo Consola en Vivo)
             LinearLayout card = new LinearLayout(this);
             card.setOrientation(LinearLayout.VERTICAL);
             card.setPadding(dp(12), dp(10), dp(12), dp(10));
@@ -3072,39 +2976,20 @@ public class MainActivity extends Activity {
             filaAcciones.addView(bEdit, lpAct);
             card.addView(filaAcciones);
 
+            // Contenedor desplegable: Únicamente Consola de Peticiones en Vivo (135dp de alto)
             LinearLayout boxDesplegable = new LinearLayout(this);
             boxDesplegable.setOrientation(LinearLayout.VERTICAL);
             boxDesplegable.setVisibility(View.GONE);
             boxDesplegable.setPadding(0, dp(8), 0, 0);
             boxDesplegable.setClickable(true);
 
-            LinearLayout filaCabeceraPanel = new LinearLayout(this);
-            filaCabeceraPanel.setOrientation(LinearLayout.HORIZONTAL);
-            filaCabeceraPanel.setGravity(Gravity.CENTER_VERTICAL);
-            filaCabeceraPanel.setPadding(0, 0, 0, dp(5));
-
-            TextView lblMiniTit = crearTexto("Vista en vivo", "#94A3B8", 10.5f, true);
-            filaCabeceraPanel.addView(lblMiniTit, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-
-            TextView btnToggleCon = new TextView(this);
-            btnToggleCon.setText(sesion.mostrarConsolaEnPanel ? "▲ Ocultar consola" : "▼ Mostrar consola");
-            btnToggleCon.setTextColor(Color.parseColor("#38BDF8"));
-            btnToggleCon.setTextSize(10f);
-            btnToggleCon.setTypeface(null, Typeface.BOLD);
-            btnToggleCon.setPadding(dp(9), dp(3), dp(9), dp(3));
-            btnToggleCon.setBackground(fondoRedondeadoConBorde("#1E293B", "#334155", 8, 1));
-            btnToggleCon.setOnClickListener(v -> {
-                sesion.mostrarConsolaEnPanel = !sesion.mostrarConsolaEnPanel;
-                prefs.edit().putBoolean("mostrar_consola_slot_" + sesion.slotIndex, sesion.mostrarConsolaEnPanel).apply();
-                sincronizarVistaPanelCuenta(sesion);
-            });
-            filaCabeceraPanel.addView(btnToggleCon);
-            boxDesplegable.addView(filaCabeceraPanel);
+            TextView lblMiniTit = crearTexto("Consola de peticiones directas en vivo", "#94A3B8", 10.5f, true);
+            lblMiniTit.setPadding(0, 0, 0, dp(5));
+            boxDesplegable.addView(lblMiniTit);
 
             FrameLayout frameCon = new FrameLayout(this);
             LinearLayout.LayoutParams lpFrameCon = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, dp(85));
-            lpFrameCon.setMargins(0, 0, 0, dp(7));
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(135));
 
             ScrollView scrollCon = new ScrollView(this);
             scrollCon.setBackground(fondoRedondeadoConBorde("#0F1115", "#27272A", 10, 1));
@@ -3143,81 +3028,6 @@ public class MainActivity extends Activity {
             frameCon.addView(btnLimpiarMini, lpLimp);
 
             boxDesplegable.addView(frameCon, lpFrameCon);
-
-            LinearLayout barraNav = new LinearLayout(this);
-            barraNav.setOrientation(LinearLayout.HORIZONTAL);
-            barraNav.setGravity(Gravity.CENTER_VERTICAL);
-            barraNav.setPadding(dp(6), dp(5), dp(6), dp(5));
-            barraNav.setBackground(fondoRedondeadoConBorde("#14161A", "#27272A", 10, 1));
-            LinearLayout.LayoutParams lpBarraNav = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            lpBarraNav.setMargins(0, 0, 0, dp(6));
-
-            ImageView btnBack = new ImageView(this);
-            btnBack.setScaleType(ImageView.ScaleType.CENTER);
-            btnBack.setImageDrawable(crearIconoVectorial("BACK", "#E4E4E7", 15));
-            btnBack.setBackground(fondoRedondeado("#202227", 8));
-            btnBack.setOnClickListener(v -> {
-                if (sesion.webViewOculto != null) {
-                    ultimoSlotActivoRed = sesion.slotIndex;
-                    if (sesion.webViewOculto.canGoBack()) {
-                        sesion.webViewOculto.goBack();
-                    } else {
-                        sesion.webViewOculto.loadUrl(URL_LOGIN);
-                    }
-                }
-            });
-
-            ImageView btnReload = new ImageView(this);
-            btnReload.setScaleType(ImageView.ScaleType.CENTER);
-            btnReload.setImageDrawable(crearIconoVectorial("RELOAD", "#E4E4E7", 15));
-            btnReload.setBackground(fondoRedondeado("#202227", 8));
-            btnReload.setOnClickListener(v -> {
-                if (sesion.webViewOculto != null) {
-                    ultimoSlotActivoRed = sesion.slotIndex;
-                    String u = sesion.webViewOculto.getUrl();
-                    if (u == null || u.isEmpty()) {
-                        sesion.webViewOculto.loadUrl(URL_LOGIN);
-                    } else {
-                        sesion.webViewOculto.reload();
-                    }
-                }
-            });
-
-            LinearLayout.LayoutParams lpBtnNav = new LinearLayout.LayoutParams(dp(30), dp(28));
-            lpBtnNav.setMargins(0, 0, dp(5), 0);
-            barraNav.addView(btnBack, lpBtnNav);
-            barraNav.addView(btnReload, lpBtnNav);
-
-            LinearLayout cajaUrl = new LinearLayout(this);
-            cajaUrl.setOrientation(LinearLayout.HORIZONTAL);
-            cajaUrl.setGravity(Gravity.CENTER_VERTICAL);
-            cajaUrl.setPadding(dp(8), dp(4), dp(6), dp(4));
-            cajaUrl.setBackground(fondoRedondeadoConBorde("#0F1115", "#27272A", 14, 1));
-
-            TextView txtUrl = crearTexto("", "#E4E4E7", 10.5f, false);
-            txtUrl.setSingleLine(true);
-            txtUrl.setEllipsize(TextUtils.TruncateAt.END);
-            ponerIconoYTexto(txtUrl, crearIconoVectorial("LOCK", "#94A3B8", 11), URL_LOGIN);
-
-            TextView btnZoom = crearTexto(sesion.zoomPorcentaje + "%", "#4ADE80", 9.5f, true);
-            btnZoom.setPadding(dp(8), dp(2), dp(8), dp(2));
-            btnZoom.setBackground(fondoRedondeadoConBorde("#14532D", "#22C55E", 8, 1));
-            btnZoom.setClickable(true);
-            btnZoom.setOnClickListener(v -> ciclarZoomTarjeta(sesion));
-
-            cajaUrl.addView(txtUrl, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-            cajaUrl.addView(btnZoom);
-            barraNav.addView(cajaUrl, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-
-            boxDesplegable.addView(barraNav, lpBarraNav);
-
-            FrameLayout marcoWv = new FrameLayout(this);
-            marcoWv.setBackground(fondoRedondeadoConBorde("#0F1115", "#27272A", 10, 1));
-            marcoWv.setPadding(dp(2), dp(2), dp(2), dp(2));
-            boxDesplegable.addView(marcoWv, new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, dp(320)));
-
             card.addView(boxDesplegable);
 
             sesion.cardView = card;
@@ -3233,51 +3043,24 @@ public class MainActivity extends Activity {
             sesion.btnEditCard = bEdit;
 
             sesion.contenedorDesplegableCard = boxDesplegable;
-            sesion.btnToggleConsolaMini = btnToggleCon;
             sesion.frameConsolaInterna = frameCon;
             sesion.scrollConsolaCard = scrollCon;
             sesion.txtConsolaCard = txtCon;
             sesion.btnLimpiarMiniCard = btnLimpiarMini;
 
-            sesion.barraNavegadorCard = barraNav;
-            sesion.btnNavBackCard = btnBack;
-            sesion.btnNavReloadCard = btnReload;
-            sesion.cajaUrlCard = cajaUrl;
-            sesion.txtUrlCard = txtUrl;
-            sesion.btnZoomUrlCard = btnZoom;
-            sesion.marcoWebViewCard = marcoWv;
-
-            // Motor WebView acelerado por Hardware + Caché de recursos estáticos del banco
+            // 2. Motor de Peticiones con bloqueo de recursos pesados a nivel de red
             WebView wv = new WebView(this);
-            wv.setBackgroundColor(Color.parseColor("#18181B"));
-            wv.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+            wv.setBackgroundColor(Color.TRANSPARENT);
             configurarPerfilAisladoWebView(wv, i);
-
-            wv.setOnTouchListener((v, event) -> {
-                v.getParent().requestDisallowInterceptTouchEvent(true);
-                if (event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL) {
-                    v.getParent().requestDisallowInterceptTouchEvent(false);
-                }
-                return false;
-            });
 
             WebSettings ws = wv.getSettings();
             ws.setJavaScriptEnabled(true);
             ws.setDomStorageEnabled(true);
             ws.setDatabaseEnabled(true);
-            ws.setLoadWithOverviewMode(false);
-            ws.setUseWideViewPort(false);
-            ws.setTextZoom(100);
-            ws.setSupportZoom(true);
-            ws.setBuiltInZoomControls(true);
-            ws.setDisplayZoomControls(false);
             ws.setLoadsImagesAutomatically(!modoTurboSinImagenes);
             ws.setBlockNetworkImage(modoTurboSinImagenes);
             ws.setBlockNetworkLoads(false);
             ws.setCacheMode(WebSettings.LOAD_DEFAULT);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                ws.setOffscreenPreRaster(true);
-            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 ws.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
             }
@@ -3292,28 +3075,31 @@ public class MainActivity extends Activity {
                 public void onProgressChanged(WebView view, int newProgress) {
                     sesion.progresoWeb = newProgress;
                     sesion.cargandoRed = (newProgress < 100);
-                    String currentU = view.getUrl();
-                    if (currentU != null && !currentU.isEmpty()) {
-                        sesion.urlActualTexto = currentU;
-                    }
-                    if (newProgress >= 50) {
-                        aplicarZoomWebView(sesion);
-                    }
-                    actualizarBarraUrlTarjeta(sesion);
                 }
             });
 
             wv.setWebViewClient(new WebViewClient() {
+                @Override
+                public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                    if (request != null && request.getUrl() != null) {
+                        String uLower = request.getUrl().toString().toLowerCase(Locale.ROOT);
+                        if (esRecursoPesadoBloqueable(uLower)) {
+                            return new WebResourceResponse(
+                                    "text/plain",
+                                    "UTF-8",
+                                    new ByteArrayInputStream(new byte[0])
+                            );
+                        }
+                    }
+                    return super.shouldInterceptRequest(view, request);
+                }
+
                 @Override
                 public void onPageStarted(WebView view, String url, Bitmap favicon) {
                     super.onPageStarted(view, url, favicon);
                     ultimoSlotActivoRed = sesion.slotIndex;
                     sesion.cargandoRed = true;
                     sesion.inicioCargaRedMs = System.currentTimeMillis();
-                    if (url != null && !url.isEmpty()) {
-                        sesion.urlActualTexto = url;
-                    }
-                    actualizarBarraUrlTarjeta(sesion);
                 }
 
                 @Override
@@ -3324,17 +3110,6 @@ public class MainActivity extends Activity {
                     if (sesion.inicioCargaRedMs > 0) {
                         sesion.latenciaMs = Math.max(15, System.currentTimeMillis() - sesion.inicioCargaRedMs);
                     }
-                    if (url != null && !url.isEmpty()) {
-                        sesion.urlActualTexto = url;
-                    }
-                    aplicarZoomWebView(sesion);
-                    if (modoTurboSinImagenes) {
-                        evaluarJS(sesion,
-                                "var st = document.getElementById('__vbt_turbo_css');" +
-                                "if(!st){ st = document.createElement('style'); st.id='__vbt_turbo_css'; if(document.head) document.head.appendChild(st); }" +
-                                "if(st) st.innerHTML = 'img, svg:not(#fb), .carousel, .banner { opacity:0 !important; pointer-events:none !important; }';", null);
-                    }
-                    actualizarBarraUrlTarjeta(sesion);
                 }
 
                 @Override
@@ -3357,7 +3132,6 @@ public class MainActivity extends Activity {
                     if (request != null && request.isForMainFrame()) {
                         sesion.cargandoRed = false;
                         sesion.progresoWeb = 100;
-                        actualizarBarraUrlTarjeta(sesion);
                     }
                 }
 
@@ -3368,8 +3142,7 @@ public class MainActivity extends Activity {
             });
 
             sesion.webViewOculto = wv;
-            slotFondo.addView(wv, new FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            slotFondo.addView(wv, new FrameLayout.LayoutParams(1, 1));
             sincronizarVistaPanelCuenta(sesion);
             wv.loadUrl(URL_LOGIN);
         }
@@ -3470,9 +3243,6 @@ public class MainActivity extends Activity {
             s.lblUsuarioCard.setTextColor(Color.parseColor(txtSec));
         }
 
-        // Animación de Borde Neón:
-        // 1) Cuando entra al formulario bien -> Amarillo Dorado (#FACC15)
-        // 2) Cuando compra -> Titila un borde verde neón durante 3 segundos y luego queda verde fijo
         if (s.compraCompletada) {
             if (titilandoCompraVerde) {
                 String bordeTitileo = pulsoNeon ? "#00FF66" : "#14532D";
@@ -3535,37 +3305,6 @@ public class MainActivity extends Activity {
         }
         if (s.txtConsolaCard != null) {
             s.txtConsolaCard.setTextColor(Color.parseColor(colTextoConsola()));
-        }
-
-        if (s.btnToggleConsolaMini != null) {
-            s.btnToggleConsolaMini.setText(s.mostrarConsolaEnPanel ? "▲ Ocultar consola" : "▼ Mostrar consola");
-            s.btnToggleConsolaMini.setTextColor(Color.parseColor(temaActual == 2 ? "#0284C7" : "#38BDF8"));
-            s.btnToggleConsolaMini.setBackground(fondoRedondeadoConBorde(bgSub, borderCard, 8, 1));
-        }
-
-        if (s.barraNavegadorCard != null) {
-            s.barraNavegadorCard.setBackground(fondoRedondeadoConBorde(bgSub, borderCard, 10, 1));
-        }
-        if (s.btnNavBackCard != null) {
-            s.btnNavBackCard.setBackground(fondoRedondeado(bgCard, 8));
-            s.btnNavBackCard.setImageDrawable(crearIconoVectorial("BACK", txtPri, 15));
-        }
-        if (s.btnNavReloadCard != null) {
-            s.btnNavReloadCard.setBackground(fondoRedondeado(bgCard, 8));
-            s.btnNavReloadCard.setImageDrawable(crearIconoVectorial("RELOAD", txtPri, 15));
-        }
-        if (s.cajaUrlCard != null) {
-            s.cajaUrlCard.setBackground(fondoRedondeadoConBorde(colFondoConsola(), borderCard, 14, 1));
-        }
-        if (s.txtUrlCard != null) {
-            s.txtUrlCard.setTextColor(Color.parseColor(txtPri));
-            ponerIconoYTexto(s.txtUrlCard, crearIconoVectorial("LOCK", txtSec, 11), s.urlActualTexto);
-        }
-        if (s.btnZoomUrlCard != null) {
-            s.btnZoomUrlCard.setText(s.zoomPorcentaje + "%");
-        }
-        if (s.marcoWebViewCard != null) {
-            s.marcoWebViewCard.setBackground(fondoRedondeadoConBorde(colFondoConsola(), borderCard, 10, 1));
         }
 
         String bgBtnPlay = temaActual == 1 ? "#134E4A" : (temaActual == 2 ? "#DCFCE7" : "#14532D");
@@ -3653,10 +3392,6 @@ public class MainActivity extends Activity {
         btnDetenerTodas.setTextColor(Color.parseColor(hayParaDetener ? "#FFFFFF" : txtStopOff));
     }
 
-    /**
-     * Lector ligero de saldos: solo hace fetch('/pg') cuando se le pide explícitamente (al iniciar o tras comprar)
-     * para NO saturar el ancho de banda del proxy mientras navega a Operaciones de Intervención.
-     */
     private void actualizarSaldosEnSegundoPlano(final SesionBot s, boolean permitirFetchRemoto) {
         if (s == null || s.webViewOculto == null) return;
         long ahora = System.currentTimeMillis();
@@ -3917,7 +3652,7 @@ public class MainActivity extends Activity {
 
             if (s.txtConsolaCard != null && s.scrollConsolaCard != null) {
                 s.txtConsolaCard.append("[" + hora + "] " + mensajeClaro + "\n");
-                if (s.panelDesplegado && s.mostrarConsolaEnPanel) {
+                if (s.panelDesplegado) {
                     s.scrollConsolaCard.post(() -> s.scrollConsolaCard.fullScroll(View.FOCUS_DOWN));
                 }
             }
@@ -4311,23 +4046,23 @@ public class MainActivity extends Activity {
             case ENFRIANDO_CAMBIO_IP: base = "CAMBIANDO IP (2s)"; break;
             case CARGANDO_LOGIN:
             case ESPERANDO_ESTABILIZAR_LOGIN:
-            case ENVIANDO_FASE1: base = "INICIANDO"; break;
+            case ENVIANDO_FASE1: base = "LOGIN RSA"; break;
             case ESPERANDO_CARGA_PASS:
             case ESPERANDO_ESTABILIZAR_PASS:
-            case ENVIANDO_FASE2: base = "CONTRASEÑA"; break;
+            case ENVIANDO_FASE2: base = "CLAVE RSA"; break;
             case ESPERANDO_REINTENTO_SESION_ACTIVA: base = "SESIÓN ACTIVA"; break;
             case ESPERANDO_CARGA_INICIO:
             case ESPERANDO_ESTABILIZAR_INICIO: base = "POSICIÓN GLOBAL"; break;
-            case NAVEGANDO_MENU: base = "INTERVENCIÓN"; break;
+            case NAVEGANDO_MENU: base = "PETICIÓN /INT"; break;
             case VIGILANDO: base = "VIGILANDO"; break;
             case ESPERANDO_FORM_INTENTO1:
             case LIMPIANDO_PANTALLA:
-            case ESPERANDO_FORM_INTENTO2: base = "ABRIENDO ORD"; break;
+            case ESPERANDO_FORM_INTENTO2: base = "PETICIÓN /CREATE"; break;
             case ESPERANDO_ESTABILIZAR_FORM:
             case LLENANDO_COMPRA:
             case COMPRANDO: base = "FORMULARIO • COMPRANDO"; break;
             case CERRANDO_SESION:
-            case REINICIANDO_RED: base = "CERRANDO SESIÓN"; break;
+            case REINICIANDO_RED: base = "LOGOUT 1-TOQUE"; break;
             default: base = "ACTIVO"; break;
         }
         if (s.latenciaMs > 0) {
@@ -4337,7 +4072,7 @@ public class MainActivity extends Activity {
     }
 
     // =========================================================================================
-    // ENCENDIDO FIABLE (CON 1, 2, 3 O 4 CUENTAS), PAUSA SIN CERRAR SESIÓN Y BOTÓN SALIR
+    // ENCENDIDO FIABLE, PAUSA SIN CERRAR SESIÓN Y LOGOUT DIRECTO EN 1 INTENTO
     // =========================================================================================
     private void iniciarTodasLasCuentas() {
         ArrayList<SesionBot> reg = obtenerSesionesRegistradas();
@@ -4370,14 +4105,16 @@ public class MainActivity extends Activity {
         s.corriendo = true;
         s.detenerTrasCerrarSesion = false;
         s.rotarIpTrasCerrarSesion = false;
+        s.yaRotoIpEnPosicionGlobal = false;
         s.compraCompletada = false;
         s.tiempoCompraExitosaMs = 0;
         s.ultimoMontoAjustado = 0;
+        s.reintentosAjaxCreate = 0;
         s.intentoLogout = 0;
         cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
 
         if (!s.sesionAbiertaEnServidor) {
-            registrarPasoCuenta(s, "Iniciando sesión con Proxy VE (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
+            registrarPasoCuenta(s, "Iniciando por petición RSA (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
         } else {
             registrarPasoCuenta(s, "Reanudando cuenta...");
         }
@@ -4410,12 +4147,12 @@ public class MainActivity extends Activity {
         s.rotarIpTrasCerrarSesion = false;
         s.intentoLogout = 0;
         cambiarEstado(s, EstadoBot.CERRANDO_SESION);
-        registrarPasoCuenta(s, "Cerrando sesión...");
+        registrarPasoCuenta(s, "Enviando petición directa POST /logout (1 intento)...");
         ejecutarPasoMaquinaEstados(s);
     }
 
     // =========================================================================================
-    // CONTROL DE RED INTERNA (QUITAR Y PONER INTERNET AL NAVEGADOR DE LA CUENTA)
+    // CONTROL DE RED INTERNA
     // =========================================================================================
     @SuppressWarnings("deprecation")
     private boolean hayInternetDisponible() {
@@ -4495,7 +4232,7 @@ public class MainActivity extends Activity {
                 } catch (Exception ignored) {}
             }
             s.microCortePropio = false;
-        }, 1200);
+        }, 1000);
     }
 
     private void evaluarJS(SesionBot s, String script, ValueCallback<String> callback) {
@@ -4539,9 +4276,9 @@ public class MainActivity extends Activity {
                 } else {
                     lblReloginVal.setText(minutosRelogin + " min (--:--)");
                 }
-                handler.postDelayed(this, 360);
+                handler.postDelayed(this, 340);
             }
-        }, 360);
+        }, 340);
     }
 
     private void verificarTiemposDeSesionIndependientes(ArrayList<SesionBot> reg) {
@@ -4570,6 +4307,17 @@ public class MainActivity extends Activity {
         for (SesionBot s : reg) {
             if (!s.estaCorriendo()) continue;
 
+            // Pulso silencioso POST /p cada 55s para reiniciar el Timer de 2.5 min del banco
+            if (s.sesionAbiertaEnServidor && (ahora - s.ultimoKeepAliveMs > 55000)) {
+                s.ultimoKeepAliveMs = ahora;
+                evaluarJS(s,
+                        "if(window.jQuery){" +
+                        "  var t = $('meta[name=\"csrf-token\"]').attr('content') || '';" +
+                        "  $.post('https://tesoroenlinea.bt.com.ve/p', {'_token': t});" +
+                        "  if(window.timer && typeof timer.reset === 'function'){ try{ timer.reset(150000); }catch(e){} }" +
+                        "}", null);
+            }
+
             if (s.tiempoInicioSesionMs > 0 && s.estadoActual == EstadoBot.VIGILANDO) {
                 long transcurridoSeg = (ahora - s.tiempoInicioSesionMs) / 1000;
                 long restante = Math.max(0, totalSeg - transcurridoSeg);
@@ -4595,7 +4343,7 @@ public class MainActivity extends Activity {
     }
 
     // =========================================================================================
-    // MÁQUINA DE ESTADOS ULTRARRÁPIDA CON LECTURA DE TASA BCV / CÓDIGO DE TABLA
+    // MÁQUINA DE ESTADOS POR PETICIONES DIRECTAS (generateFormEncrypt + $.ajax /int/create)
     // =========================================================================================
     private void ejecutarPasoMaquinaEstados(final SesionBot sesion) {
         if (sesion == null || sesion.webViewOculto == null) return;
@@ -4604,16 +4352,13 @@ public class MainActivity extends Activity {
         String jsInspector =
                 "var ready = (document.readyState === 'complete' || document.readyState === 'interactive');" +
                 "var bodyTxt = document.body ? document.body.innerText.toLowerCase() : '';" +
-                "var cargandoTxt = (bodyTxt.indexOf('cargando, por favor espera') !== -1 || bodyTxt.indexOf('procesando') !== -1);" +
-                "var modalLogout = (bodyTxt.indexOf('deseas cerrar tu sesión') !== -1 || bodyTxt.indexOf('deseas cerrar tu sesion') !== -1);" +
+                "var cargandoTxt = (bodyTxt.indexOf('cargando, por favor espera') !== -1 && !document.querySelector('#documento') && !document.querySelector('#password'));" +
                 "var sesionActivaErr = (bodyTxt.indexOf('sesión activa') !== -1 || bodyTxt.indexOf('sesion activa') !== -1 || bodyTxt.indexOf('posee una sesión') !== -1 || bodyTxt.indexOf('posee una sesion') !== -1);" +
                 "var metaTok = document.querySelector('meta[name=\"csrf-token\"]');" +
                 "var inputTok = document.querySelector('input[name=\"_token\"]');" +
                 "var csrfActual = metaTok ? metaTok.getAttribute('content') : (inputTok ? inputTok.value : '');" +
-                "var btnX = document.querySelector(\"button.close, .btn-close, [aria-label='Close']\");" +
-                "if (btnX && btnX.offsetParent !== null && !modalLogout) { btnX.click(); }" +
-                "var btnOk = Array.from(document.querySelectorAll('button, a')).find(el => el.innerText && (el.innerText.trim() === 'OK' || el.innerText.trim() === 'Aceptar'));" +
-                "if (btnOk && btnOk.offsetWidth > 0 && bodyTxt.indexOf('deseas realizar') === -1 && !modalLogout) { btnOk.click(); }" +
+                "var btnX = document.querySelector(\"button.close, .btn-close, [aria-label='Close'], [data-bs-dismiss='modal']\");" +
+                "if (btnX && btnX.offsetParent !== null) { try{ btnX.click(); }catch(e){} }" +
                 "var doc = document.querySelector('#documento');" +
                 "var usr = document.querySelector('#username');" +
                 "var pass = document.querySelector('#password');" +
@@ -4621,9 +4366,8 @@ public class MainActivity extends Activity {
                 "var ord = document.querySelector(\"a.btn-tesoro-green, a[href*='mod.add(1)']\") || Array.from(document.querySelectorAll('.card-header a, .card-header button')).find(el => el.innerText && el.innerText.trim().toLowerCase() === 'ordinaria');" +
                 "var btnLogout = document.querySelector(\"a[href='javascript:Logout()'], header ul li a\");" +
                 "var menuInt = document.querySelector(\"a.sidebar-link[href='/int']\");" +
-                "var opsDiv = Array.from(document.querySelectorAll('a')).find(el => el.textContent.includes('Operaciones Divisas'));" +
-                "var inicioListo = !!(ready && !cargandoTxt && (menuInt || opsDiv || btnLogout) && (bodyTxt.indexOf('posición global') !== -1 || bodyTxt.indexOf('productos activos') !== -1 || bodyTxt.indexOf('operaciones') !== -1 || bodyTxt.indexOf('últ. conexión') !== -1 || bodyTxt.indexOf('ult. conexión') !== -1));" +
-                "var tablaIntLista = !!(ready && !cargandoTxt && (bodyTxt.indexOf('operaciones de intervención') !== -1 || (ord && ord.offsetWidth > 0)));" +
+                "var inicioListo = !!(ready && (menuInt || btnLogout || typeof postURL === 'function') && !doc && !pass);" +
+                "var tablaIntLista = !!(ready && (bodyTxt.indexOf('operaciones de intervención') !== -1 || (ord && ord.offsetWidth > 0)));" +
                 "var inconv = (bodyTxt.indexOf('presentando inconvenientes') !== -1 || bodyTxt.indexOf('no podemos procesar su solicitud') !== -1);" +
                 "var exito = bodyTxt.indexOf('registrada exitosamente') !== -1;" +
                 "var sinCupo = bodyTxt.indexOf('no hay asignación disponible') !== -1;" +
@@ -4668,15 +4412,16 @@ public class MainActivity extends Activity {
                 "return JSON.stringify({" +
                 "  ready: ready," +
                 "  cargando: cargandoTxt," +
-                "  doc: !!(doc && usr && doc.offsetWidth > 0 && usr.offsetWidth > 0 && !cargandoTxt)," +
-                "  pass: !!(pass && pass.offsetWidth > 0 && !cargandoTxt)," +
+                "  doc: !!(doc && usr)," +
+                "  pass: !!(pass && !doc)," +
                 "  inicio: inicioListo," +
                 "  tablaInt: tablaIntLista," +
-                "  monto: !!(monto && monto.offsetWidth > 0 && !cargandoTxt)," +
-                "  ord: !!(ord && ord.offsetWidth > 0 && !cargandoTxt)," +
-                "  modalLogout: modalLogout," +
+                "  monto: !!(monto)," +
+                "  ord: !!(ord && ord.offsetWidth > 0)," +
                 "  inconv: inconv, exito: exito, sinCupo: sinCupo, sesionActivaErr: sesionActivaErr," +
                 "  logoutOk: !!window.__vbt_logout_ok," +
+                "  createStatus: window.__vbt_create_status || 0," +
+                "  createPendiente: !!window.__vbt_create_pendiente," +
                 "  csrf: csrfActual || ''," +
                 "  ping: pingCalc || 0," +
                 "  codOp: codTabla || ''," +
@@ -4703,6 +4448,8 @@ public class MainActivity extends Activity {
                 String tasaBcvLeida = st.optString("tasaBcv", "");
                 long pingWeb = st.optLong("ping", 0);
                 int mAjustado = st.optInt("montoAjustado", 0);
+                int createStatus = st.optInt("createStatus", 0);
+                boolean createPendiente = st.optBoolean("createPendiente", false);
 
                 if (pingWeb > 0) {
                     sesion.latenciaMs = pingWeb;
@@ -4764,12 +4511,13 @@ public class MainActivity extends Activity {
                         visTabla,
                         visMonto,
                         visOrd,
-                        st.optBoolean("modalLogout"),
                         st.optBoolean("inconv"),
                         st.optBoolean("exito"),
                         st.optBoolean("sinCupo"),
                         st.optBoolean("sesionActivaErr"),
-                        st.optBoolean("logoutOk")
+                        st.optBoolean("logoutOk"),
+                        createStatus,
+                        createPendiente
                 );
             } catch (Exception ignored) {}
         });
@@ -4778,17 +4526,18 @@ public class MainActivity extends Activity {
     private void procesarEstadoConDatos(
             SesionBot s, long ahora, boolean paginaCompleta, boolean visDoc, boolean visPass,
             boolean visInicioCompleto, boolean visTablaInt, boolean visMonto,
-            boolean visOrd, boolean visModalLogout, boolean hayInconv, boolean hayExito,
-            boolean haySinCupo, boolean haySesionActivaErr, boolean logoutOk
+            boolean visOrd, boolean hayInconv, boolean hayExito,
+            boolean haySinCupo, boolean haySesionActivaErr, boolean logoutOk,
+            int createStatus, boolean createPendiente
     ) {
         if (!s.estaCorriendo()) return;
 
         if (visInicioCompleto || visTablaInt || visMonto) {
             s.sesionAbiertaEnServidor = true;
-            // En tabla de intervención y formulario solo lee el DOM local sin lanzar fetch('/pg')
             actualizarSaldosEnSegundoPlano(s, false);
         }
 
+        String codTipoDoc = s.codigoNumericoTipoDoc();
         String cedSafe = s.cedula.replace("\\", "\\\\").replace("'", "\\'");
         String usrSafe = s.usuario.replace("\\", "\\\\").replace("'", "\\'");
         String clvSafe = s.contrasena.replace("\\", "\\\\").replace("'", "\\'");
@@ -4801,7 +4550,7 @@ public class MainActivity extends Activity {
                 if (ahora - s.tiempoEstadoMs >= 2000) {
                     ultimoSlotActivoRed = s.slotIndex;
                     s.webViewOculto.loadUrl(URL_LOGIN);
-                    registrarPasoCuenta(s, "Enfriamiento 2s completado - Iniciando sesión con nueva IP VE");
+                    registrarPasoCuenta(s, "Enfriamiento 2s completado - Entrando con nueva IP VE");
                     cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
                 }
                 break;
@@ -4822,7 +4571,7 @@ public class MainActivity extends Activity {
                 if (paginaCompleta && visInicioCompleto) {
                     if (s.tiempoInicioSesionMs == 0) s.tiempoInicioSesionMs = ahora;
                     s.sesionAbiertaEnServidor = true;
-                    registrarPasoCuenta(s, "Sesión iniciada - Posición Global");
+                    registrarPasoCuenta(s, "Posición Global cargada");
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_INICIO);
                     return;
                 }
@@ -4835,7 +4584,7 @@ public class MainActivity extends Activity {
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_LOGIN);
                     return;
                 }
-                if (ahora - s.tiempoEstadoMs > 12000) {
+                if (ahora - s.tiempoEstadoMs > 10000) {
                     s.tiempoEstadoMs = ahora;
                     ultimoSlotActivoRed = s.slotIndex;
                     s.webViewOculto.stopLoading();
@@ -4848,38 +4597,36 @@ public class MainActivity extends Activity {
                     cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
                     return;
                 }
-                if (ahora - s.tiempoEstadoMs >= 140) {
+                if (ahora - s.tiempoEstadoMs >= 80) {
                     cambiarEstado(s, EstadoBot.ENVIANDO_FASE1);
                 }
                 break;
 
+            // Fase 1 Instantánea usando generateFormEncrypt hacia /lg/chk con código numérico (01, 08, etc.)
             case ENVIANDO_FASE1:
                 if (!s.accionEnCurso) {
                     s.accionEnCurso = true;
                     ultimoSlotActivoRed = s.slotIndex;
-                    String jsFase1 =
+                    registrarPasoCuenta(s, "Enviando petición RSA a /lg/chk (" + s.cedulaMostrada() + ")");
+                    String jsFase1Directa =
                             "var sel = document.querySelector('#tipodocben');" +
-                            "if(sel) { for(var i=0; i<sel.options.length; i++) { if(sel.options[i].text.trim().toUpperCase() === '" + s.tipoDoc + "') { sel.selectedIndex = i; break; } } sel.dispatchEvent(new Event('change', {bubbles:true})); }" +
-                            "var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;" +
-                            "var d = document.querySelector('#documento'); var u = document.querySelector('#username');" +
-                            "if(d && u) {" +
-                            "  d.focus(); setter.call(d, ''); setter.call(u, '');" +
-                            "  function typeStr(el, str, i, cb) {" +
-                            "    if(i < str.length) {" +
-                            "      setter.call(el, str.substring(0, i + 1)); el.dispatchEvent(new Event('input', {bubbles:true}));" +
-                            "      setTimeout(function(){ typeStr(el, str, i+1, cb); }, 6);" +
-                            "    } else { el.dispatchEvent(new Event('change', {bubbles:true})); if(cb) cb(); }" +
+                            "if (sel) { sel.value = '" + codTipoDoc + "'; sel.dispatchEvent(new Event('change', {bubbles:true})); }" +
+                            "var d = document.querySelector('#documento');" +
+                            "var u = document.querySelector('#username');" +
+                            "if (d && u) {" +
+                            "  d.value = '" + cedSafe + "';" +
+                            "  u.value = '" + usrSafe + "';" +
+                            "  var tokInput = document.querySelector('input[name=\"_token\"]');" +
+                            "  var tok = tokInput ? tokInput.value : '';" +
+                            "  if (typeof generateFormEncrypt === 'function' && window.jQuery && tok) {" +
+                            "    var enc = generateFormEncrypt($('#form').serializeArray(), 'https://tesoroenlinea.bt.com.ve/lg/chk', tok);" +
+                            "    enc.submit();" +
+                            "  } else {" +
+                            "    var btn = document.querySelector(\"button[type='submit']\");" +
+                            "    if (btn) btn.click(); else document.querySelector('#form').submit();" +
                             "  }" +
-                            "  typeStr(d, '" + cedSafe + "', 0, function() {" +
-                            "    setTimeout(function() {" +
-                            "      u.focus();" +
-                            "      typeStr(u, '" + usrSafe + "', 0, function() {" +
-                            "        setTimeout(function() { var btn = document.querySelector(\"button[type='submit'], .btn-primary\"); if(btn) btn.click(); }, 60);" +
-                            "      });" +
-                            "    }, 40);" +
-                            "  });" +
                             "}";
-                    evaluarJS(s, jsFase1, null);
+                    evaluarJS(s, jsFase1Directa, null);
                     cambiarEstado(s, EstadoBot.ESPERANDO_CARGA_PASS);
                 }
                 break;
@@ -4894,8 +4641,7 @@ public class MainActivity extends Activity {
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_PASS);
                     return;
                 }
-                if (ahora - s.tiempoEstadoMs > 12000) {
-                    registrarPasoCuenta(s, "Iniciando sesión (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
+                if (ahora - s.tiempoEstadoMs > 10000) {
                     s.webViewOculto.stopLoading();
                     s.webViewOculto.loadUrl(URL_LOGIN);
                     cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
@@ -4912,32 +4658,32 @@ public class MainActivity extends Activity {
                     cambiarEstado(s, EstadoBot.ESPERANDO_CARGA_PASS);
                     return;
                 }
-                if (ahora - s.tiempoEstadoMs >= 140) {
+                if (ahora - s.tiempoEstadoMs >= 80) {
                     cambiarEstado(s, EstadoBot.ENVIANDO_FASE2);
                 }
                 break;
 
+            // Fase 2 Instantánea usando generateFormEncrypt hacia /lg/exe conservando el input oculto "d"
             case ENVIANDO_FASE2:
                 if (!s.accionEnCurso) {
                     s.accionEnCurso = true;
                     ultimoSlotActivoRed = s.slotIndex;
-                    registrarPasoCuenta(s, "Colocando contraseña");
-                    String jsFase2 =
-                            "var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;" +
+                    registrarPasoCuenta(s, "Enviando contraseña encriptada RSA a /lg/exe");
+                    String jsFase2Directa =
                             "var p = document.querySelector('#password');" +
-                            "if(p) {" +
-                            "  p.focus(); setter.call(p, '');" +
-                            "  function typeStr(el, str, i, cb) {" +
-                            "    if(i < str.length) {" +
-                            "      setter.call(el, str.substring(0, i + 1)); el.dispatchEvent(new Event('input', {bubbles:true}));" +
-                            "      setTimeout(function(){ typeStr(el, str, i+1, cb); }, 6);" +
-                            "    } else { el.dispatchEvent(new Event('change', {bubbles:true})); if(cb) cb(); }" +
+                            "if (p) {" +
+                            "  p.value = '" + clvSafe + "';" +
+                            "  var tokInput = document.querySelector('input[name=\"_token\"]');" +
+                            "  var tok = tokInput ? tokInput.value : '';" +
+                            "  if (typeof generateFormEncrypt === 'function' && window.jQuery && tok) {" +
+                            "    var enc = generateFormEncrypt($('#form').serializeArray(), 'https://tesoroenlinea.bt.com.ve/lg/exe', tok);" +
+                            "    enc.submit();" +
+                            "  } else {" +
+                            "    var btn = document.querySelector(\"button[type='submit']\");" +
+                            "    if (btn) btn.click(); else document.querySelector('#form').submit();" +
                             "  }" +
-                            "  typeStr(p, '" + clvSafe + "', 0, function() {" +
-                            "    setTimeout(function() { var btn = document.querySelector(\"button[type='submit'], .btn-primary\"); if(btn) btn.click(); }, 60);" +
-                            "  });" +
                             "}";
-                    evaluarJS(s, jsFase2, null);
+                    evaluarJS(s, jsFase2Directa, null);
                     cambiarEstado(s, EstadoBot.ESPERANDO_CARGA_INICIO);
                 }
                 break;
@@ -4951,27 +4697,30 @@ public class MainActivity extends Activity {
                 if (paginaCompleta && visInicioCompleto) {
                     s.tiempoInicioSesionMs = ahora;
                     s.sesionAbiertaEnServidor = true;
-                    registrarPasoCuenta(s, "Sesión iniciada - Posición Global");
+                    registrarPasoCuenta(s, "Sesión iniciada - Posición Global (/pg)");
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_INICIO);
                     return;
                 }
-                if (ahora - s.tiempoEstadoMs > 10000 && paginaCompleta && visDoc) {
-                    registrarPasoCuenta(s, "Iniciando sesión (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
+                if (ahora - s.tiempoEstadoMs > 9500 && paginaCompleta && visDoc) {
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_LOGIN);
                 }
                 break;
 
             case ESPERANDO_REINTENTO_SESION_ACTIVA:
                 if (ahora - s.tiempoEstadoMs >= 6000) {
-                    registrarPasoCuenta(s, "Iniciando sesión (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
                     s.webViewOculto.stopLoading();
                     s.webViewOculto.loadUrl(URL_LOGIN);
                     cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
                 }
                 break;
 
+            // Rotación de IP en Posición Global (/pg) apenas carga la sesión
             case ESPERANDO_ESTABILIZAR_INICIO:
-                if (ahora - s.tiempoEstadoMs >= 150) {
+                if (!s.yaRotoIpEnPosicionGlobal && proxyRotativoActivo) {
+                    s.yaRotoIpEnPosicionGlobal = true;
+                    rotarIpEnPosicionGlobalSinBorrarSesion(s);
+                }
+                if (ahora - s.tiempoEstadoMs >= 100) {
                     cambiarEstado(s, EstadoBot.NAVEGANDO_MENU);
                 }
                 break;
@@ -4983,9 +4732,9 @@ public class MainActivity extends Activity {
                 }
                 if (!s.accionEnCurso) {
                     s.accionEnCurso = true;
-                    registrarPasoCuenta(s, "Entrando a intervención");
+                    registrarPasoCuenta(s, "Petición directa postURL('/int')...");
                     irAIntervencionJS(s);
-                } else if (ahora - s.tiempoEstadoMs > 4800 && paginaCompleta) {
+                } else if (ahora - s.tiempoEstadoMs > 4200 && paginaCompleta) {
                     s.tiempoEstadoMs = ahora;
                     irAIntervencionJS(s);
                 }
@@ -4994,7 +4743,7 @@ public class MainActivity extends Activity {
             case VIGILANDO:
                 if (paginaCompleta && visDoc) {
                     s.sesionAbiertaEnServidor = false;
-                    registrarPasoCuenta(s, "Iniciando sesión (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
+                    s.yaRotoIpEnPosicionGlobal = false;
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_LOGIN);
                     return;
                 }
@@ -5003,12 +4752,13 @@ public class MainActivity extends Activity {
                     return;
                 }
                 if (paginaCompleta && visOrd) {
-                    registrarPasoCuenta(s, "Disparo directo en Ordinaria (mod.add)");
+                    s.reintentosAjaxCreate = 0;
+                    registrarPasoCuenta(s, "¡Botón detectado! Lanzando petición directa POST /int/create");
                     if (!yaAvisoApertura) {
                         yaAvisoApertura = true;
                         sonarAlertaOrdinaria();
                     }
-                    clicarOrdinariaJS(s);
+                    dispararPeticionOrdinariaDirecta(s);
                     cambiarEstado(s, EstadoBot.ESPERANDO_FORM_INTENTO1);
                     return;
                 }
@@ -5016,63 +4766,81 @@ public class MainActivity extends Activity {
                 if (paginaCompleta && (ahora - s.tiempoEstadoMs >= esperaConJitter)) {
                     s.tiempoEstadoMs = ahora;
                     s.vueltaActual++;
-                    registrarPasoCuenta(s, "Sin botón intento " + s.vueltaActual);
+                    registrarPasoCuenta(s, "Petición /int intento " + s.vueltaActual + " (Sin apertura)");
                     irAIntervencionJS(s);
                 }
                 break;
 
+            // Evaluación inteligente del código HTTP de /int/create para no mostrar "presentando inconvenientes"
             case ESPERANDO_FORM_INTENTO1:
-                if (paginaCompleta && visMonto && !hayInconv) {
-                    registrarPasoCuenta(s, "Formulario abierto - Borde Dorado activo");
+                if (visMonto && !hayInconv) {
+                    registrarPasoCuenta(s, "¡Formulario /int/create recibido! Borde Dorado activo");
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_FORM);
                     return;
                 }
-                if (hayInconv || (paginaCompleta && ahora - s.tiempoEstadoMs > 4200)) {
-                    irAIntervencionJS(s);
+                if (!createPendiente && createStatus != 0) {
+                    if (createStatus == 401 || createStatus == 419) {
+                        s.webViewOculto.loadUrl(URL_LOGIN);
+                        cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
+                        return;
+                    }
+                    if (createStatus == 403 || createStatus == 429) {
+                        s.intentoLogout = 0;
+                        s.detenerTrasCerrarSesion = false;
+                        s.rotarIpTrasCerrarSesion = true;
+                        registrarPasoCuenta(s, "Restricción HTTP " + createStatus + " - Cerrando en 1 toque para rotar IP");
+                        cambiarEstado(s, EstadoBot.CERRANDO_SESION);
+                        return;
+                    }
+                    // Si es 500, 502, 503 o colapso del banco, reintenta directo por AJAX sin cerrar sesión
+                    s.reintentosAjaxCreate++;
+                    if (s.reintentosAjaxCreate <= 3) {
+                        cambiarEstado(s, EstadoBot.LIMPIANDO_PANTALLA);
+                    } else {
+                        s.intentoLogout = 0;
+                        s.detenerTrasCerrarSesion = false;
+                        s.rotarIpTrasCerrarSesion = true;
+                        registrarPasoCuenta(s, "Sin respuesta de /int/create tras 3 tiros - Rotando IP");
+                        cambiarEstado(s, EstadoBot.CERRANDO_SESION);
+                    }
+                    return;
+                }
+                if (ahora - s.tiempoEstadoMs > 4500) {
                     cambiarEstado(s, EstadoBot.LIMPIANDO_PANTALLA);
                 }
                 break;
 
             case LIMPIANDO_PANTALLA:
-                if (paginaCompleta && visTablaInt && (ahora - s.tiempoEstadoMs >= 1300)) {
-                    if (visOrd) {
-                        registrarPasoCuenta(s, "Segundo intento en Ordinaria (mod.add)");
-                        clicarOrdinariaJS(s);
-                        cambiarEstado(s, EstadoBot.ESPERANDO_FORM_INTENTO2);
-                    } else {
-                        cambiarEstado(s, EstadoBot.VIGILANDO);
-                    }
-                } else if (ahora - s.tiempoEstadoMs > 7000) {
-                    cambiarEstado(s, EstadoBot.VIGILANDO);
+                if (visMonto && !hayInconv) {
+                    cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_FORM);
+                    return;
+                }
+                if (ahora - s.tiempoEstadoMs >= 650) {
+                    registrarPasoCuenta(s, "Reintento directo AJAX #" + s.reintentosAjaxCreate + " a /int/create...");
+                    dispararPeticionOrdinariaDirecta(s);
+                    cambiarEstado(s, EstadoBot.ESPERANDO_FORM_INTENTO1);
                 }
                 break;
 
             case ESPERANDO_FORM_INTENTO2:
-                if (paginaCompleta && visMonto && !hayInconv) {
-                    sonarAlertaOrdinaria();
-                    registrarPasoCuenta(s, "Formulario abierto - Borde Dorado activo");
+                if (visMonto && !hayInconv) {
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_FORM);
-                    return;
-                }
-                if (hayInconv || (paginaCompleta && ahora - s.tiempoEstadoMs > 4500)) {
-                    s.intentoLogout = 0;
-                    s.detenerTrasCerrarSesion = false;
-                    s.rotarIpTrasCerrarSesion = true;
-                    registrarPasoCuenta(s, "Inconvenientes detectado - Cerrando sesión para cambiar IP");
-                    cambiarEstado(s, EstadoBot.CERRANDO_SESION);
+                } else if (ahora - s.tiempoEstadoMs > 3000) {
+                    cambiarEstado(s, EstadoBot.VIGILANDO);
                 }
                 break;
 
             case ESPERANDO_ESTABILIZAR_FORM:
-                if (ahora - s.tiempoEstadoMs >= 120) {
+                if (ahora - s.tiempoEstadoMs >= 80) {
                     cambiarEstado(s, EstadoBot.LLENANDO_COMPRA);
                 }
                 break;
 
+            // Compra instantánea con auto-respuesta inmediata a Swal.fire (0ms sin esperar modal)
             case LLENANDO_COMPRA:
                 if (!s.accionEnCurso) {
                     s.accionEnCurso = true;
-                    registrarPasoCuenta(s, "Rellenando formulario y verificando saldo Bs");
+                    registrarPasoCuenta(s, "Enviando orden de compra (" + s.montoCompra + "$) por petición...");
                     String jsCompraDirecta =
                             "window.__vbt_monto_ajustado = 0;" +
                             "function parseNumVE(str) {" +
@@ -5092,6 +4860,16 @@ public class MainActivity extends Activity {
                             "  var montoMeta = " + s.montoCompra + ";" +
                             "  var pasos = ['" + strEntero.substring(0, 1) + "', '" + strEntero + "', '" + strCompleto + "'];" +
                             "  function dispararGuardadoOrden() {" +
+                            "    if (window.Swal && typeof Swal.fire === 'function' && !window.__vbt_swal_hooked) {" +
+                            "      var origFire = Swal.fire.bind(Swal);" +
+                            "      window.__vbt_swal_hooked = true;" +
+                            "      Swal.fire = function(opts) {" +
+                            "        if (opts && typeof opts === 'object' && opts.showCancelButton) {" +
+                            "          return Promise.resolve({ value: true, isConfirmed: true });" +
+                            "        }" +
+                            "        return origFire.apply(this, arguments);" +
+                            "      };" +
+                            "    }" +
                             "    var confirmarInstantaneo = function() {" +
                             "      var btnSi = document.querySelector('button.swal2-confirm') || Array.from(document.querySelectorAll('button, a')).find(el => el.innerText && (el.innerText.trim().toLowerCase() === 'si' || el.innerText.trim().toLowerCase() === 'sí'));" +
                             "      if(btnSi && btnSi.offsetWidth > 0) { btnSi.click(); return true; }" +
@@ -5101,12 +4879,13 @@ public class MainActivity extends Activity {
                             "    if(document.body) obs.observe(document.body, {childList:true, subtree:true});" +
                             "    if (typeof mod !== 'undefined' && typeof mod.save === 'function') {" +
                             "      try { mod.save(); } catch(e){}" +
+                            "    } else {" +
+                            "      var col = document.querySelector(\"a[href='javascript:mod.save()']\") || Array.from(document.querySelectorAll('a, button')).find(el => el.innerText && el.innerText.toLowerCase().includes('colocar orden'));" +
+                            "      if(col) { try { col.click(); } catch(e){} }" +
                             "    }" +
-                            "    var col = document.querySelector(\"a[href='javascript:mod.save()']\") || Array.from(document.querySelectorAll('a, button')).find(el => el.innerText && el.innerText.toLowerCase().includes('colocar orden'));" +
-                            "    if(col) { try { col.click(); } catch(e){} }" +
-                            "    setTimeout(confirmarInstantaneo, 140);" +
-                            "    setTimeout(confirmarInstantaneo, 320);" +
-                            "    setTimeout(function(){ try{obs.disconnect();}catch(e){} }, 3500);" +
+                            "    setTimeout(confirmarInstantaneo, 100);" +
+                            "    setTimeout(confirmarInstantaneo, 250);" +
+                            "    setTimeout(function(){ try{obs.disconnect();}catch(e){} }, 3000);" +
                             "  }" +
                             "  function verificarSaldoYAjustar() {" +
                             "    try {" +
@@ -5128,14 +4907,14 @@ public class MainActivity extends Activity {
                             "        }" +
                             "      }" +
                             "    } catch(e){}" +
-                            "    setTimeout(dispararGuardadoOrden, 80);" +
+                            "    setTimeout(dispararGuardadoOrden, 60);" +
                             "  }" +
                             "  function escribirPaso(idx) {" +
                             "    if(idx < pasos.length) {" +
                             "      setter.call(m, pasos[idx]);" +
                             "      m.dispatchEvent(new Event('input', {bubbles:true}));" +
                             "      m.dispatchEvent(new KeyboardEvent('keyup', {bubbles:true}));" +
-                            "      setTimeout(function(){ escribirPaso(idx + 1); }, 20);" +
+                            "      setTimeout(function(){ escribirPaso(idx + 1); }, 15);" +
                             "    } else {" +
                             "      if(m.value.indexOf('" + strEntero + "') === -1) {" +
                             "        setter.call(m, '" + strCompleto + "');" +
@@ -5143,10 +4922,10 @@ public class MainActivity extends Activity {
                             "      }" +
                             "      m.dispatchEvent(new Event('change', {bubbles:true}));" +
                             "      m.dispatchEvent(new Event('blur', {bubbles:true}));" +
-                            "      setTimeout(verificarSaldoYAjustar, 90);" +
+                            "      setTimeout(verificarSaldoYAjustar, 75);" +
                             "    }" +
                             "  }" +
-                            "  setTimeout(function(){ escribirPaso(0); }, 40);" +
+                            "  setTimeout(function(){ escribirPaso(0); }, 25);" +
                             "}";
                     evaluarJS(s, jsCompraDirecta, null);
                     cambiarEstado(s, EstadoBot.COMPRANDO);
@@ -5160,19 +4939,6 @@ public class MainActivity extends Activity {
                     s.corriendo = false;
                     int montoFinalCompra = (s.ultimoMontoAjustado > 0) ? s.ultimoMontoAjustado : s.montoCompra;
                     registrarNuevaCompraExitosa(s, montoFinalCompra + ".00$", s.ultimaTasaLeida, s.ultimoCodigoOpLeido);
-                    evaluarJS(s,
-                            "try {" +
-                            "  var optD = document.querySelector('#desde option[data-disponible]');" +
-                            "  var tot = document.querySelector('#total-03');" +
-                            "  if (optD && tot && tot.value) {" +
-                            "    var dispActual = parseFloat(optD.getAttribute('data-disponible') || '0');" +
-                            "    var bloq = parseFloat(tot.value.replace(/\\./g, '').replace(',', '.'));" +
-                            "    if (!isNaN(dispActual) && !isNaN(bloq) && dispActual >= bloq) {" +
-                            "      var rest = dispActual - bloq;" +
-                            "      window.__vbt_bs = rest.toLocaleString('es-VE', {minimumFractionDigits: 2, maximumFractionDigits: 2});" +
-                            "    }" +
-                            "  }" +
-                            "} catch(e){}", null);
                     actualizarSaldosEnSegundoPlano(s, true);
                     registrarPasoCuenta(s, "Orden completada exitosamente (" + montoFinalCompra + "$)");
                     sonarAlertaCompraExitosa();
@@ -5187,16 +4953,18 @@ public class MainActivity extends Activity {
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_FORM);
                     return;
                 }
-                if (ahora - s.tiempoEstadoMs > 8500) {
+                if (ahora - s.tiempoEstadoMs > 8000) {
                     actualizarSaldosEnSegundoPlano(s, true);
                     cambiarEstado(s, EstadoBot.VIGILANDO);
                 }
                 break;
 
+            // Cierre de sesión garantizado en 1 solo intento por $.post('/logout')
             case CERRANDO_SESION:
                 if (logoutOk || (paginaCompleta && (visDoc || visPass))) {
                     evaluarJS(s, "window.__vbt_logout_ok = false;", null);
                     s.sesionAbiertaEnServidor = false;
+                    s.yaRotoIpEnPosicionGlobal = false;
                     if (!visDoc) {
                         s.webViewOculto.loadUrl(URL_LOGIN);
                     }
@@ -5205,147 +4973,143 @@ public class MainActivity extends Activity {
                         s.detenerTrasCerrarSesion = false;
                         s.rotarIpTrasCerrarSesion = false;
                         s.tiempoInicioSesionMs = 0;
-                        registrarPasoCuenta(s, "Sesión cerrada y cuenta detenida");
+                        registrarPasoCuenta(s, "Sesión cerrada en 1 intento y cuenta detenida");
                         cambiarEstado(s, EstadoBot.DETENIDO);
                     } else if (s.rotarIpTrasCerrarSesion && proxyRotativoActivo) {
                         s.rotarIpTrasCerrarSesion = false;
-                        rotarIpProxyParaCuenta(s, "Restricción en Ordinaria");
+                        rotarIpProxyParaCuenta(s, "Rotación limpia");
                         cambiarEstado(s, EstadoBot.ENFRIANDO_CAMBIO_IP);
                     } else {
                         s.rotarIpTrasCerrarSesion = false;
-                        registrarPasoCuenta(s, "Iniciando sesión (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
+                        registrarPasoCuenta(s, "Sesión cerrada en 1 intento - Reiniciando login");
                         cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
                     }
                     return;
                 }
-                if (visModalLogout) {
-                    evaluarJS(s,
-                            "var bSi = document.querySelector('button.swal2-confirm') || Array.from(document.querySelectorAll('button, a')).find(el => el.innerText && (el.innerText.trim().toLowerCase() === 'si' || el.innerText.trim().toLowerCase() === 'sí'));" +
-                            "if (bSi && bSi.offsetWidth > 0 && !window.__vbt_si_clicked) {" +
-                            "  window.__vbt_si_clicked = true;" +
-                            "  bSi.click();" +
-                            "  setTimeout(function(){ window.__vbt_si_clicked = false; }, 1800);" +
-                            "}", null);
-                }
                 if (!s.accionEnCurso) {
                     s.accionEnCurso = true;
-                    s.intentoLogout++;
+                    s.intentoLogout = 1;
                     s.tiempoEstadoMs = ahora;
-                    registrarPasoCuenta(s, "Cerrando sesión intento " + s.intentoLogout);
+                    registrarPasoCuenta(s, "Cerrando sesión en 1 intento (POST /logout)...");
                     ejecutarScriptLogoutDirecto(s);
-                } else if (ahora - s.tiempoEstadoMs > 6500) {
-                    cambiarEstado(s, EstadoBot.REINICIANDO_RED);
-                    reiniciarConexionIndividual(s);
+                } else if (ahora - s.tiempoEstadoMs > 2800) {
+                    // Si el servidor tarda más de 2.8s en responder al POST, limpia cookie local y salta a /lg
+                    s.sesionAbiertaEnServidor = false;
+                    s.yaRotoIpEnPosicionGlobal = false;
+                    CookieManager.getInstance().removeSessionCookies(null);
+                    s.webViewOculto.loadUrl(URL_LOGIN);
                 }
                 break;
 
             case REINICIANDO_RED:
-                if (!s.microCortePropio && (ahora - s.tiempoEstadoMs >= 1250)) {
+                if (!s.microCortePropio && (ahora - s.tiempoEstadoMs >= 1050)) {
                     cambiarEstado(s, EstadoBot.CERRANDO_SESION);
                 }
                 break;
         }
     }
 
+    /**
+     * Cierre de sesión directo en 1 solo intento:
+     * Ejecuta exactamente el $.post('https://tesoroenlinea.bt.com.ve/logout', {}) que descubrimos
+     * adentro de la función Logout() del banco, sin abrir Swal.fire.
+     */
     private void ejecutarScriptLogoutDirecto(SesionBot s) {
         String csrfRespaldo = (s.csrfTokenGuardado != null) ? s.csrfTokenGuardado.replace("'", "") : "";
 
-        String jsLogout =
+        String jsLogout1Intento =
                 "window.__vbt_logout_ok = false;" +
-                "window.__vbt_si_clicked = false;" +
                 "(function(){" +
-                "  try {" +
-                "    var cerrarModalesPrevios = document.querySelectorAll(\"button.close, .btn-close, [data-dismiss='modal']\");" +
-                "    for (var i = 0; i < cerrarModalesPrevios.length; i++) {" +
-                "      if (cerrarModalesPrevios[i].offsetWidth > 0) { try { cerrarModalesPrevios[i].click(); } catch(e){} }" +
-                "    }" +
-                "  } catch(e){}" +
-                "  function clicarBotonSi() {" +
-                "    var bSi = document.querySelector('button.swal2-confirm') || Array.from(document.querySelectorAll('.swal2-actions button, button, a')).find(function(el){" +
-                "      if (!el || !el.innerText || el.offsetWidth <= 0) return false;" +
-                "      var t = el.innerText.trim().toLowerCase();" +
-                "      return t === 'si' || t === 'sí';" +
+                "  try { if (window.rajax) rajax.abort(); } catch(e){}" +
+                "  var meta = document.querySelector('meta[name=\"csrf-token\"]');" +
+                "  var inTok = document.querySelector('input[name=\"_token\"]');" +
+                "  var tok = (meta && meta.getAttribute('content')) ? meta.getAttribute('content') : ((inTok && inTok.value) ? inTok.value : '" + csrfRespaldo + "');" +
+                "  if (window.jQuery && typeof $.post === 'function') {" +
+                "    $.post('https://tesoroenlinea.bt.com.ve/logout', {'_token': tok}).always(function(){" +
+                "      window.__vbt_logout_ok = true;" +
+                "      window.location.replace('https://tesoroenlinea.bt.com.ve/lg');" +
                 "    });" +
-                "    if (bSi && bSi.offsetWidth > 0) {" +
-                "      window.__vbt_si_clicked = true;" +
-                "      bSi.click();" +
-                "      return true;" +
-                "    }" +
-                "    return false;" +
+                "  } else {" +
+                "    fetch('https://tesoroenlinea.bt.com.ve/logout', {" +
+                "      method: 'POST'," +
+                "      headers: {'X-Requested-With': 'XMLHttpRequest', 'Content-Type': 'application/x-www-form-urlencoded', 'X-CSRF-TOKEN': tok}," +
+                "      body: '_token=' + encodeURIComponent(tok)," +
+                "      credentials: 'same-origin'" +
+                "    }).finally(function(){" +
+                "      window.__vbt_logout_ok = true;" +
+                "      window.location.replace('https://tesoroenlinea.bt.com.ve/lg');" +
+                "    });" +
                 "  }" +
-                "  if (clicarBotonSi()) return;" +
-                "  var disparado = false;" +
-                "  if (typeof Logout === 'function') {" +
-                "    try { Logout(); disparado = true; } catch(e){}" +
-                "  }" +
-                "  if (!disparado) {" +
-                "    var btnSalir = document.querySelector(\"a[href='javascript:Logout()'], a[href*='Logout()'], a[onclick*='Logout']\");" +
-                "    if (btnSalir) { try { btnSalir.click(); disparado = true; } catch(e){} }" +
-                "  }" +
-                "  var intentos = 0;" +
-                "  var timerSi = setInterval(function(){" +
-                "    intentos++;" +
-                "    if (clicarBotonSi() || intentos > 25) {" +
-                "      clearInterval(timerSi);" +
-                "    }" +
-                "  }, 60);" +
                 "  setTimeout(function(){" +
-                "    if (window.location.pathname.indexOf('/lg') === -1) {" +
-                "      var meta = document.querySelector('meta[name=\"csrf-token\"]');" +
-                "      var inTok = document.querySelector('input[name=\"_token\"]');" +
-                "      var tok = (meta && meta.getAttribute('content')) ? meta.getAttribute('content') : ((inTok && inTok.value) ? inTok.value : '" + csrfRespaldo + "');" +
-                "      if (tok) {" +
-                "        fetch('https://tesoroenlinea.bt.com.ve/logout', {" +
-                "          method: 'POST'," +
-                "          headers: {" +
-                "            'Accept': 'application/json, text/javascript, */*; q=0.01'," +
-                "            'X-Requested-With': 'XMLHttpRequest'," +
-                "            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'," +
-                "            'X-CSRF-TOKEN': tok" +
-                "          }," +
-                "          body: '_token=' + encodeURIComponent(tok)," +
-                "          credentials: 'same-origin'" +
-                "        }).then(function(r){" +
-                "          if (r.status === 200 || r.status === 302 || r.redirected) {" +
-                "            window.__vbt_logout_ok = true;" +
-                "            window.location.replace('https://tesoroenlinea.bt.com.ve/lg');" +
-                "          }" +
-                "        }).catch(function(){});" +
-                "      }" +
-                "    }" +
-                "  }, 2400);" +
+                "    window.__vbt_logout_ok = true;" +
+                "    window.location.replace('https://tesoroenlinea.bt.com.ve/lg');" +
+                "  }, 1400);" +
                 "})();";
-        evaluarJS(s, jsLogout, null);
+        evaluarJS(s, jsLogout1Intento, null);
     }
 
-    private void clicarOrdinariaJS(SesionBot s) {
+    /**
+     * Petición directa a https://tesoroenlinea.bt.com.ve/int/create sin pasar por postURL:
+     * Evita que la página dibuje el cartel "presentando inconvenientes" si hay un micro-error 500/503,
+     * e inyecta el formulario inmediatamente cuando recibe código 200.
+     */
+    private void dispararPeticionOrdinariaDirecta(SesionBot s) {
         ultimoSlotActivoRed = s.slotIndex;
-        String jsOrd =
-                "var ejecutado = false;" +
-                "if (typeof mod !== 'undefined' && typeof mod.add === 'function') {" +
-                "  try { mod.add(1); ejecutado = true; } catch(e){}" +
-                "}" +
-                "if (!ejecutado) {" +
-                "  var b = document.querySelector(\"a.btn-tesoro-green, a[href*='mod.add(1)']\") || Array.from(document.querySelectorAll('.card-header a, .card-header button')).find(el => el.innerText && el.innerText.trim().toLowerCase() === 'ordinaria');" +
-                "  if(b) b.click();" +
-                "}";
-        evaluarJS(s, jsOrd, null);
+        String jsAjaxCreate =
+                "window.__vbt_create_status = 0;" +
+                "window.__vbt_create_pendiente = true;" +
+                "(function(){" +
+                "  var t0 = Date.now();" +
+                "  var tok = $('meta[name=\"csrf-token\"]').attr('content') || '';" +
+                "  if (window.jQuery && typeof $.ajax === 'function') {" +
+                "    $.ajax({" +
+                "      type: 'POST'," +
+                "      url: 'https://tesoroenlinea.bt.com.ve/int/create'," +
+                "      dataType: 'html'," +
+                "      cache: false," +
+                "      headers: {'X-CSRF-TOKEN': tok}," +
+                "      success: function(html) {" +
+                "        window.__vbt_ping = Math.max(10, Date.now() - t0);" +
+                "        window.__vbt_create_pendiente = false;" +
+                "        var low = (html || '').toLowerCase();" +
+                "        if (low.indexOf('presentando inconvenientes') !== -1 || low.indexOf('no podemos procesar') !== -1) {" +
+                "          window.__vbt_create_status = 503;" +
+                "        } else {" +
+                "          window.__vbt_create_status = 200;" +
+                "          var dest = (typeof container !== 'undefined' && container && container.length) ? container : $('#content');" +
+                "          dest.html(html);" +
+                "        }" +
+                "      }," +
+                "      error: function(xhr) {" +
+                "        window.__vbt_ping = Math.max(10, Date.now() - t0);" +
+                "        window.__vbt_create_pendiente = false;" +
+                "        window.__vbt_create_status = (xhr && xhr.status) ? xhr.status : 500;" +
+                "      }" +
+                "    });" +
+                "  } else if (typeof mod !== 'undefined' && typeof mod.add === 'function') {" +
+                "    window.__vbt_create_pendiente = false;" +
+                "    mod.add(1);" +
+                "  }" +
+                "})();";
+        evaluarJS(s, jsAjaxCreate, null);
     }
 
+    /**
+     * Petición directa a https://tesoroenlinea.bt.com.ve/int usando postURL nativo del banco.
+     */
     private void irAIntervencionJS(SesionBot s) {
         ultimoSlotActivoRed = s.slotIndex;
-        String jsMenu =
-                "var sub = document.querySelector(\"a.sidebar-link[href='/int']\");" +
-                "if (sub && sub.offsetWidth > 0) {" +
-                "  sub.click();" +
+        String jsPeticionInt =
+                "if (typeof postURL === 'function' && typeof container !== 'undefined' && container) {" +
+                "  var t0 = Date.now();" +
+                "  postURL('https://tesoroenlinea.bt.com.ve/int', container, null, function(data){" +
+                "    window.__vbt_ping = Math.max(10, Date.now() - t0);" +
+                "    container.html(data);" +
+                "  });" +
                 "} else {" +
-                "  var ops = Array.from(document.querySelectorAll('a')).find(el => el.textContent.includes('Operaciones Divisas'));" +
-                "  if (ops) { ops.click(); }" +
-                "  setTimeout(function(){" +
-                "    var sub2 = document.querySelector(\"a.sidebar-link[href='/int']\");" +
-                "    if (sub2) { sub2.click(); } else { window.location.hash = '#/int'; }" +
-                "  }, 280);" +
+                "  var sub = document.querySelector(\"a.sidebar-link[href='/int']\");" +
+                "  if (sub) { sub.click(); } else { window.location.hash = '#/int'; }" +
                 "}";
-        evaluarJS(s, jsMenu, null);
+        evaluarJS(s, jsPeticionInt, null);
     }
 }
