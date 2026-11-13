@@ -95,8 +95,10 @@ import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Date;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
@@ -123,7 +125,7 @@ public class MainActivity extends Activity {
     private static final String CLAVE_MAESTRA_VENDEDOR = "geonal11";
 
     // =========================================================================================
-    // CREDENCIALES DE PROXY RESIDENCIAL IPROYAL VENEZUELA (TURBO POOL)
+    // CREDENCIALES DE PROXY RESIDENCIAL IPROYAL VENEZUELA (MODO HÍBRIDO: DIRECTO EN LOGIN / PROXY EN PG)
     // =========================================================================================
     private static final String PRX_H_B64 = "Z2VvLmlwcm95YWwuY29t";
     private static final int PRX_PORT = 12321;
@@ -188,7 +190,7 @@ public class MainActivity extends Activity {
     private TextView lblItemVib, lblDescItemVib;
     private Button btnToggleTurbo, btnToggleProxy, btnToggleOrd, btnToggleCompra, btnToggleVib;
 
-    // Contenedor oculto de motores en segundo plano (sin pantalla web visible)
+    // Contenedor oculto de motores en segundo plano
     private LinearLayout filaMotoresSup, filaMotoresInf;
     private final FrameLayout[] slotsFondoWebView = new FrameLayout[MAX_CUENTAS];
 
@@ -290,6 +292,7 @@ public class MainActivity extends Activity {
         boolean detenerTrasCerrarSesion = false;
         boolean rotarIpTrasCerrarSesion = false;
         boolean yaRotoIpEnPosicionGlobal = false;
+        volatile boolean usandoTunelProxy = false;
         boolean sesionAbiertaEnServidor = false;
         boolean nombreOculto = false;
 
@@ -317,6 +320,7 @@ public class MainActivity extends Activity {
         long tiempoCompraExitosaMs = 0;
         String ultimoPasoTexto = "Sin actividad todavía";
 
+        final List<Socket> socketsAbiertos = Collections.synchronizedList(new ArrayList<>());
         WebView webViewOculto;
 
         LinearLayout cardView;
@@ -341,6 +345,7 @@ public class MainActivity extends Activity {
         boolean accionEnCurso = false;
         boolean microCortePropio = false;
         int vueltaActual = 0;
+        int ultimoIntentoLogueado = 0;
         int reintentosAjaxCreate = 0;
         int intentoLogout = 0;
         boolean compraCompletada = false;
@@ -391,7 +396,10 @@ public class MainActivity extends Activity {
                 return "🌐 Conexión Directa (Proxy desactivado)";
             }
             String idCorto = idSesionProxy.length() >= 6 ? idSesionProxy.substring(0, 6).toUpperCase() : idSesionProxy.toUpperCase();
-            return "🌐 IP Proxy VE Activa • Sesión #" + idCorto + " • Cambios IP: " + contadorRotacionesIp;
+            if (estaCorriendo() && !usandoTunelProxy) {
+                return "⚡ Login con Internet Directo (Activará Proxy #" + idCorto + " en /pg)";
+            }
+            return "🌐 IP Proxy VE Activa en /pg • Sesión #" + idCorto + " • Cambios IP: " + contadorRotacionesIp;
         }
 
         boolean estaEnFormularioCompra() {
@@ -492,7 +500,7 @@ public class MainActivity extends Activity {
     }
 
     // =========================================================================================
-    // MOTOR DE PROXY TURBO + ROTACIÓN EN POSICIÓN GLOBAL (/pg) SIN CERRAR SESIÓN
+    // PUENTE HÍBRIDO INTELIGENTE: INTERNET DIRECTO EN LOGIN (/lg) + PROXY VE EN POSICIÓN GLOBAL (/pg)
     // =========================================================================================
     private String generarIdSesionProxyNuevo() {
         String chars = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -518,25 +526,60 @@ public class MainActivity extends Activity {
         return PRX_PASS_RAW + "_country-ve_session-" + sesId + "_lifetime-15m";
     }
 
+    private void cerrarSocketsActivosDeSesion(SesionBot s) {
+        if (s == null) return;
+        synchronized (s.socketsAbiertos) {
+            for (Socket sock : s.socketsAbiertos) {
+                try {
+                    if (sock != null && !sock.isClosed()) {
+                        sock.close();
+                    }
+                } catch (Exception ignored) {}
+            }
+            s.socketsAbiertos.clear();
+        }
+    }
+
     /**
-     * Rota la IP de IPRoyal en caliente cuando la cuenta ya cargó Posición Global (/pg),
-     * conservando las cookies de sesión para ir directo a Intervención (/int).
+     * Se ejecuta apenas la cuenta entra a Posición Global (/pg) con tu internet normal:
+     * Activa el túnel Proxy VE, genera una nueva IP de Venezuela y cierra los sockets directos
+     * del Login para que todas las peticiones a /int y /int/create salgan con la nueva IP del Proxy.
      */
-    private void rotarIpEnPosicionGlobalSinBorrarSesion(final SesionBot s) {
-        if (s == null || !proxyRotativoActivo) return;
+    private void activarProxyYRotarIpEnPosicionGlobal(final SesionBot s, String motivo) {
+        if (s == null) return;
+        if (!proxyRotativoActivo) {
+            s.usandoTunelProxy = false;
+            return;
+        }
         s.idSesionProxy = generarIdSesionProxyNuevo();
         s.contadorRotacionesIp++;
+        s.usandoTunelProxy = true;
         ultimoSlotActivoRed = s.slotIndex;
+        cerrarSocketsActivosDeSesion(s);
+
         runOnUiThread(() -> actualizarVisualTarjeta(s));
         String idCorto = s.idSesionProxy.substring(0, 6).toUpperCase();
-        registrarPasoCuenta(s, "IP rotada en Posición Global -> Nueva Sesión VE #" + idCorto);
+        registrarPasoCuenta(s, "🌐 Proxy VE activado y cambio de IP en /pg (" + motivo + ") -> Sesión #" + idCorto);
+    }
+
+    /**
+     * Desactiva temporalmente el túnel proxy para que el Login (/lg -> /lg/chk -> /lg/exe) y el
+     * Logout (/logout) viajen por tu internet normal a máxima velocidad.
+     */
+    private void pasarAConexionDirectaParaLogin(final SesionBot s) {
+        if (s == null) return;
+        s.usandoTunelProxy = false;
+        cerrarSocketsActivosDeSesion(s);
+        runOnUiThread(() -> actualizarVisualTarjeta(s));
     }
 
     private void rotarIpProxyParaCuenta(final SesionBot s, String motivo) {
         if (s == null) return;
         s.idSesionProxy = generarIdSesionProxyNuevo();
         s.contadorRotacionesIp++;
+        s.usandoTunelProxy = false; // Entra al login con internet directo y activa la nueva IP en /pg
         ultimoSlotActivoRed = s.slotIndex;
+        cerrarSocketsActivosDeSesion(s);
 
         runOnUiThread(() -> {
             try {
@@ -568,7 +611,7 @@ public class MainActivity extends Activity {
         });
 
         String idCorto = s.idSesionProxy.substring(0, 6).toUpperCase();
-        registrarPasoCuenta(s, "Cambio de IP completado (" + motivo + ") -> Nueva Sesión VE #" + idCorto);
+        registrarPasoCuenta(s, "Nueva IP preparada (#" + idCorto + " - " + motivo + "). Entrando al login con internet directo...");
     }
 
     private void iniciarPuenteProxyLocalIPRoyal() {
@@ -587,7 +630,8 @@ public class MainActivity extends Activity {
     }
 
     private void manejarConexionPuenteProxyTurbo(Socket clienteLocal) {
-        Socket remotoIPRoyal = null;
+        Socket socketRemoto = null;
+        SesionBot sesionRef = null;
         try {
             clienteLocal.setTcpNoDelay(true);
             clienteLocal.setKeepAlive(true);
@@ -622,13 +666,62 @@ public class MainActivity extends Activity {
             }
 
             int idxSlot = Math.max(0, Math.min(MAX_CUENTAS - 1, ultimoSlotActivoRed));
-            SesionBot sesionRef = sesiones[idxSlot];
-            String authRaw = PRX_USER_RAW + ":" + construirPasswordProxyVenezuela(sesionRef);
-            String authB64 = Base64.encodeToString(authRaw.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
+            sesionRef = sesiones[idxSlot];
+            if (sesionRef != null) {
+                sesionRef.socketsAbiertos.add(clienteLocal);
+            }
+
+            boolean usarProxyEnEstaConexion = proxyRotativoActivo && (sesionRef != null && sesionRef.usandoTunelProxy);
 
             int corteHeader = (finHeadersIdx != -1) ? finHeadersIdx : totalLeido.length;
             String rawStr = new String(totalLeido, 0, corteHeader, StandardCharsets.ISO_8859_1);
             int finPrimeraLinea = rawStr.indexOf("\r\n");
+            String primeraLinea = (finPrimeraLinea != -1) ? rawStr.substring(0, finPrimeraLinea) : rawStr;
+
+            // MODO 1: CONEXIÓN DIRECTA CON TU INTERNET NORMAL (Durante Login /lg, /lg/chk, /lg/exe y Logout)
+            if (!usarProxyEnEstaConexion && primeraLinea.toUpperCase(Locale.ROOT).startsWith("CONNECT ")) {
+                String[] partes = primeraLinea.split(" ");
+                String hostPort = (partes.length > 1) ? partes[1].trim() : "tesoroenlinea.bt.com.ve:443";
+                String hostDestino = "tesoroenlinea.bt.com.ve";
+                int portDestino = 443;
+                int idxDosPuntos = hostPort.indexOf(':');
+                if (idxDosPuntos != -1) {
+                    hostDestino = hostPort.substring(0, idxDosPuntos).trim();
+                    try {
+                        portDestino = Integer.parseInt(hostPort.substring(idxDosPuntos + 1).trim());
+                    } catch (Exception ignored) {
+                        portDestino = 443;
+                    }
+                } else if (!hostPort.isEmpty()) {
+                    hostDestino = hostPort;
+                }
+
+                socketRemoto = new Socket();
+                socketRemoto.setTcpNoDelay(true);
+                socketRemoto.setKeepAlive(true);
+                socketRemoto.connect(new InetSocketAddress(hostDestino, portDestino), 7000);
+                socketRemoto.setSoTimeout(20000);
+                if (sesionRef != null) {
+                    sesionRef.socketsAbiertos.add(socketRemoto);
+                }
+
+                outCliente.write("HTTP/1.1 200 Connection Established\r\n\r\n".getBytes(StandardCharsets.ISO_8859_1));
+                outCliente.flush();
+
+                final InputStream inRemoto = socketRemoto.getInputStream();
+                final OutputStream outRemoto = socketRemoto.getOutputStream();
+                final Socket sockCliFinal = clienteLocal;
+                final Socket sockRemFinal = socketRemoto;
+
+                poolHilosProxy.execute(() -> copiarFlujoSocketTurbo(inCliente, outRemoto, sockCliFinal, sockRemFinal));
+                copiarFlujoSocketTurbo(inRemoto, outCliente, sockCliFinal, sockRemFinal);
+                return;
+            }
+
+            // MODO 2: TÚNEL PROXY IPROYAL VENEZUELA (Activado automáticamente en Posición Global /pg -> /int)
+            String authRaw = PRX_USER_RAW + ":" + construirPasswordProxyVenezuela(sesionRef);
+            String authB64 = Base64.encodeToString(authRaw.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
+
             String reqModificada;
             if (finPrimeraLinea != -1) {
                 reqModificada = rawStr.substring(0, finPrimeraLinea + 2)
@@ -639,14 +732,17 @@ public class MainActivity extends Activity {
                 reqModificada = rawStr;
             }
 
-            remotoIPRoyal = new Socket();
-            remotoIPRoyal.setTcpNoDelay(true);
-            remotoIPRoyal.setKeepAlive(true);
-            remotoIPRoyal.connect(new InetSocketAddress(obtenerHostProxyIPRoyal(), PRX_PORT), 8500);
-            remotoIPRoyal.setSoTimeout(20000);
+            socketRemoto = new Socket();
+            socketRemoto.setTcpNoDelay(true);
+            socketRemoto.setKeepAlive(true);
+            socketRemoto.connect(new InetSocketAddress(obtenerHostProxyIPRoyal(), PRX_PORT), 8000);
+            socketRemoto.setSoTimeout(18000);
+            if (sesionRef != null) {
+                sesionRef.socketsAbiertos.add(socketRemoto);
+            }
 
-            final InputStream inRemoto = remotoIPRoyal.getInputStream();
-            final OutputStream outRemoto = remotoIPRoyal.getOutputStream();
+            final InputStream inRemoto = socketRemoto.getInputStream();
+            final OutputStream outRemoto = socketRemoto.getOutputStream();
 
             outRemoto.write(reqModificada.getBytes(StandardCharsets.ISO_8859_1));
             if (totalLeido.length > corteHeader) {
@@ -655,13 +751,20 @@ public class MainActivity extends Activity {
             outRemoto.flush();
 
             final Socket sockCliFinal = clienteLocal;
-            final Socket sockRemFinal = remotoIPRoyal;
+            final Socket sockRemFinal = socketRemoto;
 
             poolHilosProxy.execute(() -> copiarFlujoSocketTurbo(inCliente, outRemoto, sockCliFinal, sockRemFinal));
             copiarFlujoSocketTurbo(inRemoto, outCliente, sockCliFinal, sockRemFinal);
         } catch (Exception e) {
             try { if (clienteLocal != null) clienteLocal.close(); } catch (Exception ignored) {}
-            try { if (remotoIPRoyal != null) remotoIPRoyal.close(); } catch (Exception ignored) {}
+            try { if (socketRemoto != null) socketRemoto.close(); } catch (Exception ignored) {}
+        } finally {
+            if (sesionRef != null) {
+                sesionRef.socketsAbiertos.remove(clienteLocal);
+                if (socketRemoto != null) {
+                    sesionRef.socketsAbiertos.remove(socketRemoto);
+                }
+            }
         }
     }
 
@@ -680,18 +783,14 @@ public class MainActivity extends Activity {
         }
     }
 
+    /**
+     * Mantiene el WebView conectado siempre al puente inteligente local (127.0.0.1:puertoPuenteLocal)
+     * para poder alternar en 0 milisegundos entre Internet Directo (en Login) y Proxy VE (en Posición Global).
+     */
     private void aplicarConfiguracionProxyGlobal() {
-        String hostFinal = (puertoPuenteLocal > 0) ? "127.0.0.1" : obtenerHostProxyIPRoyal();
-        int portFinal = (puertoPuenteLocal > 0) ? puertoPuenteLocal : PRX_PORT;
-
-        if (!proxyRotativoActivo) {
-            System.clearProperty("http.proxyHost");
-            System.clearProperty("http.proxyPort");
-            System.clearProperty("https.proxyHost");
-            System.clearProperty("https.proxyPort");
-            limpiarProxyControllerAndroidX();
-            return;
-        }
+        if (puertoPuenteLocal <= 0) return;
+        String hostFinal = "127.0.0.1";
+        int portFinal = puertoPuenteLocal;
 
         System.setProperty("http.proxyHost", hostFinal);
         System.setProperty("http.proxyPort", String.valueOf(portFinal));
@@ -716,21 +815,6 @@ public class MainActivity extends Activity {
                 Class<?> proxyConfigClass = Class.forName("androidx.webkit.ProxyConfig");
                 Method setProxyOverride = controllerClass.getMethod("setProxyOverride", proxyConfigClass, Executor.class, Runnable.class);
                 setProxyOverride.invoke(controller, proxyConfig, (Executor) Runnable::run, (Runnable) () -> {});
-            }
-        } catch (Throwable ignored) {}
-    }
-
-    private void limpiarProxyControllerAndroidX() {
-        try {
-            Class<?> featureClass = Class.forName("androidx.webkit.WebViewFeature");
-            Method isSupported = featureClass.getMethod("isFeatureSupported", String.class);
-            Boolean ok = (Boolean) isSupported.invoke(null, "PROXY_OVERRIDE");
-            if (ok != null && ok) {
-                Class<?> controllerClass = Class.forName("androidx.webkit.ProxyController");
-                Method getInstance = controllerClass.getMethod("getInstance");
-                Object controller = getInstance.invoke(null);
-                Method clearProxy = controllerClass.getMethod("clearProxyOverride", Executor.class, Runnable.class);
-                clearProxy.invoke(controller, (Executor) Runnable::run, (Runnable) () -> {});
             }
         } catch (Throwable ignored) {}
     }
@@ -1751,7 +1835,6 @@ public class MainActivity extends Activity {
         frameRoot.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        // Contenedor 1x1 px invisible para los motores de peticiones en segundo plano
         LinearLayout contenedorMotores2x2 = new LinearLayout(this);
         contenedorMotores2x2.setOrientation(LinearLayout.VERTICAL);
         filaMotoresSup = new LinearLayout(this);
@@ -2066,7 +2149,7 @@ public class MainActivity extends Activity {
         contenidoAjustes.setPadding(dp(14), dp(6), dp(14), dp(88));
 
         lblAjustesBig = crearTexto("Ajustes", "#F4F4F5", 21f, true);
-        lblAjustesSub = crearTexto("Personaliza la apariencia, modo turbo, proxy, alertas y vibración.", "#A1A1AA", 11f, false);
+        lblAjustesSub = crearTexto("Personaliza la apariencia, modo turbo, proxy híbrido, alertas y vibración.", "#A1A1AA", 11f, false);
         lblAjustesSub.setPadding(0, dp(2), 0, dp(12));
         contenidoAjustes.addView(lblAjustesBig);
         contenidoAjustes.addView(lblAjustesSub);
@@ -2141,8 +2224,8 @@ public class MainActivity extends Activity {
         cardAlertasAjustes.setPadding(dp(14), dp(14), dp(14), dp(14));
         cardAlertasAjustes.setBackground(fondoRedondeadoConBorde("#18181B", "#27272A", 16, 1));
 
-        lblSubAlertas = crearTexto("Rendimiento, Proxy, Alertas y Vibración", "#F4F4F5", 15f, true);
-        lblDescAlertas = crearTexto("Opciones de aceleración por peticiones, cambio de IP en /pg y avisos sonoros.", "#A1A1AA", 11f, false);
+        lblSubAlertas = crearTexto("Rendimiento, Proxy Híbrido, Alertas y Vibración", "#F4F4F5", 15f, true);
+        lblDescAlertas = crearTexto("Inicia sesión con internet directo y activa el Proxy VE en Posición Global (/pg).", "#A1A1AA", 11f, false);
         lblDescAlertas.setPadding(0, dp(2), 0, dp(12));
         cardAlertasAjustes.addView(lblSubAlertas);
         cardAlertasAjustes.addView(lblDescAlertas);
@@ -2158,7 +2241,7 @@ public class MainActivity extends Activity {
         LinearLayout colTxtTurbo = new LinearLayout(this);
         colTxtTurbo.setOrientation(LinearLayout.VERTICAL);
         lblItemTurbo = crearTexto("Filtro Turbo de Peticiones", "#F4F4F5", 13.5f, true);
-        lblDescItemTurbo = crearTexto("Bloquea imágenes, fuentes y sonidos para que solo viajen las peticiones de compra por el proxy.", "#A1A1AA", 10.5f, false);
+        lblDescItemTurbo = crearTexto("Bloquea imágenes, fuentes y sonidos para que solo viajen las peticiones de compra.", "#A1A1AA", 10.5f, false);
         lblDescItemTurbo.setPadding(0, dp(2), dp(8), 0);
         colTxtTurbo.addView(lblItemTurbo);
         colTxtTurbo.addView(lblDescItemTurbo);
@@ -2166,7 +2249,7 @@ public class MainActivity extends Activity {
             if (modoTurboSinImagenes) {
                 new AlertDialog.Builder(this)
                         .setTitle("¿Desactivar Filtro Turbo?")
-                        .setMessage("¿Estás seguro de desactivar el Filtro Turbo?\n\nSi lo desactivas, el motor descargará archivos pesados innecesarios a través del proxy.")
+                        .setMessage("¿Estás seguro de desactivar el Filtro Turbo?\n\nSi lo desactivas, el motor descargará archivos pesados innecesarios.")
                         .setPositiveButton("Desactivar", (d, w) -> {
                             modoTurboSinImagenes = false;
                             prefs.edit().putBoolean("modo_turbo_default_on", false).apply();
@@ -2192,8 +2275,8 @@ public class MainActivity extends Activity {
         panelItemProxy.setPadding(dp(14), dp(12), dp(12), dp(12));
         LinearLayout colTxtProxy = new LinearLayout(this);
         colTxtProxy.setOrientation(LinearLayout.VERTICAL);
-        lblItemProxy = crearTexto("Rotación Automática de IP (Proxy VE)", "#F4F4F5", 13.5f, true);
-        lblDescItemProxy = crearTexto("Rota la IP al cargar Posición Global (/pg) y al detectar bloqueo real.", "#A1A1AA", 10.5f, false);
+        lblItemProxy = crearTexto("Proxy Híbrido en Posición Global (/pg)", "#F4F4F5", 13.5f, true);
+        lblDescItemProxy = crearTexto("Inicia sesión con tu internet normal y activa/cambia la IP del Proxy VE al llegar a Posición Global.", "#A1A1AA", 10.5f, false);
         lblDescItemProxy.setPadding(0, dp(2), dp(8), 0);
         colTxtProxy.addView(lblItemProxy);
         colTxtProxy.addView(lblDescItemProxy);
@@ -2203,6 +2286,10 @@ public class MainActivity extends Activity {
             aplicarConfiguracionProxyGlobal();
             actualizarBotonesAjustes();
             for (SesionBot s : obtenerSesionesRegistradas()) {
+                if (!proxyRotativoActivo) {
+                    s.usandoTunelProxy = false;
+                    cerrarSocketsActivosDeSesion(s);
+                }
                 actualizarVisualTarjeta(s);
             }
         });
@@ -2897,7 +2984,6 @@ public class MainActivity extends Activity {
                 filaMotoresInf.addView(slotFondo, lpSlotFondo);
             }
 
-            // 1. Construir Tarjeta de la Cuenta (Modo Solo Consola en Vivo)
             LinearLayout card = new LinearLayout(this);
             card.setOrientation(LinearLayout.VERTICAL);
             card.setPadding(dp(12), dp(10), dp(12), dp(10));
@@ -2976,7 +3062,6 @@ public class MainActivity extends Activity {
             filaAcciones.addView(bEdit, lpAct);
             card.addView(filaAcciones);
 
-            // Contenedor desplegable: Únicamente Consola de Peticiones en Vivo (135dp de alto)
             LinearLayout boxDesplegable = new LinearLayout(this);
             boxDesplegable.setOrientation(LinearLayout.VERTICAL);
             boxDesplegable.setVisibility(View.GONE);
@@ -2989,7 +3074,7 @@ public class MainActivity extends Activity {
 
             FrameLayout frameCon = new FrameLayout(this);
             LinearLayout.LayoutParams lpFrameCon = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, dp(135));
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(140));
 
             ScrollView scrollCon = new ScrollView(this);
             scrollCon.setBackground(fondoRedondeadoConBorde("#0F1115", "#27272A", 10, 1));
@@ -3048,7 +3133,6 @@ public class MainActivity extends Activity {
             sesion.txtConsolaCard = txtCon;
             sesion.btnLimpiarMiniCard = btnLimpiarMini;
 
-            // 2. Motor de Peticiones con bloqueo de recursos pesados a nivel de red
             WebView wv = new WebView(this);
             wv.setBackgroundColor(Color.TRANSPARENT);
             configurarPerfilAisladoWebView(wv, i);
@@ -3290,7 +3374,7 @@ public class MainActivity extends Activity {
         if (s.lblProxyCard != null) {
             s.lblProxyCard.setText(s.textoEstadoProxyMostrado());
             s.lblProxyCard.setTextColor(Color.parseColor(proxyRotativoActivo
-                    ? (temaActual == 2 ? "#0D9488" : "#34D399")
+                    ? (s.usandoTunelProxy ? (temaActual == 2 ? "#0D9488" : "#34D399") : "#FBBF24")
                     : txtSec));
         }
 
@@ -4046,15 +4130,15 @@ public class MainActivity extends Activity {
             case ENFRIANDO_CAMBIO_IP: base = "CAMBIANDO IP (2s)"; break;
             case CARGANDO_LOGIN:
             case ESPERANDO_ESTABILIZAR_LOGIN:
-            case ENVIANDO_FASE1: base = "LOGIN RSA"; break;
+            case ENVIANDO_FASE1: base = "LOGIN DIRECTO"; break;
             case ESPERANDO_CARGA_PASS:
             case ESPERANDO_ESTABILIZAR_PASS:
-            case ENVIANDO_FASE2: base = "CLAVE RSA"; break;
+            case ENVIANDO_FASE2: base = "CLAVE DIRECTA"; break;
             case ESPERANDO_REINTENTO_SESION_ACTIVA: base = "SESIÓN ACTIVA"; break;
             case ESPERANDO_CARGA_INICIO:
-            case ESPERANDO_ESTABILIZAR_INICIO: base = "POSICIÓN GLOBAL"; break;
+            case ESPERANDO_ESTABILIZAR_INICIO: base = "ACTIVANDO PROXY /PG"; break;
             case NAVEGANDO_MENU: base = "PETICIÓN /INT"; break;
-            case VIGILANDO: base = "VIGILANDO"; break;
+            case VIGILANDO: base = "VIGILANDO /INT"; break;
             case ESPERANDO_FORM_INTENTO1:
             case LIMPIANDO_PANTALLA:
             case ESPERANDO_FORM_INTENTO2: base = "PETICIÓN /CREATE"; break;
@@ -4072,7 +4156,7 @@ public class MainActivity extends Activity {
     }
 
     // =========================================================================================
-    // ENCENDIDO FIABLE, PAUSA SIN CERRAR SESIÓN Y LOGOUT DIRECTO EN 1 INTENTO
+    // ENCENDIDO CON INTERNET DIRECTO EN LOGIN + PAUSA SIN CERRAR SESIÓN + LOGOUT EN 1 INTENTO
     // =========================================================================================
     private void iniciarTodasLasCuentas() {
         ArrayList<SesionBot> reg = obtenerSesionesRegistradas();
@@ -4109,15 +4193,19 @@ public class MainActivity extends Activity {
         s.compraCompletada = false;
         s.tiempoCompraExitosaMs = 0;
         s.ultimoMontoAjustado = 0;
+        s.vueltaActual = 0;
+        s.ultimoIntentoLogueado = 0;
         s.reintentosAjaxCreate = 0;
         s.intentoLogout = 0;
-        cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
 
         if (!s.sesionAbiertaEnServidor) {
-            registrarPasoCuenta(s, "Iniciando por petición RSA (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
+            // Entra al login con tu internet normal rápido; activará el Proxy VE al llegar a /pg
+            pasarAConexionDirectaParaLogin(s);
+            registrarPasoCuenta(s, "⚡ Iniciando login con internet directo (" + s.cedulaMostrada() + " - " + s.nombreMostrado() + ")");
         } else {
             registrarPasoCuenta(s, "Reanudando cuenta...");
         }
+        cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
 
         handler.postDelayed(() -> {
             if (!s.estaCorriendo() || s.webViewOculto == null) return;
@@ -4146,6 +4234,8 @@ public class MainActivity extends Activity {
         s.detenerTrasCerrarSesion = true;
         s.rotarIpTrasCerrarSesion = false;
         s.intentoLogout = 0;
+        // Pasa a internet directo para que el POST /logout se ejecute en milisegundos sin retraso del proxy
+        pasarAConexionDirectaParaLogin(s);
         cambiarEstado(s, EstadoBot.CERRANDO_SESION);
         registrarPasoCuenta(s, "Enviando petición directa POST /logout (1 intento)...");
         ejecutarPasoMaquinaEstados(s);
@@ -4213,6 +4303,7 @@ public class MainActivity extends Activity {
     private void reiniciarConexionIndividual(final SesionBot s) {
         if (s == null || s.microCortePropio) return;
         s.microCortePropio = true;
+        cerrarSocketsActivosDeSesion(s);
 
         final WebView wv = s.webViewOculto;
         if (wv != null) {
@@ -4232,7 +4323,7 @@ public class MainActivity extends Activity {
                 } catch (Exception ignored) {}
             }
             s.microCortePropio = false;
-        }, 1000);
+        }, 900);
     }
 
     private void evaluarJS(SesionBot s, String script, ValueCallback<String> callback) {
@@ -4276,9 +4367,9 @@ public class MainActivity extends Activity {
                 } else {
                     lblReloginVal.setText(minutosRelogin + " min (--:--)");
                 }
-                handler.postDelayed(this, 340);
+                handler.postDelayed(this, 320);
             }
-        }, 340);
+        }, 320);
     }
 
     private void verificarTiemposDeSesionIndependientes(ArrayList<SesionBot> reg) {
@@ -4307,7 +4398,6 @@ public class MainActivity extends Activity {
         for (SesionBot s : reg) {
             if (!s.estaCorriendo()) continue;
 
-            // Pulso silencioso POST /p cada 55s para reiniciar el Timer de 2.5 min del banco
             if (s.sesionAbiertaEnServidor && (ahora - s.ultimoKeepAliveMs > 55000)) {
                 s.ultimoKeepAliveMs = ahora;
                 evaluarJS(s,
@@ -4328,6 +4418,7 @@ public class MainActivity extends Activity {
                     s.intentoLogout = 0;
                     s.detenerTrasCerrarSesion = false;
                     s.rotarIpTrasCerrarSesion = false;
+                    pasarAConexionDirectaParaLogin(s);
                     cambiarEstado(s, EstadoBot.CERRANDO_SESION);
                 }
             }
@@ -4343,7 +4434,7 @@ public class MainActivity extends Activity {
     }
 
     // =========================================================================================
-    // MÁQUINA DE ESTADOS POR PETICIONES DIRECTAS (generateFormEncrypt + $.ajax /int/create)
+    // MÁQUINA DE ESTADOS HÍBRIDA: LOGIN CON INTERNET NORMAL -> PROXY EN /PG -> AJAX /INT Y /CREATE
     // =========================================================================================
     private void ejecutarPasoMaquinaEstados(final SesionBot sesion) {
         if (sesion == null || sesion.webViewOculto == null) return;
@@ -4352,7 +4443,6 @@ public class MainActivity extends Activity {
         String jsInspector =
                 "var ready = (document.readyState === 'complete' || document.readyState === 'interactive');" +
                 "var bodyTxt = document.body ? document.body.innerText.toLowerCase() : '';" +
-                "var cargandoTxt = (bodyTxt.indexOf('cargando, por favor espera') !== -1 && !document.querySelector('#documento') && !document.querySelector('#password'));" +
                 "var sesionActivaErr = (bodyTxt.indexOf('sesión activa') !== -1 || bodyTxt.indexOf('sesion activa') !== -1 || bodyTxt.indexOf('posee una sesión') !== -1 || bodyTxt.indexOf('posee una sesion') !== -1);" +
                 "var metaTok = document.querySelector('meta[name=\"csrf-token\"]');" +
                 "var inputTok = document.querySelector('input[name=\"_token\"]');" +
@@ -4363,11 +4453,11 @@ public class MainActivity extends Activity {
                 "var usr = document.querySelector('#username');" +
                 "var pass = document.querySelector('#password');" +
                 "var monto = document.querySelector('#monto');" +
-                "var ord = document.querySelector(\"a.btn-tesoro-green, a[href*='mod.add(1)']\") || Array.from(document.querySelectorAll('.card-header a, .card-header button')).find(el => el.innerText && el.innerText.trim().toLowerCase() === 'ordinaria');" +
+                "var ord = document.querySelector(\"a.btn-tesoro-green, a[href*='mod.add(1)']\") || Array.from(document.querySelectorAll('a, button')).find(el => el.innerText && el.innerText.trim().toLowerCase() === 'ordinaria');" +
                 "var btnLogout = document.querySelector(\"a[href='javascript:Logout()'], header ul li a\");" +
                 "var menuInt = document.querySelector(\"a.sidebar-link[href='/int']\");" +
                 "var inicioListo = !!(ready && (menuInt || btnLogout || typeof postURL === 'function') && !doc && !pass);" +
-                "var tablaIntLista = !!(ready && (bodyTxt.indexOf('operaciones de intervención') !== -1 || (ord && ord.offsetWidth > 0)));" +
+                "var tablaIntLista = !!(ready && (window.__vbt_int_status === 200 || bodyTxt.indexOf('operaciones de intervención') !== -1 || ord));" +
                 "var inconv = (bodyTxt.indexOf('presentando inconvenientes') !== -1 || bodyTxt.indexOf('no podemos procesar su solicitud') !== -1);" +
                 "var exito = bodyTxt.indexOf('registrada exitosamente') !== -1;" +
                 "var sinCupo = bodyTxt.indexOf('no hay asignación disponible') !== -1;" +
@@ -4411,15 +4501,16 @@ public class MainActivity extends Activity {
                 "if (optH) { var vh = parseMontoVE(optH.getAttribute('data-disponible')); if (!isNaN(vh)) window.__vbt_usd = fmtVE(vh); }" +
                 "return JSON.stringify({" +
                 "  ready: ready," +
-                "  cargando: cargandoTxt," +
                 "  doc: !!(doc && usr)," +
                 "  pass: !!(pass && !doc)," +
                 "  inicio: inicioListo," +
                 "  tablaInt: tablaIntLista," +
                 "  monto: !!(monto)," +
-                "  ord: !!(ord && ord.offsetWidth > 0)," +
+                "  ord: !!(ord || window.__vbt_ord_found)," +
                 "  inconv: inconv, exito: exito, sinCupo: sinCupo, sesionActivaErr: sesionActivaErr," +
                 "  logoutOk: !!window.__vbt_logout_ok," +
+                "  intStatus: window.__vbt_int_status || 0," +
+                "  intPendiente: !!window.__vbt_int_pendiente," +
                 "  createStatus: window.__vbt_create_status || 0," +
                 "  createPendiente: !!window.__vbt_create_pendiente," +
                 "  csrf: csrfActual || ''," +
@@ -4448,6 +4539,8 @@ public class MainActivity extends Activity {
                 String tasaBcvLeida = st.optString("tasaBcv", "");
                 long pingWeb = st.optLong("ping", 0);
                 int mAjustado = st.optInt("montoAjustado", 0);
+                int intStatus = st.optInt("intStatus", 0);
+                boolean intPendiente = st.optBoolean("intPendiente", false);
                 int createStatus = st.optInt("createStatus", 0);
                 boolean createPendiente = st.optBoolean("createPendiente", false);
 
@@ -4495,16 +4588,15 @@ public class MainActivity extends Activity {
                 boolean visOrd = st.optBoolean("ord");
                 boolean visInicio = st.optBoolean("inicio");
                 boolean visTabla = st.optBoolean("tablaInt");
-                boolean cargando = st.optBoolean("cargando");
 
-                boolean elementoCriticoListo = (visDoc || visPass || visMonto || visOrd || visInicio || visTabla) && !cargando;
+                boolean elementoCriticoListo = (visDoc || visPass || visMonto || visOrd || visInicio || visTabla);
                 boolean navCompleta = (!sesion.cargandoRed && sesion.progresoWeb >= 100) || elementoCriticoListo;
                 boolean ready = st.optBoolean("ready") && navCompleta;
 
                 procesarEstadoConDatos(
                         sesion,
                         ahora,
-                        ready && !cargando,
+                        ready,
                         visDoc,
                         visPass,
                         visInicio,
@@ -4516,6 +4608,8 @@ public class MainActivity extends Activity {
                         st.optBoolean("sinCupo"),
                         st.optBoolean("sesionActivaErr"),
                         st.optBoolean("logoutOk"),
+                        intStatus,
+                        intPendiente,
                         createStatus,
                         createPendiente
                 );
@@ -4528,7 +4622,7 @@ public class MainActivity extends Activity {
             boolean visInicioCompleto, boolean visTablaInt, boolean visMonto,
             boolean visOrd, boolean hayInconv, boolean hayExito,
             boolean haySinCupo, boolean haySesionActivaErr, boolean logoutOk,
-            int createStatus, boolean createPendiente
+            int intStatus, boolean intPendiente, int createStatus, boolean createPendiente
     ) {
         if (!s.estaCorriendo()) return;
 
@@ -4547,10 +4641,11 @@ public class MainActivity extends Activity {
         switch (s.estadoActual) {
 
             case ENFRIANDO_CAMBIO_IP:
-                if (ahora - s.tiempoEstadoMs >= 2000) {
+                if (ahora - s.tiempoEstadoMs >= 1600) {
                     ultimoSlotActivoRed = s.slotIndex;
+                    pasarAConexionDirectaParaLogin(s);
                     s.webViewOculto.loadUrl(URL_LOGIN);
-                    registrarPasoCuenta(s, "Enfriamiento 2s completado - Entrando con nueva IP VE");
+                    registrarPasoCuenta(s, "⚡ Entrando al login con internet directo...");
                     cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
                 }
                 break;
@@ -4565,13 +4660,17 @@ public class MainActivity extends Activity {
                 if (paginaCompleta && visTablaInt) {
                     if (s.tiempoInicioSesionMs == 0) s.tiempoInicioSesionMs = ahora;
                     s.sesionAbiertaEnServidor = true;
+                    if (!s.yaRotoIpEnPosicionGlobal && proxyRotativoActivo) {
+                        s.yaRotoIpEnPosicionGlobal = true;
+                        activarProxyYRotarIpEnPosicionGlobal(s, "Sesión lista");
+                    }
                     cambiarEstado(s, EstadoBot.VIGILANDO);
                     return;
                 }
                 if (paginaCompleta && visInicioCompleto) {
                     if (s.tiempoInicioSesionMs == 0) s.tiempoInicioSesionMs = ahora;
                     s.sesionAbiertaEnServidor = true;
-                    registrarPasoCuenta(s, "Posición Global cargada");
+                    registrarPasoCuenta(s, "Posición Global (/pg) cargada con éxito");
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_INICIO);
                     return;
                 }
@@ -4581,12 +4680,14 @@ public class MainActivity extends Activity {
                 }
                 if (paginaCompleta && visDoc) {
                     s.sesionAbiertaEnServidor = false;
+                    pasarAConexionDirectaParaLogin(s);
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_LOGIN);
                     return;
                 }
-                if (ahora - s.tiempoEstadoMs > 10000) {
+                if (ahora - s.tiempoEstadoMs > 8000) {
                     s.tiempoEstadoMs = ahora;
                     ultimoSlotActivoRed = s.slotIndex;
+                    pasarAConexionDirectaParaLogin(s);
                     s.webViewOculto.stopLoading();
                     s.webViewOculto.loadUrl(URL_LOGIN);
                 }
@@ -4597,25 +4698,33 @@ public class MainActivity extends Activity {
                     cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
                     return;
                 }
-                if (ahora - s.tiempoEstadoMs >= 80) {
+                if (ahora - s.tiempoEstadoMs >= 70) {
                     cambiarEstado(s, EstadoBot.ENVIANDO_FASE1);
                 }
                 break;
 
-            // Fase 1 Instantánea usando generateFormEncrypt hacia /lg/chk con código numérico (01, 08, etc.)
+            // Fase 1 Directa: elimina Inputmask de #documento para que serializeArray() nunca falle
             case ENVIANDO_FASE1:
                 if (!s.accionEnCurso) {
                     s.accionEnCurso = true;
                     ultimoSlotActivoRed = s.slotIndex;
-                    registrarPasoCuenta(s, "Enviando petición RSA a /lg/chk (" + s.cedulaMostrada() + ")");
+                    pasarAConexionDirectaParaLogin(s);
+                    registrarPasoCuenta(s, "⚡ Enviando usuario y cédula a /lg/chk (" + s.cedulaMostrada() + ")");
                     String jsFase1Directa =
                             "var sel = document.querySelector('#tipodocben');" +
                             "if (sel) { sel.value = '" + codTipoDoc + "'; sel.dispatchEvent(new Event('change', {bubbles:true})); }" +
                             "var d = document.querySelector('#documento');" +
                             "var u = document.querySelector('#username');" +
                             "if (d && u) {" +
-                            "  d.value = '" + cedSafe + "';" +
-                            "  u.value = '" + usrSafe + "';" +
+                            "  try { if (window.Inputmask) Inputmask.remove(d); } catch(e){}" +
+                            "  try { if (window.jQuery && $(d).inputmask) $(d).inputmask('remove'); } catch(e){}" +
+                            "  var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;" +
+                            "  setter.call(d, '" + cedSafe + "');" +
+                            "  d.dispatchEvent(new Event('input', {bubbles:true}));" +
+                            "  d.dispatchEvent(new Event('change', {bubbles:true}));" +
+                            "  setter.call(u, '" + usrSafe + "');" +
+                            "  u.dispatchEvent(new Event('input', {bubbles:true}));" +
+                            "  u.dispatchEvent(new Event('change', {bubbles:true}));" +
                             "  var tokInput = document.querySelector('input[name=\"_token\"]');" +
                             "  var tok = tokInput ? tokInput.value : '';" +
                             "  if (typeof generateFormEncrypt === 'function' && window.jQuery && tok) {" +
@@ -4641,7 +4750,7 @@ public class MainActivity extends Activity {
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_PASS);
                     return;
                 }
-                if (ahora - s.tiempoEstadoMs > 10000) {
+                if (ahora - s.tiempoEstadoMs > 6500) {
                     s.webViewOculto.stopLoading();
                     s.webViewOculto.loadUrl(URL_LOGIN);
                     cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
@@ -4658,21 +4767,23 @@ public class MainActivity extends Activity {
                     cambiarEstado(s, EstadoBot.ESPERANDO_CARGA_PASS);
                     return;
                 }
-                if (ahora - s.tiempoEstadoMs >= 80) {
+                if (ahora - s.tiempoEstadoMs >= 70) {
                     cambiarEstado(s, EstadoBot.ENVIANDO_FASE2);
                 }
                 break;
 
-            // Fase 2 Instantánea usando generateFormEncrypt hacia /lg/exe conservando el input oculto "d"
             case ENVIANDO_FASE2:
                 if (!s.accionEnCurso) {
                     s.accionEnCurso = true;
                     ultimoSlotActivoRed = s.slotIndex;
-                    registrarPasoCuenta(s, "Enviando contraseña encriptada RSA a /lg/exe");
+                    registrarPasoCuenta(s, "⚡ Enviando contraseña a /lg/exe");
                     String jsFase2Directa =
                             "var p = document.querySelector('#password');" +
                             "if (p) {" +
-                            "  p.value = '" + clvSafe + "';" +
+                            "  var setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;" +
+                            "  setter.call(p, '" + clvSafe + "');" +
+                            "  p.dispatchEvent(new Event('input', {bubbles:true}));" +
+                            "  p.dispatchEvent(new Event('change', {bubbles:true}));" +
                             "  var tokInput = document.querySelector('input[name=\"_token\"]');" +
                             "  var tok = tokInput ? tokInput.value : '';" +
                             "  if (typeof generateFormEncrypt === 'function' && window.jQuery && tok) {" +
@@ -4697,44 +4808,68 @@ public class MainActivity extends Activity {
                 if (paginaCompleta && visInicioCompleto) {
                     s.tiempoInicioSesionMs = ahora;
                     s.sesionAbiertaEnServidor = true;
-                    registrarPasoCuenta(s, "Sesión iniciada - Posición Global (/pg)");
+                    registrarPasoCuenta(s, "✅ Posición Global (/pg) cargada - Leyendo saldos...");
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_INICIO);
                     return;
                 }
-                if (ahora - s.tiempoEstadoMs > 9500 && paginaCompleta && visDoc) {
+                if (ahora - s.tiempoEstadoMs > 7500 && paginaCompleta && visDoc) {
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_LOGIN);
                 }
                 break;
 
             case ESPERANDO_REINTENTO_SESION_ACTIVA:
                 if (ahora - s.tiempoEstadoMs >= 6000) {
+                    pasarAConexionDirectaParaLogin(s);
                     s.webViewOculto.stopLoading();
                     s.webViewOculto.loadUrl(URL_LOGIN);
                     cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
                 }
                 break;
 
-            // Rotación de IP en Posición Global (/pg) apenas carga la sesión
+            // En Posición Global (/pg): Activa el Proxy VE y cambia la IP antes de pedir /int
             case ESPERANDO_ESTABILIZAR_INICIO:
-                if (!s.yaRotoIpEnPosicionGlobal && proxyRotativoActivo) {
+                if (!s.yaRotoIpEnPosicionGlobal) {
                     s.yaRotoIpEnPosicionGlobal = true;
-                    rotarIpEnPosicionGlobalSinBorrarSesion(s);
+                    activarProxyYRotarIpEnPosicionGlobal(s, "Entrada a /pg");
                 }
-                if (ahora - s.tiempoEstadoMs >= 100) {
+                if (ahora - s.tiempoEstadoMs >= 180) {
+                    s.vueltaActual = 1;
+                    s.ultimoIntentoLogueado = 0;
                     cambiarEstado(s, EstadoBot.NAVEGANDO_MENU);
                 }
                 break;
 
             case NAVEGANDO_MENU:
-                if (paginaCompleta && visTablaInt) {
+                if (visMonto && !hayInconv) {
+                    cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_FORM);
+                    return;
+                }
+                if (visOrd) {
+                    s.reintentosAjaxCreate = 0;
+                    registrarPasoCuenta(s, "🟢 ¡Botón Ordinaria detectado en /int! Disparando POST /int/create");
+                    if (!yaAvisoApertura) {
+                        yaAvisoApertura = true;
+                        sonarAlertaOrdinaria();
+                    }
+                    dispararPeticionOrdinariaDirecta(s);
+                    cambiarEstado(s, EstadoBot.ESPERANDO_FORM_INTENTO1);
+                    return;
+                }
+                if (!intPendiente && intStatus == 200) {
+                    registrarPasoCuenta(s, "🔎 Petición /int #" + s.vueltaActual + " completada (Sin botón Ordinaria • " + s.latenciaMs + "ms)");
+                    s.ultimoIntentoLogueado = s.vueltaActual;
                     cambiarEstado(s, EstadoBot.VIGILANDO);
                     return;
                 }
                 if (!s.accionEnCurso) {
                     s.accionEnCurso = true;
-                    registrarPasoCuenta(s, "Petición directa postURL('/int')...");
+                    registrarPasoCuenta(s, "🔎 Lanzando petición AJAX a /int (Intento #" + s.vueltaActual + ")...");
                     irAIntervencionJS(s);
-                } else if (ahora - s.tiempoEstadoMs > 4200 && paginaCompleta) {
+                } else if (ahora - s.tiempoEstadoMs > 6200) {
+                    // Si la IP del proxy se tardó más de 6.2s en /int, rota a otra IP en caliente sin cerrar sesión
+                    if (proxyRotativoActivo) {
+                        activarProxyYRotarIpEnPosicionGlobal(s, "IP lenta en /int");
+                    }
                     s.tiempoEstadoMs = ahora;
                     irAIntervencionJS(s);
                 }
@@ -4744,16 +4879,17 @@ public class MainActivity extends Activity {
                 if (paginaCompleta && visDoc) {
                     s.sesionAbiertaEnServidor = false;
                     s.yaRotoIpEnPosicionGlobal = false;
+                    pasarAConexionDirectaParaLogin(s);
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_LOGIN);
                     return;
                 }
-                if (paginaCompleta && visMonto && !hayInconv) {
+                if (visMonto && !hayInconv) {
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_FORM);
                     return;
                 }
-                if (paginaCompleta && visOrd) {
+                if (visOrd) {
                     s.reintentosAjaxCreate = 0;
-                    registrarPasoCuenta(s, "¡Botón detectado! Lanzando petición directa POST /int/create");
+                    registrarPasoCuenta(s, "🟢 ¡Botón Ordinaria detectado! Disparando POST /int/create");
                     if (!yaAvisoApertura) {
                         yaAvisoApertura = true;
                         sonarAlertaOrdinaria();
@@ -4762,50 +4898,72 @@ public class MainActivity extends Activity {
                     cambiarEstado(s, EstadoBot.ESPERANDO_FORM_INTENTO1);
                     return;
                 }
-                long esperaConJitter = (intervaloRefresco * 1000L) + (s.slotIndex * 220L);
-                if (paginaCompleta && (ahora - s.tiempoEstadoMs >= esperaConJitter)) {
+
+                // Cuando termina una petición AJAX en segundo plano, muestra el resultado en la consola
+                if (!intPendiente && intStatus == 200 && s.ultimoIntentoLogueado < s.vueltaActual) {
+                    s.ultimoIntentoLogueado = s.vueltaActual;
+                    registrarPasoCuenta(s, "🔎 Petición /int #" + s.vueltaActual + " -> Sin botón Ordinaria (" + s.latenciaMs + "ms)");
+                } else if (!intPendiente && (intStatus == 401 || intStatus == 419)) {
+                    pasarAConexionDirectaParaLogin(s);
+                    s.webViewOculto.loadUrl(URL_LOGIN);
+                    cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
+                    return;
+                }
+
+                long esperaConJitter = (intervaloRefresco * 1000L) + (s.slotIndex * 200L);
+                if (!intPendiente && (ahora - s.tiempoEstadoMs >= esperaConJitter)) {
                     s.tiempoEstadoMs = ahora;
                     s.vueltaActual++;
-                    registrarPasoCuenta(s, "Petición /int intento " + s.vueltaActual + " (Sin apertura)");
+                    irAIntervencionJS(s);
+                } else if (intPendiente && (ahora - s.tiempoEstadoMs > 6500)) {
+                    if (proxyRotativoActivo) {
+                        activarProxyYRotarIpEnPosicionGlobal(s, "Timeout en /int");
+                    }
+                    s.tiempoEstadoMs = ahora;
+                    s.vueltaActual++;
                     irAIntervencionJS(s);
                 }
                 break;
 
-            // Evaluación inteligente del código HTTP de /int/create para no mostrar "presentando inconvenientes"
             case ESPERANDO_FORM_INTENTO1:
                 if (visMonto && !hayInconv) {
-                    registrarPasoCuenta(s, "¡Formulario /int/create recibido! Borde Dorado activo");
+                    registrarPasoCuenta(s, "✨ ¡Formulario /int/create abierto! Borde Dorado activo");
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_FORM);
                     return;
                 }
                 if (!createPendiente && createStatus != 0) {
                     if (createStatus == 401 || createStatus == 419) {
+                        pasarAConexionDirectaParaLogin(s);
                         s.webViewOculto.loadUrl(URL_LOGIN);
                         cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
                         return;
                     }
                     if (createStatus == 403 || createStatus == 429) {
-                        s.intentoLogout = 0;
-                        s.detenerTrasCerrarSesion = false;
-                        s.rotarIpTrasCerrarSesion = true;
-                        registrarPasoCuenta(s, "Restricción HTTP " + createStatus + " - Cerrando en 1 toque para rotar IP");
-                        cambiarEstado(s, EstadoBot.CERRANDO_SESION);
+                        if (proxyRotativoActivo) {
+                            activarProxyYRotarIpEnPosicionGlobal(s, "Código " + createStatus + " en /create");
+                        }
+                        s.reintentosAjaxCreate++;
+                        cambiarEstado(s, EstadoBot.LIMPIANDO_PANTALLA);
                         return;
                     }
-                    // Si es 500, 502, 503 o colapso del banco, reintenta directo por AJAX sin cerrar sesión
                     s.reintentosAjaxCreate++;
                     if (s.reintentosAjaxCreate <= 3) {
+                        if (proxyRotativoActivo && s.reintentosAjaxCreate == 2) {
+                            activarProxyYRotarIpEnPosicionGlobal(s, "Reintento limpio /create");
+                        }
                         cambiarEstado(s, EstadoBot.LIMPIANDO_PANTALLA);
                     } else {
                         s.intentoLogout = 0;
                         s.detenerTrasCerrarSesion = false;
                         s.rotarIpTrasCerrarSesion = true;
-                        registrarPasoCuenta(s, "Sin respuesta de /int/create tras 3 tiros - Rotando IP");
+                        pasarAConexionDirectaParaLogin(s);
+                        registrarPasoCuenta(s, "Sin respuesta de /int/create tras 3 tiros - Reiniciando sesión");
                         cambiarEstado(s, EstadoBot.CERRANDO_SESION);
                     }
                     return;
                 }
                 if (ahora - s.tiempoEstadoMs > 4500) {
+                    s.reintentosAjaxCreate++;
                     cambiarEstado(s, EstadoBot.LIMPIANDO_PANTALLA);
                 }
                 break;
@@ -4815,8 +4973,8 @@ public class MainActivity extends Activity {
                     cambiarEstado(s, EstadoBot.ESPERANDO_ESTABILIZAR_FORM);
                     return;
                 }
-                if (ahora - s.tiempoEstadoMs >= 650) {
-                    registrarPasoCuenta(s, "Reintento directo AJAX #" + s.reintentosAjaxCreate + " a /int/create...");
+                if (ahora - s.tiempoEstadoMs >= 550) {
+                    registrarPasoCuenta(s, "🚀 Reintento directo AJAX #" + s.reintentosAjaxCreate + " a /int/create...");
                     dispararPeticionOrdinariaDirecta(s);
                     cambiarEstado(s, EstadoBot.ESPERANDO_FORM_INTENTO1);
                 }
@@ -4836,11 +4994,10 @@ public class MainActivity extends Activity {
                 }
                 break;
 
-            // Compra instantánea con auto-respuesta inmediata a Swal.fire (0ms sin esperar modal)
             case LLENANDO_COMPRA:
                 if (!s.accionEnCurso) {
                     s.accionEnCurso = true;
-                    registrarPasoCuenta(s, "Enviando orden de compra (" + s.montoCompra + "$) por petición...");
+                    registrarPasoCuenta(s, "💵 Enviando orden de compra (" + s.montoCompra + "$) por petición...");
                     String jsCompraDirecta =
                             "window.__vbt_monto_ajustado = 0;" +
                             "function parseNumVE(str) {" +
@@ -4940,7 +5097,7 @@ public class MainActivity extends Activity {
                     int montoFinalCompra = (s.ultimoMontoAjustado > 0) ? s.ultimoMontoAjustado : s.montoCompra;
                     registrarNuevaCompraExitosa(s, montoFinalCompra + ".00$", s.ultimaTasaLeida, s.ultimoCodigoOpLeido);
                     actualizarSaldosEnSegundoPlano(s, true);
-                    registrarPasoCuenta(s, "Orden completada exitosamente (" + montoFinalCompra + "$)");
+                    registrarPasoCuenta(s, "✅ Orden completada exitosamente (" + montoFinalCompra + "$)");
                     sonarAlertaCompraExitosa();
                     cambiarEstado(s, EstadoBot.DETENIDO);
                     return;
@@ -4959,12 +5116,12 @@ public class MainActivity extends Activity {
                 }
                 break;
 
-            // Cierre de sesión garantizado en 1 solo intento por $.post('/logout')
             case CERRANDO_SESION:
                 if (logoutOk || (paginaCompleta && (visDoc || visPass))) {
                     evaluarJS(s, "window.__vbt_logout_ok = false;", null);
                     s.sesionAbiertaEnServidor = false;
                     s.yaRotoIpEnPosicionGlobal = false;
+                    pasarAConexionDirectaParaLogin(s);
                     if (!visDoc) {
                         s.webViewOculto.loadUrl(URL_LOGIN);
                     }
@@ -4981,7 +5138,7 @@ public class MainActivity extends Activity {
                         cambiarEstado(s, EstadoBot.ENFRIANDO_CAMBIO_IP);
                     } else {
                         s.rotarIpTrasCerrarSesion = false;
-                        registrarPasoCuenta(s, "Sesión cerrada en 1 intento - Reiniciando login");
+                        registrarPasoCuenta(s, "Sesión cerrada en 1 intento - Reiniciando login directo");
                         cambiarEstado(s, EstadoBot.CARGANDO_LOGIN);
                     }
                     return;
@@ -4990,30 +5147,26 @@ public class MainActivity extends Activity {
                     s.accionEnCurso = true;
                     s.intentoLogout = 1;
                     s.tiempoEstadoMs = ahora;
+                    pasarAConexionDirectaParaLogin(s);
                     registrarPasoCuenta(s, "Cerrando sesión en 1 intento (POST /logout)...");
                     ejecutarScriptLogoutDirecto(s);
-                } else if (ahora - s.tiempoEstadoMs > 2800) {
-                    // Si el servidor tarda más de 2.8s en responder al POST, limpia cookie local y salta a /lg
+                } else if (ahora - s.tiempoEstadoMs > 2200) {
                     s.sesionAbiertaEnServidor = false;
                     s.yaRotoIpEnPosicionGlobal = false;
+                    pasarAConexionDirectaParaLogin(s);
                     CookieManager.getInstance().removeSessionCookies(null);
                     s.webViewOculto.loadUrl(URL_LOGIN);
                 }
                 break;
 
             case REINICIANDO_RED:
-                if (!s.microCortePropio && (ahora - s.tiempoEstadoMs >= 1050)) {
+                if (!s.microCortePropio && (ahora - s.tiempoEstadoMs >= 950)) {
                     cambiarEstado(s, EstadoBot.CERRANDO_SESION);
                 }
                 break;
         }
     }
 
-    /**
-     * Cierre de sesión directo en 1 solo intento:
-     * Ejecuta exactamente el $.post('https://tesoroenlinea.bt.com.ve/logout', {}) que descubrimos
-     * adentro de la función Logout() del banco, sin abrir Swal.fire.
-     */
     private void ejecutarScriptLogoutDirecto(SesionBot s) {
         String csrfRespaldo = (s.csrfTokenGuardado != null) ? s.csrfTokenGuardado.replace("'", "") : "";
 
@@ -5043,16 +5196,11 @@ public class MainActivity extends Activity {
                 "  setTimeout(function(){" +
                 "    window.__vbt_logout_ok = true;" +
                 "    window.location.replace('https://tesoroenlinea.bt.com.ve/lg');" +
-                "  }, 1400);" +
+                "  }, 1100);" +
                 "})();";
         evaluarJS(s, jsLogout1Intento, null);
     }
 
-    /**
-     * Petición directa a https://tesoroenlinea.bt.com.ve/int/create sin pasar por postURL:
-     * Evita que la página dibuje el cartel "presentando inconvenientes" si hay un micro-error 500/503,
-     * e inyecta el formulario inmediatamente cuando recibe código 200.
-     */
     private void dispararPeticionOrdinariaDirecta(SesionBot s) {
         ultimoSlotActivoRed = s.slotIndex;
         String jsAjaxCreate =
@@ -5060,13 +5208,15 @@ public class MainActivity extends Activity {
                 "window.__vbt_create_pendiente = true;" +
                 "(function(){" +
                 "  var t0 = Date.now();" +
-                "  var tok = $('meta[name=\"csrf-token\"]').attr('content') || '';" +
+                "  var meta = document.querySelector('meta[name=\"csrf-token\"]');" +
+                "  var tok = meta ? meta.getAttribute('content') : '';" +
                 "  if (window.jQuery && typeof $.ajax === 'function') {" +
                 "    $.ajax({" +
                 "      type: 'POST'," +
                 "      url: 'https://tesoroenlinea.bt.com.ve/int/create'," +
                 "      dataType: 'html'," +
                 "      cache: false," +
+                "      timeout: 5500," +
                 "      headers: {'X-CSRF-TOKEN': tok}," +
                 "      success: function(html) {" +
                 "        window.__vbt_ping = Math.max(10, Date.now() - t0);" +
@@ -5076,8 +5226,9 @@ public class MainActivity extends Activity {
                 "          window.__vbt_create_status = 503;" +
                 "        } else {" +
                 "          window.__vbt_create_status = 200;" +
-                "          var dest = (typeof container !== 'undefined' && container && container.length) ? container : $('#content');" +
-                "          dest.html(html);" +
+                "          var dest = $('#content');" +
+                "          if (!dest.length) dest = $('#js-page-content');" +
+                "          if (dest.length) dest.html(html); else $(document.body).append(html);" +
                 "        }" +
                 "      }," +
                 "      error: function(xhr) {" +
@@ -5086,30 +5237,57 @@ public class MainActivity extends Activity {
                 "        window.__vbt_create_status = (xhr && xhr.status) ? xhr.status : 500;" +
                 "      }" +
                 "    });" +
-                "  } else if (typeof mod !== 'undefined' && typeof mod.add === 'function') {" +
-                "    window.__vbt_create_pendiente = false;" +
-                "    mod.add(1);" +
                 "  }" +
                 "})();";
         evaluarJS(s, jsAjaxCreate, null);
     }
 
     /**
-     * Petición directa a https://tesoroenlinea.bt.com.ve/int usando postURL nativo del banco.
+     * Petición AJAX directa a https://tesoroenlinea.bt.com.ve/int sin depender de que 'container' exista.
+     * Inyecta el HTML en #content y detecta instantáneamente si vino el botón de Ordinaria (mod.add(1)).
      */
     private void irAIntervencionJS(SesionBot s) {
         ultimoSlotActivoRed = s.slotIndex;
         String jsPeticionInt =
-                "if (typeof postURL === 'function' && typeof container !== 'undefined' && container) {" +
+                "window.__vbt_int_status = 0;" +
+                "window.__vbt_int_pendiente = true;" +
+                "window.__vbt_ord_found = false;" +
+                "(function(){" +
                 "  var t0 = Date.now();" +
-                "  postURL('https://tesoroenlinea.bt.com.ve/int', container, null, function(data){" +
-                "    window.__vbt_ping = Math.max(10, Date.now() - t0);" +
-                "    container.html(data);" +
-                "  });" +
-                "} else {" +
-                "  var sub = document.querySelector(\"a.sidebar-link[href='/int']\");" +
-                "  if (sub) { sub.click(); } else { window.location.hash = '#/int'; }" +
-                "}";
+                "  var meta = document.querySelector('meta[name=\"csrf-token\"]');" +
+                "  var tok = meta ? meta.getAttribute('content') : '';" +
+                "  if (window.jQuery && typeof $.ajax === 'function') {" +
+                "    $.ajax({" +
+                "      type: 'POST'," +
+                "      url: 'https://tesoroenlinea.bt.com.ve/int'," +
+                "      dataType: 'html'," +
+                "      cache: false," +
+                "      timeout: 5800," +
+                "      headers: {'X-CSRF-TOKEN': tok}," +
+                "      success: function(data) {" +
+                "        window.__vbt_ping = Math.max(10, Date.now() - t0);" +
+                "        window.__vbt_int_pendiente = false;" +
+                "        window.__vbt_int_status = 200;" +
+                "        var strHtml = String(data || '');" +
+                "        if (strHtml.indexOf('mod.add(1)') !== -1 || strHtml.indexOf('btn-tesoro-green') !== -1 || strHtml.indexOf('/int/create') !== -1) {" +
+                "          window.__vbt_ord_found = true;" +
+                "        }" +
+                "        var dest = $('#content');" +
+                "        if (!dest.length) dest = $('#js-page-content');" +
+                "        if (dest.length) { dest.html(data); }" +
+                "      }," +
+                "      error: function(xhr) {" +
+                "        window.__vbt_ping = Math.max(10, Date.now() - t0);" +
+                "        window.__vbt_int_pendiente = false;" +
+                "        window.__vbt_int_status = (xhr && xhr.status) ? xhr.status : 500;" +
+                "      }" +
+                "    });" +
+                "  } else {" +
+                "    window.__vbt_int_pendiente = false;" +
+                "    var sub = document.querySelector(\"a.sidebar-link[href='/int']\");" +
+                "    if (sub) sub.click();" +
+                "  }" +
+                "})();";
         evaluarJS(s, jsPeticionInt, null);
     }
 }
