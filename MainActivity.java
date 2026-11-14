@@ -671,10 +671,10 @@ public class MainActivity extends Activity {
     private void configurarSocketPrioridadMaxima(Socket s) {
         if (s == null) return;
         try {
-            s.setPerformancePreferences(0, 2, 1); // Prioridad absoluta a baja latencia y ancho de banda
+            s.setPerformancePreferences(0, 2, 1);
             s.setTcpNoDelay(true);
             s.setKeepAlive(true);
-            s.setTrafficClass(0x10 | 0x08); // IPTOS_LOWDELAY | IPTOS_THROUGHPUT
+            s.setTrafficClass(0x10 | 0x08);
             s.setReceiveBufferSize(131072);
             s.setSendBufferSize(131072);
         } catch (Throwable ignored) {}
@@ -2801,7 +2801,7 @@ public class MainActivity extends Activity {
         contenedorPaginasSwipe.addView(vistaHistorialScroll, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-            vistaAjustesScroll = new ScrollView(this);
+        vistaAjustesScroll = new ScrollView(this);
         vistaAjustesScroll.setFillViewport(true);
         vistaAjustesScroll.setVerticalScrollBarEnabled(false);
         vistaAjustesScroll.setVisibility(View.GONE);
@@ -3191,11 +3191,283 @@ public class MainActivity extends Activity {
         contenedorPaginasSwipe.addView(vistaAjustesScroll, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        /**
-     * Regla exclusiva para los 5 botones de Configuración avanzada:
-     * Solo permite tener 1 opción activa a la vez. Si activas "Proxy personalizado por cuenta",
-     * abre el panel oscuro con las cuentas registradas.
-     */
+        vistaPerfilScroll = new ScrollView(this);
+        vistaPerfilScroll.setFillViewport(true);
+        vistaPerfilScroll.setVerticalScrollBarEnabled(false);
+        vistaPerfilScroll.setVisibility(View.GONE);
+        conectarAutoOcultadoBarraEnScroll(vistaPerfilScroll);
+
+        LinearLayout contenidoPerfil = new LinearLayout(this);
+        contenidoPerfil.setOrientation(LinearLayout.VERTICAL);
+        contenidoPerfil.setGravity(Gravity.CENTER_HORIZONTAL);
+        contenidoPerfil.setPadding(dp(16), dp(12), dp(16), dp(90));
+
+        cardPerfilPrincipal = new LinearLayout(this);
+        cardPerfilPrincipal.setOrientation(LinearLayout.VERTICAL);
+        cardPerfilPrincipal.setGravity(Gravity.CENTER_HORIZONTAL);
+        cardPerfilPrincipal.setPadding(dp(18), dp(24), dp(18), dp(20));
+        cardPerfilPrincipal.setBackground(fondoRedondeadoConBorde("#18181B", "#27272A", 18, 1));
+
+        imgAvatarPerfil = new ImageView(this);
+        imgAvatarPerfil.setImageBitmap(crearAvatarCircularPerfil());
+        LinearLayout.LayoutParams lpAv = new LinearLayout.LayoutParams(dp(88), dp(88));
+        lpAv.setMargins(0, 0, 0, dp(10));
+        cardPerfilPrincipal.addView(imgAvatarPerfil, lpAv);
+
+        lblNombrePerfil = crearTexto("geonaldiaz1", "#F8FAFC", 20f, true);
+        lblNombrePerfil.setGravity(Gravity.CENTER);
+        cardPerfilPrincipal.addView(lblNombrePerfil);
+
+        TextView badgeVerificadoPerfil = crearTexto("Licencia Verificada", "#4ADE80", 10.5f, true);
+        badgeVerificadoPerfil.setPadding(dp(10), dp(3), dp(10), dp(3));
+        badgeVerificadoPerfil.setBackground(fondoRedondeado("#14532D", 10));
+        LinearLayout.LayoutParams lpBadgeVer = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lpBadgeVer.setMargins(0, dp(6), 0, dp(20));
+        cardPerfilPrincipal.addView(badgeVerificadoPerfil, lpBadgeVer);
+
+        LinearLayout.LayoutParams lpBoxPerf = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lpBoxPerf.setMargins(0, 0, 0, dp(10));
+
+        boxPerfilDevice = new LinearLayout(this);
+        boxPerfilDevice.setOrientation(LinearLayout.HORIZONTAL);
+        boxPerfilDevice.setGravity(Gravity.CENTER_VERTICAL);
+        boxPerfilDevice.setPadding(dp(14), dp(12), dp(14), dp(12));
+        boxPerfilDevice.setBackground(fondoRedondeadoConBorde("#202227", "#27272A", 12, 1));
+        TextView lblTitDevPerf = crearTexto("ID del dispositivo:", "#94A3B8", 12f, true);
+        lblValorDevicePerfil = crearTexto(obtenerDeviceIdUnico(), "#38BDF8", 12.5f, true);
+        lblValorDevicePerfil.setGravity(Gravity.END);
+        boxPerfilDevice.addView(lblTitDevPerf, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        boxPerfilDevice.addView(lblValorDevicePerfil);
+        cardPerfilPrincipal.addView(boxPerfilDevice, lpBoxPerf);
+
+        boxPerfilCuentas = new LinearLayout(this);
+        boxPerfilCuentas.setOrientation(LinearLayout.HORIZONTAL);
+        boxPerfilCuentas.setGravity(Gravity.CENTER_VERTICAL);
+        boxPerfilCuentas.setPadding(dp(14), dp(12), dp(14), dp(12));
+        boxPerfilCuentas.setBackground(fondoRedondeadoConBorde("#202227", "#27272A", 12, 1));
+        TextView lblTitCtasPerf = crearTexto("Cuentas agregadas:", "#94A3B8", 12f, true);
+        lblValorCuentasPerfil = crearTexto("0 / 4 cuentas", "#4ADE80", 12.5f, true);
+        lblValorCuentasPerfil.setGravity(Gravity.END);
+        boxPerfilCuentas.addView(lblTitCtasPerf, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        boxPerfilCuentas.addView(lblValorCuentasPerfil);
+        cardPerfilPrincipal.addView(boxPerfilCuentas, lpBoxPerf);
+
+        boxPerfilClave = new LinearLayout(this);
+        boxPerfilClave.setOrientation(LinearLayout.HORIZONTAL);
+        boxPerfilClave.setGravity(Gravity.CENTER_VERTICAL);
+        boxPerfilClave.setPadding(dp(14), dp(10), dp(12), dp(10));
+        boxPerfilClave.setBackground(fondoRedondeadoConBorde("#202227", "#27272A", 12, 1));
+
+        TextView lblTitClvPerf = crearTexto("Clave:  ", "#94A3B8", 12f, true);
+        lblValorClavePerfil = crearTexto("••••••••", "#F8FAFC", 13.5f, true);
+
+        btnMantenerMostrarClave = crearTexto("Mostrar clave", "#38BDF8", 10.5f, true);
+        btnMantenerMostrarClave.setPadding(dp(10), dp(5), dp(10), dp(5));
+        btnMantenerMostrarClave.setBackground(fondoRedondeadoConBorde("#1E293B", "#334155", 8, 1));
+
+        View.OnTouchListener listenerMantenerClave = (v, event) -> {
+            String clvReal = prefs.getString("clv_licencia_activa_v3", LICENCIA_CLAVE_CLIENTE);
+            if (event.getAction() == MotionEvent.ACTION_DOWN) {
+                lblValorClavePerfil.setText(clvReal);
+                lblValorClavePerfil.setTextColor(Color.parseColor("#4ADE80"));
+                btnMantenerMostrarClave.setText("Mostrando...");
+                return true;
+            } else if (event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL) {
+                lblValorClavePerfil.setText("••••••••");
+                lblValorClavePerfil.setTextColor(Color.parseColor(colTextoPrimario()));
+                btnMantenerMostrarClave.setText("Mostrar clave");
+                return true;
+            }
+            return false;
+        };
+        lblValorClavePerfil.setOnTouchListener(listenerMantenerClave);
+        btnMantenerMostrarClave.setOnTouchListener(listenerMantenerClave);
+
+        boxPerfilClave.addView(lblTitClvPerf);
+        boxPerfilClave.addView(lblValorClavePerfil, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        boxPerfilClave.addView(btnMantenerMostrarClave);
+        cardPerfilPrincipal.addView(boxPerfilClave, lpBoxPerf);
+
+        btnCerrarSesionPerfil = crearBotonConIcono("LOGOUT", "Cerrar sesión", "#7F1D1D", "#FCA5A5", 12, this::cerrarSesionDeLicenciaActual);
+        LinearLayout.LayoutParams lpBtnOutPerf = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(40));
+        lpBtnOutPerf.setMargins(0, dp(8), 0, dp(14));
+        cardPerfilPrincipal.addView(btnCerrarSesionPerfil, lpBtnOutPerf);
+
+        lblPieLicenciaPerfil = crearTexto("Licencia activa", "#71717A", 10.5f, false);
+        lblPieLicenciaPerfil.setGravity(Gravity.CENTER);
+        lblPieLicenciaPerfil.setPadding(dp(6), dp(6), dp(6), 0);
+        cardPerfilPrincipal.addView(lblPieLicenciaPerfil);
+
+        contenidoPerfil.addView(cardPerfilPrincipal, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        vistaPerfilScroll.addView(contenidoPerfil);
+        contenedorPaginasSwipe.addView(vistaPerfilScroll, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        mainVertical.addView(contenedorPaginasSwipe, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        frameRoot.addView(mainVertical);
+
+        contenedorBarraFlotante = new FrameLayout(this);
+        contenedorBarraFlotante.setVisibility(View.GONE);
+        contenedorBarraFlotante.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+
+        imgFondoBlurGlass = new ImageView(this);
+        imgFondoBlurGlass.setScaleType(ImageView.ScaleType.FIT_XY);
+        imgFondoBlurGlass.setVisibility(View.GONE);
+        contenedorBarraFlotante.addView(imgFondoBlurGlass, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        vistaBrilloEspecularGlass = new View(this);
+        vistaBrilloEspecularGlass.setVisibility(View.GONE);
+        contenedorBarraFlotante.addView(vistaBrilloEspecularGlass, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(2)));
+
+        barraFlotante = new LinearLayout(this);
+        barraFlotante.setOrientation(LinearLayout.HORIZONTAL);
+        barraFlotante.setGravity(Gravity.CENTER);
+        barraFlotante.setPadding(dp(4), dp(3), dp(4), dp(3));
+        barraFlotante.setBackground(fondoRedondeadoConBorde("#18181B", "#2E323B", 22, 1));
+
+        indicadorDeslizanteBarra = new View(this);
+        FrameLayout.LayoutParams lpInd = new FrameLayout.LayoutParams(dp(68), dp(36));
+        lpInd.gravity = Gravity.CENTER_VERTICAL;
+        indicadorDeslizanteBarra.setLayoutParams(lpInd);
+        contenedorBarraFlotante.addView(indicadorDeslizanteBarra);
+
+        navBtnCuentas = new LinearLayout(this);
+        navBtnCuentas.setOrientation(LinearLayout.VERTICAL);
+        navBtnCuentas.setGravity(Gravity.CENTER);
+        navBtnCuentas.setPadding(dp(3), dp(2), dp(3), dp(2));
+        navIconCuentas = new ImageView(this);
+        navTxtCuentas = crearTexto("Cuentas", "#FFFFFF", 9.5f, true);
+        navTxtCuentas.setSingleLine(true);
+        navTxtCuentas.setGravity(Gravity.CENTER);
+        navBtnCuentas.addView(navIconCuentas, new LinearLayout.LayoutParams(dp(15), dp(15)));
+        navBtnCuentas.addView(navTxtCuentas, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        navBtnCuentas.setOnClickListener(v -> cambiarPestanaInferior(0));
+
+        navBtnHistorial = new LinearLayout(this);
+        navBtnHistorial.setOrientation(LinearLayout.VERTICAL);
+        navBtnHistorial.setGravity(Gravity.CENTER);
+        navBtnHistorial.setPadding(dp(3), dp(2), dp(3), dp(2));
+        navIconHistorial = new ImageView(this);
+        navTxtHistorial = crearTexto("Historial", "#A1A1AA", 9.5f, true);
+        navTxtHistorial.setSingleLine(true);
+        navTxtHistorial.setGravity(Gravity.CENTER);
+        navBtnHistorial.addView(navIconHistorial, new LinearLayout.LayoutParams(dp(15), dp(15)));
+        navBtnHistorial.addView(navTxtHistorial, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        navBtnHistorial.setOnClickListener(v -> cambiarPestanaInferior(1));
+
+        navBtnAjustes = new LinearLayout(this);
+        navBtnAjustes.setOrientation(LinearLayout.VERTICAL);
+        navBtnAjustes.setGravity(Gravity.CENTER);
+        navBtnAjustes.setPadding(dp(3), dp(2), dp(3), dp(2));
+        navIconAjustes = new ImageView(this);
+        navTxtAjustes = crearTexto("Ajustes", "#A1A1AA", 9.5f, true);
+        navTxtAjustes.setSingleLine(true);
+        navTxtAjustes.setGravity(Gravity.CENTER);
+        navBtnAjustes.addView(navIconAjustes, new LinearLayout.LayoutParams(dp(15), dp(15)));
+        navBtnAjustes.addView(navTxtAjustes, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        navBtnAjustes.setOnClickListener(v -> cambiarPestanaInferior(2));
+
+        navBtnPerfil = new LinearLayout(this);
+        navBtnPerfil.setOrientation(LinearLayout.VERTICAL);
+        navBtnPerfil.setGravity(Gravity.CENTER);
+        navBtnPerfil.setPadding(dp(3), dp(2), dp(3), dp(2));
+        navIconPerfil = new ImageView(this);
+        navTxtPerfil = crearTexto("Perfil", "#A1A1AA", 9.5f, true);
+        navTxtPerfil.setSingleLine(true);
+        navTxtPerfil.setGravity(Gravity.CENTER);
+        navBtnPerfil.addView(navIconPerfil, new LinearLayout.LayoutParams(dp(15), dp(15)));
+        navBtnPerfil.addView(navTxtPerfil, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        navBtnPerfil.setOnClickListener(v -> cambiarPestanaInferior(3));
+
+        barraFlotante.addView(navBtnCuentas, new LinearLayout.LayoutParams(dp(68), dp(36)));
+        barraFlotante.addView(new View(this), new LinearLayout.LayoutParams(dp(3), dp(1)));
+        barraFlotante.addView(navBtnHistorial, new LinearLayout.LayoutParams(dp(68), dp(36)));
+        barraFlotante.addView(new View(this), new LinearLayout.LayoutParams(dp(3), dp(1)));
+        barraFlotante.addView(navBtnAjustes, new LinearLayout.LayoutParams(dp(68), dp(36)));
+        barraFlotante.addView(new View(this), new LinearLayout.LayoutParams(dp(3), dp(1)));
+        barraFlotante.addView(navBtnPerfil, new LinearLayout.LayoutParams(dp(68), dp(36)));
+
+        contenedorBarraFlotante.addView(barraFlotante, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        FrameLayout.LayoutParams lpFloating = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        lpFloating.setMargins(0, 0, 0, dp(10));
+        frameRoot.addView(contenedorBarraFlotante, lpFloating);
+
+        loginClienteOverlay = construirOverlayLoginCliente();
+        frameRoot.addView(loginClienteOverlay);
+
+        LinearLayout splashOverlay = new LinearLayout(this);
+        splashOverlay.setOrientation(LinearLayout.VERTICAL);
+        splashOverlay.setGravity(Gravity.CENTER);
+        splashOverlay.setBackgroundColor(Color.parseColor("#18181B"));
+        splashOverlay.setClickable(true);
+        splashOverlay.setElevation(dp(100));
+        splashOverlay.setLayoutParams(new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        WebView splashWebView = new WebView(this);
+        splashWebView.setBackgroundColor(Color.parseColor("#18181B"));
+        splashWebView.setVerticalScrollBarEnabled(false);
+        splashWebView.setHorizontalScrollBarEnabled(false);
+        splashWebView.getSettings().setJavaScriptEnabled(true);
+        splashWebView.getSettings().setLoadsImagesAutomatically(true);
+
+        String htmlSplash = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1.0'>" +
+                "<style>" +
+                "html,body{margin:0;padding:0;width:100%;height:100%;display:flex;justify-content:center;align-items:center;background:#18181B;overflow:hidden;}" +
+                "#wrap{position:relative;width:170px;height:170px;display:flex;justify-content:center;align-items:center;}" +
+                "svg{width:145px;height:145px;}" +
+                "@keyframes draw{0%{stroke-dashoffset:360;}50%{stroke-dashoffset:0;}100%{stroke-dashoffset:-360;}}" +
+                ".p1{fill:none;stroke:#0095DB;stroke-width:4.5;stroke-linecap:round;stroke-dasharray:360;animation:draw 2.1s infinite ease-in-out;}" +
+                ".p2{fill:none;stroke:#F9B218;stroke-width:4.5;stroke-linecap:round;stroke-dasharray:360;animation:draw 2.1s infinite ease-in-out 0.2s;}" +
+                ".p3{fill:none;stroke:#E41E25;stroke-width:4.5;stroke-linecap:round;stroke-dasharray:360;animation:draw 2.1s infinite ease-in-out 0.4s;}" +
+                "</style></head><body>" +
+                "<div id='wrap'>" +
+                "<svg id='fb' viewBox='0 0 256 256'>" +
+                "<rect class='p2' x='98' y='42' width='140' height='86' rx='43' transform='rotate(-6 168 85)'/>" +
+                "<path class='p1' d='M58,68 L134,64 A42,42 0 0,1 176,106 L176,192 A44,44 0 0,1 88,192 L88,150 L58,152 A42,42 0 0,1 16,110 A42,42 0 0,1 58,68 Z'/>" +
+                "<rect class='p3' x='98' y='64' width='78' height='64' rx='30'/>" +
+                "</svg>" +
+                "</div></body></html>";
+
+        splashWebView.loadDataWithBaseURL("https://tesoroenlinea.bt.com.ve/", htmlSplash, "text/html", "UTF-8", null);
+        splashOverlay.addView(splashWebView, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        frameRoot.addView(splashOverlay);
+        setContentView(frameRoot);
+
+        handler.postDelayed(() -> {
+            splashOverlay.animate()
+                    .alpha(0f)
+                    .setDuration(400)
+                    .withEndAction(() -> {
+                        splashOverlay.setVisibility(View.GONE);
+                        splashWebView.destroy();
+                        if (loginClienteOverlay.getVisibility() != View.VISIBLE) {
+                            contenedorBarraFlotante.setVisibility(View.VISIBLE);
+                            handler.postDelayed(this::actualizarEfectoBlurBarraGlass, 100);
+                        }
+                    })
+                    .start();
+        }, 2000);
+    }
+
     private void intentarCambiarModoAvanzadoProxy(int modoClickeado) {
         if (modoAvanzadoProxy == modoClickeado) {
             modoAvanzadoProxy = MODO_PROXY_NINGUNO;
@@ -3232,11 +3504,6 @@ public class MainActivity extends Activity {
         }
     }
 
-    /**
-     * Panel en modo oscuro para "Proxy personalizado por cuenta":
-     * Muestra únicamente las cuentas registradas actualmente con un recuadro limpio por usuario
-     * para elegir su modo de proxy independiente.
-     */
     private void mostrarPopupConfiguracionProxyPorCuenta() {
         ArrayList<SesionBot> cuentasReg = obtenerSesionesRegistradas();
 
@@ -3905,7 +4172,6 @@ public class MainActivity extends Activity {
             boxDesplegable.setPadding(0, dp(8), 0, 0);
             boxDesplegable.setClickable(true);
 
-            // Cabecera limpia sin el texto "Consola y Página del Banco en Vivo" y con botón en Modo Oscuro
             LinearLayout filaCabeceraConsola = new LinearLayout(this);
             filaCabeceraConsola.setOrientation(LinearLayout.HORIZONTAL);
             filaCabeceraConsola.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
@@ -3958,7 +4224,6 @@ public class MainActivity extends Activity {
             frameCon.addView(btnLimpiarMini, lpLimp);
             boxDesplegable.addView(frameCon, lpFrameCon);
 
-            // Barra de Navegador en Modo Oscuro (Atrás, Recargar y Zoom en el mismo tono oscuro del bot)
             LinearLayout barraNav = new LinearLayout(this);
             barraNav.setOrientation(LinearLayout.HORIZONTAL);
             barraNav.setGravity(Gravity.CENTER_VERTICAL);
