@@ -29,11 +29,14 @@ import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.NetworkInfo;
+import android.net.NetworkRequest;
+import android.net.TrafficStats;
 import android.net.http.SslError;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.Process;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.provider.Settings;
@@ -49,9 +52,12 @@ import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
+import android.view.VelocityTracker;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.WindowManager;
+import android.view.animation.DecelerateInterpolator;
 import android.webkit.CookieManager;
 import android.webkit.HttpAuthHandler;
 import android.webkit.RenderProcessGoneDetail;
@@ -125,6 +131,7 @@ public class MainActivity extends Activity {
     private static final int MODO_PROXY_SIEMPRE_ACTIVO = 1;
     private static final int MODO_PROXY_EN_CONTRASENA = 2;
     private static final int MODO_PROXY_EN_INTERVENCION = 3;
+    private static final int MODO_PROXY_PERSONALIZADO_CUENTA = 4;
 
     // =========================================================================================
     // SISTEMA DE LICENCIAS EN LA NUBE (GITHUB licencias.json)
@@ -150,12 +157,17 @@ public class MainActivity extends Activity {
     private volatile int ultimoSlotActivoRed = 0;
     private volatile InetAddress ipProxyCacheada = null;
     private volatile InetAddress ipBancoCacheada = null;
-    private final ExecutorService poolHilosProxy = Executors.newCachedThreadPool();
+    private final ExecutorService poolHilosProxy = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r);
+        t.setPriority(Thread.MAX_PRIORITY);
+        return t;
+    });
     private final ConcurrentHashMap<String, byte[]> cacheEstaticosRam = new ConcurrentHashMap<>();
 
-    // Contenedores principales
+    // Contenedores principales y gestor de Swipe Horizontal interactivo
     private FrameLayout frameRoot;
     private LinearLayout mainVertical;
+    private FrameLayout contenedorPaginasSwipe;
     private ScrollView vistaCuentasScroll;
     private LinearLayout contenedorTarjetasCuentas;
     private LinearLayout cardEstadoVacioCuentas;
@@ -170,6 +182,13 @@ public class MainActivity extends Activity {
     private TextView lblTituloComprasExitosas, lblSubComprasExitosas;
     private ScrollView vistaAjustesScroll;
     private ScrollView vistaPerfilScroll;
+
+    // Variables del gesto de deslizar entre pestañas (Swipe en tiempo real)
+    private VelocityTracker velocityTrackerSwipe;
+    private float touchStartX = 0f, touchStartY = 0f;
+    private boolean deslizandoPestanaHorizontal = false;
+    private boolean gestoDescartado = false;
+    private int pestanaVecinaSwipe = -1;
 
     // Elementos de la Pestaña "Perfil"
     private LinearLayout cardPerfilPrincipal, boxPerfilDevice, boxPerfilCuentas, boxPerfilClave;
@@ -200,25 +219,27 @@ public class MainActivity extends Activity {
     private TextView lblItemBarraGlass, lblDescItemBarraGlass;
     private Button btnToggleBarraGlass;
 
-    // Sub-paneles separados de Modo Turbo, Proxy VE, Alertas y Vibración
+    // Sub-paneles separados de Modo Turbo, Proxy VE, Alertas y Vibración con Barrita Corta
     private LinearLayout panelItemTurbo, panelItemProxy, panelItemOrd, panelItemCompra, panelItemVib;
     private TextView lblItemTurbo, lblDescItemTurbo;
     private TextView lblItemProxy, lblDescItemProxy;
     private TextView lblItemOrd, lblDescItemOrd;
     private TextView lblItemCompra, lblDescItemCompra;
-    private TextView lblItemVib, lblDescItemVib;
-    private Button btnToggleTurbo, btnToggleProxy, btnToggleOrd, btnToggleCompra, btnToggleVib;
+    private TextView lblItemVib, lblDescItemVib, lblNivelVibValor;
+    private Button btnToggleTurbo, btnToggleProxy, btnToggleOrd, btnToggleCompra;
+    private SeekBar seekBarVibracion;
 
-    // Desplegable de "Configuración avanzada" en Ajustes (Estilo Modo Oscuro)
+    // Desplegable de "Configuración avanzada" en Ajustes (Con los 5 modos incluyendo Personalizado por cuenta)
     private TextView btnTextoConfigAvanzada;
     private LinearLayout contenedorConfigAvanzada;
     private boolean configAvanzadaExpandida = false;
-    private LinearLayout panelAdvPosGlobal, panelAdvSiempre, panelAdvPass, panelAdvIntervencion;
+    private LinearLayout panelAdvPosGlobal, panelAdvSiempre, panelAdvPass, panelAdvIntervencion, panelAdvPorCuenta;
     private TextView lblAdvPosGlobal, lblDescAdvPosGlobal;
     private TextView lblAdvSiempre, lblDescAdvSiempre;
     private TextView lblAdvPass, lblDescAdvPass;
     private TextView lblAdvIntervencion, lblDescAdvIntervencion;
-    private Button btnToggleAdvPosGlobal, btnToggleAdvSiempre, btnToggleAdvPass, btnToggleAdvIntervencion;
+    private TextView lblAdvPorCuenta, lblDescAdvPorCuenta;
+    private Button btnToggleAdvPosGlobal, btnToggleAdvSiempre, btnToggleAdvPass, btnToggleAdvIntervencion, btnToggleAdvPorCuenta;
 
     // Contenedor de motores en segundo plano cuando la tarjeta está cerrada
     private LinearLayout filaMotoresSup, filaMotoresInf;
@@ -229,14 +250,17 @@ public class MainActivity extends Activity {
     private TextView chipRegistradas, chipActivas, chipDetenidas;
     private Button btnIniciarTodas, btnDetenerTodas, btnNuevaCuenta, btnLimpiarHist;
 
-    // Barra flotante inferior compacta con soporte de Efecto Glass iPhone y Auto-Ocultado al deslizar
+    // Barra flotante inferior con Efecto Glass iOS Real, Cápsula Deslizante y Ocultado Progresivo
     private FrameLayout contenedorBarraFlotante;
     private ImageView imgFondoBlurGlass;
+    private View vistaBrilloEspecularGlass;
+    private View indicadorDeslizanteBarra;
     private LinearLayout barraFlotante;
     private LinearLayout navBtnCuentas, navBtnHistorial, navBtnAjustes, navBtnPerfil;
     private ImageView navIconCuentas, navIconHistorial, navIconAjustes, navIconPerfil;
     private TextView navTxtCuentas, navTxtHistorial, navTxtAjustes, navTxtPerfil;
-    private boolean barraInferiorOcultaPorScroll = false;
+    private float traduccionBarraY = 0f;
+    private float acumuladorBajandoScroll = 0f;
     private long ultimoRenderGlassMs = 0;
 
     // 0 = Cuentas, 1 = Historial, 2 = Ajustes, 3 = Perfil
@@ -247,10 +271,10 @@ public class MainActivity extends Activity {
     private boolean barraGlassActiva = false;
     private boolean modoTurboSinImagenes = true;
     private boolean proxyRotativoActivo = true;
-    private int modoAvanzadoProxy = MODO_PROXY_POSICION_GLOBAL; // Por defecto: Activar proxy en posición global
+    private int modoAvanzadoProxy = MODO_PROXY_POSICION_GLOBAL;
     private boolean alertaOrdinariaActiva = true;
     private boolean alertaCompraActiva = true;
-    private boolean vibracionActiva = true;
+    private int intensidadVibracion = 85; // 0 = Apagado, 1..100 = Intensidad progresiva
 
     private int minutosRelogin = 10;
 
@@ -337,6 +361,7 @@ public class MainActivity extends Activity {
         boolean yaAnuncioPaginaLoginCargada = false;
         boolean nombreOculto = false;
 
+        int modoProxyIndividual = MODO_PROXY_POSICION_GLOBAL;
         boolean panelDesplegado = false;
         boolean mostrarConsolaEnPanel = true;
         int zoomPorcentaje = 75;
@@ -408,6 +433,23 @@ public class MainActivity extends Activity {
             this.idSesionProxy = generarIdSesionProxyNuevo();
         }
 
+        int obtenerModoProxyEfectivo() {
+            if (modoAvanzadoProxy == MODO_PROXY_PERSONALIZADO_CUENTA) {
+                return modoProxyIndividual;
+            }
+            return modoAvanzadoProxy;
+        }
+
+        String nombreCortoModoIndividual() {
+            switch (modoProxyIndividual) {
+                case MODO_PROXY_SIEMPRE_ACTIVO: return "Siempre activo";
+                case MODO_PROXY_EN_CONTRASENA: return "En contraseña";
+                case MODO_PROXY_EN_INTERVENCION: return "En intervención";
+                case MODO_PROXY_POSICION_GLOBAL:
+                default: return "Posición global";
+            }
+        }
+
         String codigoNumericoTipoDoc() {
             switch (tipoDoc.toUpperCase(Locale.ROOT)) {
                 case "P": return "02";
@@ -445,19 +487,23 @@ public class MainActivity extends Activity {
         }
 
         String textoEstadoProxyMostrado() {
-            if (!proxyRotativoActivo || modoAvanzadoProxy == MODO_PROXY_NINGUNO) {
+            int modoEf = obtenerModoProxyEfectivo();
+            if (!proxyRotativoActivo || modoEf == MODO_PROXY_NINGUNO) {
                 return "Conexión Directa Wi-Fi (Proxy desactivado)";
             }
             String idCorto = idSesionProxy.length() >= 6 ? idSesionProxy.substring(0, 6).toUpperCase() : idSesionProxy.toUpperCase();
-            if (estaCorriendo() && !proxyActivoEnEstaCuenta && modoAvanzadoProxy != MODO_PROXY_SIEMPRE_ACTIVO) {
-                if (modoAvanzadoProxy == MODO_PROXY_EN_CONTRASENA) {
-                    return "Wi-Fi Normal (Activará Proxy #" + idCorto + " en Contraseña)";
-                } else if (modoAvanzadoProxy == MODO_PROXY_EN_INTERVENCION) {
-                    return "Wi-Fi Normal (Activará Proxy #" + idCorto + " en Intervención)";
+            String etiquetaModo = (modoAvanzadoProxy == MODO_PROXY_PERSONALIZADO_CUENTA)
+                    ? (" [" + nombreCortoModoIndividual() + "]")
+                    : "";
+            if (estaCorriendo() && !proxyActivoEnEstaCuenta && modoEf != MODO_PROXY_SIEMPRE_ACTIVO) {
+                if (modoEf == MODO_PROXY_EN_CONTRASENA) {
+                    return "Wi-Fi Normal (Activará Proxy #" + idCorto + " en Contraseña)" + etiquetaModo;
+                } else if (modoEf == MODO_PROXY_EN_INTERVENCION) {
+                    return "Wi-Fi Normal (Activará Proxy #" + idCorto + " en Intervención)" + etiquetaModo;
                 }
-                return "Wi-Fi Normal (Activará Proxy #" + idCorto + " en Posición Global)";
+                return "Wi-Fi Normal (Activará Proxy #" + idCorto + " en Posición Global)" + etiquetaModo;
             }
-            return "Proxy VE Activo • IP #" + idCorto + " • Cambios IP: " + contadorRotacionesIp;
+            return "Proxy VE Activo • IP #" + idCorto + " • Cambios IP: " + contadorRotacionesIp + etiquetaModo;
         }
 
         boolean estaEnFormularioCompra() {
@@ -498,6 +544,10 @@ public class MainActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         try {
+            Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY);
+        } catch (Throwable ignored) {}
+
+        try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
                 WebView.setWebContentsDebuggingEnabled(false);
             }
@@ -512,11 +562,12 @@ public class MainActivity extends Activity {
         modoAvanzadoProxy = prefs.getInt("modo_avanzado_proxy_v1", MODO_PROXY_POSICION_GLOBAL);
         alertaOrdinariaActiva = prefs.getBoolean("alerta_ord", true);
         alertaCompraActiva = prefs.getBoolean("alerta_compra", true);
-        vibracionActiva = prefs.getBoolean("vibracion_app", true);
+        intensidadVibracion = prefs.getInt("intensidad_vibracion_v1", 85);
 
         for (int i = 0; i < MAX_CUENTAS; i++) {
             sesiones[i] = new SesionBot(i);
             sesiones[i].mostrarConsolaEnPanel = prefs.getBoolean("mostrar_consola_slot_" + i, true);
+            sesiones[i].modoProxyIndividual = prefs.getInt("modo_proxy_indiv_slot_" + i, MODO_PROXY_POSICION_GLOBAL);
             int zGuardado = prefs.getInt("zoom_web_v2_slot_" + i, 75);
             if (zGuardado < 60 || zGuardado > 100) zGuardado = 75;
             sesiones[i].zoomPorcentaje = zGuardado;
@@ -527,6 +578,7 @@ public class MainActivity extends Activity {
         inicializarMotoresOcultos();
         vincularPuenteLocalAlWebView();
         registrarMonitorPasivoRed();
+        concentrarRedAlMaximoEnEstePrograma(true);
         cargarCuentasGuardadas();
         cargarComprasExitosasGuardadas();
         aplicarTemaVisual();
@@ -535,6 +587,10 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        try {
+            concentrarRedAlMaximoEnEstePrograma(false);
+        } catch (Exception ignored) {}
+
         try {
             if (servidorPuenteLocal != null && !servidorPuenteLocal.isClosed()) {
                 servidorPuenteLocal.close();
@@ -564,7 +620,68 @@ public class MainActivity extends Activity {
     }
 
     // =========================================================================================
-    // MOTOR DE RED HÍBRIDO CON PRE-RESOLUCIÓN DNS Y LOS 4 MODOS AVANZADOS DE PROXY
+    // CONCENTRACIÓN DEL 95% DEL RENDIMIENTO DE RED EN ESTE PROGRAMA CUANDO ESTÁ PRENDIDO
+    // =========================================================================================
+    private void concentrarRedAlMaximoEnEstePrograma(boolean activarPrioridadMaxima) {
+        try {
+            ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return;
+
+            if (!activarPrioridadMaxima) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    cm.bindProcessToNetwork(null);
+                }
+                return;
+            }
+
+            Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY);
+            TrafficStats.setThreadStatsTag(0xB795);
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                Network redActiva = cm.getActiveNetwork();
+                if (redActiva != null) {
+                    cm.bindProcessToNetwork(redActiva);
+                }
+                NetworkRequest req = new NetworkRequest.Builder()
+                        .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                        .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
+                        .build();
+                cm.requestNetwork(req, new ConnectivityManager.NetworkCallback() {
+                    @Override
+                    public void onAvailable(Network network) {
+                        try {
+                            if (contarCuentasCorriendo() > 0) {
+                                cm.bindProcessToNetwork(network);
+                            }
+                        } catch (Throwable ignored) {}
+                    }
+                });
+            }
+
+            for (int i = 0; i < MAX_CUENTAS; i++) {
+                if (sesiones[i] != null && sesiones[i].webViewOculto != null) {
+                    try {
+                        sesiones[i].webViewOculto.getSettings().setRenderPriority(WebSettings.RenderPriority.HIGH);
+                    } catch (Throwable ignored) {}
+                }
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    private void configurarSocketPrioridadMaxima(Socket s) {
+        if (s == null) return;
+        try {
+            s.setPerformancePreferences(0, 2, 1); // Prioridad absoluta a baja latencia y ancho de banda
+            s.setTcpNoDelay(true);
+            s.setKeepAlive(true);
+            s.setTrafficClass(0x10 | 0x08); // IPTOS_LOWDELAY | IPTOS_THROUGHPUT
+            s.setReceiveBufferSize(131072);
+            s.setSendBufferSize(131072);
+        } catch (Throwable ignored) {}
+    }
+
+    // =========================================================================================
+    // MOTOR DE RED HÍBRIDO CON MODOS GLOBALES Y MODO PERSONALIZADO POR CUENTA
     // =========================================================================================
     private String generarIdSesionProxyNuevo() {
         String chars = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -632,7 +749,8 @@ public class MainActivity extends Activity {
 
     private void activarProxyYCambiarIpConVerificacion(final SesionBot s, final String etapaDondeActiva) {
         if (s == null) return;
-        if (!proxyRotativoActivo || modoAvanzadoProxy == MODO_PROXY_NINGUNO) {
+        int modoEf = s.obtenerModoProxyEfectivo();
+        if (!proxyRotativoActivo || modoEf == MODO_PROXY_NINGUNO) {
             s.proxyActivoEnEstaCuenta = false;
             s.proxyVerificadoOk = true;
             s.verificandoConexionProxy = false;
@@ -660,7 +778,7 @@ public class MainActivity extends Activity {
                 Socket testSock = null;
                 try {
                     testSock = new Socket();
-                    testSock.setTcpNoDelay(true);
+                    configurarSocketPrioridadMaxima(testSock);
                     InetSocketAddress ep = (ipProxyCacheada != null)
                             ? new InetSocketAddress(ipProxyCacheada, PRX_PORT)
                             : new InetSocketAddress(obtenerHostProxyIPRoyal(), PRX_PORT);
@@ -711,7 +829,8 @@ public class MainActivity extends Activity {
 
     private void limpiarTodosLosDatosDeSesionAnterior(final SesionBot s, String motivo, boolean rotarIpSiSiempreActivo) {
         if (s == null) return;
-        if (rotarIpSiSiempreActivo && proxyRotativoActivo && modoAvanzadoProxy == MODO_PROXY_SIEMPRE_ACTIVO) {
+        int modoEf = s.obtenerModoProxyEfectivo();
+        if (rotarIpSiSiempreActivo && proxyRotativoActivo && modoEf == MODO_PROXY_SIEMPRE_ACTIVO) {
             s.idSesionProxy = generarIdSesionProxyNuevo();
             s.contadorRotacionesIp++;
             s.proxyActivoEnEstaCuenta = true;
@@ -807,7 +926,7 @@ public class MainActivity extends Activity {
             } catch (Exception ignored) {}
 
             try {
-                servidorPuenteLocal = new ServerSocket(0, 128);
+                servidorPuenteLocal = new ServerSocket(0, 256);
                 puertoPuenteLocal = servidorPuenteLocal.getLocalPort();
                 runOnUiThread(this::vincularPuenteLocalAlWebView);
 
@@ -823,10 +942,8 @@ public class MainActivity extends Activity {
         Socket socketRemoto = null;
         SesionBot sesionRef = null;
         try {
-            clienteLocal.setTcpNoDelay(true);
-            clienteLocal.setKeepAlive(true);
-            clienteLocal.setReceiveBufferSize(65536);
-            clienteLocal.setSendBufferSize(65536);
+            TrafficStats.setThreadStatsTag(0xB795);
+            configurarSocketPrioridadMaxima(clienteLocal);
             clienteLocal.setSoTimeout(15000);
 
             InputStream inCliente = clienteLocal.getInputStream();
@@ -863,9 +980,10 @@ public class MainActivity extends Activity {
                 sesionRef.socketsAbiertos.add(clienteLocal);
             }
 
+            int modoEf = (sesionRef != null) ? sesionRef.obtenerModoProxyEfectivo() : modoAvanzadoProxy;
             boolean usarTunelProxy = proxyRotativoActivo
-                    && (modoAvanzadoProxy != MODO_PROXY_NINGUNO)
-                    && (modoAvanzadoProxy == MODO_PROXY_SIEMPRE_ACTIVO
+                    && (modoEf != MODO_PROXY_NINGUNO)
+                    && (modoEf == MODO_PROXY_SIEMPRE_ACTIVO
                         || (sesionRef != null && sesionRef.proxyActivoEnEstaCuenta));
 
             int corteHeader = (finHeadersIdx != -1) ? finHeadersIdx : totalLeido.length;
@@ -873,7 +991,7 @@ public class MainActivity extends Activity {
             int finPrimeraLinea = rawStr.indexOf("\r\n");
             String primeraLinea = (finPrimeraLinea != -1) ? rawStr.substring(0, finPrimeraLinea) : rawStr;
 
-            // MODO 1: CONEXIÓN CON WI-FI / INTERNET NORMAL (Con IP del banco pre-resuelta en caché)
+            // MODO 1: CONEXIÓN CON WI-FI / INTERNET NORMAL DE MÁXIMO RENDIMIENTO
             if (!usarTunelProxy && primeraLinea.toUpperCase(Locale.ROOT).startsWith("CONNECT ")) {
                 String[] partes = primeraLinea.split(" ");
                 String hostPort = (partes.length > 1) ? partes[1].trim() : "tesoroenlinea.bt.com.ve:443";
@@ -892,10 +1010,7 @@ public class MainActivity extends Activity {
                 }
 
                 socketRemoto = new Socket();
-                socketRemoto.setTcpNoDelay(true);
-                socketRemoto.setKeepAlive(true);
-                socketRemoto.setReceiveBufferSize(65536);
-                socketRemoto.setSendBufferSize(65536);
+                configurarSocketPrioridadMaxima(socketRemoto);
 
                 InetSocketAddress epDirecto;
                 if (hostDestino.equalsIgnoreCase("tesoroenlinea.bt.com.ve") && ipBancoCacheada != null) {
@@ -922,7 +1037,7 @@ public class MainActivity extends Activity {
                 return;
             }
 
-            // MODO 2: TÚNEL PROXY IPROYAL VENEZUELA
+            // MODO 2: TÚNEL PROXY IPROYAL VENEZUELA CON PRIORIDAD DE TRÁFICO
             String authRaw = PRX_USER_RAW + ":" + construirPasswordProxyVenezuela(sesionRef);
             String authB64 = Base64.encodeToString(authRaw.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
 
@@ -937,10 +1052,7 @@ public class MainActivity extends Activity {
             }
 
             socketRemoto = new Socket();
-            socketRemoto.setTcpNoDelay(true);
-            socketRemoto.setKeepAlive(true);
-            socketRemoto.setReceiveBufferSize(65536);
-            socketRemoto.setSendBufferSize(65536);
+            configurarSocketPrioridadMaxima(socketRemoto);
 
             InetSocketAddress endpointRemoto;
             if (ipProxyCacheada != null) {
@@ -984,7 +1096,7 @@ public class MainActivity extends Activity {
 
     private void copiarFlujoSocketTurbo(InputStream in, OutputStream out, Socket s1, Socket s2) {
         try {
-            byte[] buf = new byte[32768];
+            byte[] buf = new byte[65536];
             int n;
             while ((n = in.read(buf)) != -1) {
                 out.write(buf, 0, n);
@@ -1459,15 +1571,31 @@ public class MainActivity extends Activity {
         return gd;
     }
 
+    /**
+     * Acabado Cristal Esmerilado (iOS Frosted Blur) idéntico a las carpetas de iPhone:
+     * Superficie lechosa translúcida con borde especular brillante arriba.
+     */
     private GradientDrawable fondoCristalIphone(boolean esTemaClaro) {
         GradientDrawable gd = new GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
                 esTemaClaro
-                        ? new int[]{Color.parseColor("#88FFFFFF"), Color.parseColor("#55E2E8F0")}
-                        : new int[]{Color.parseColor("#6627272A"), Color.parseColor("#4418181B")}
+                        ? new int[]{Color.parseColor("#78FFFFFF"), Color.parseColor("#48E2E8F0")}
+                        : new int[]{Color.parseColor("#54FFFFFF"), Color.parseColor("#2494A3B8")}
         );
-        gd.setCornerRadius(dp(22));
-        gd.setStroke(dp(1), Color.parseColor(esTemaClaro ? "#AAFFFFFF" : "#66FFFFFF"));
+        gd.setCornerRadius(dp(24));
+        gd.setStroke(dp(1), Color.parseColor(esTemaClaro ? "#CCFFFFFF" : "#80FFFFFF"));
+        return gd;
+    }
+
+    private GradientDrawable fondoCapsulaActivaGlass(boolean esTemaClaro) {
+        GradientDrawable gd = new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                esTemaClaro
+                        ? new int[]{Color.parseColor("#AA0284C7"), Color.parseColor("#880369A1")}
+                        : new int[]{Color.parseColor("#66FFFFFF"), Color.parseColor("#33CBD5E1")}
+        );
+        gd.setCornerRadius(dp(18));
+        gd.setStroke(dp(1), Color.parseColor("#99FFFFFF"));
         return gd;
     }
 
@@ -1549,11 +1677,27 @@ public class MainActivity extends Activity {
         return "#E4E4E7";
     }
 
+    // =========================================================================================
+    // VIBRACIÓN REGULABLE CON BARRITA CORTA (0% APAGADO A 100% MÁXIMO) + SONIDOS
+    // =========================================================================================
+    private String textoNivelVibracion(int nivel) {
+        if (nivel <= 0) return "Apagado (0%)";
+        if (nivel <= 30) return "Bajo (" + nivel + "%)";
+        if (nivel <= 70) return "Medio (" + nivel + "%)";
+        if (nivel < 100) return "Alto (" + nivel + "%)";
+        return "Máximo (100%)";
+    }
+
     private void vibrarDispositivo(boolean esCompraExitosa) {
-        if (!vibracionActiva) return;
+        if (intensidadVibracion <= 0) return;
         runOnUiThread(() -> {
+            int amp = Math.max(1, Math.min(255, (int) ((intensidadVibracion / 100f) * 255f)));
+            long duracionBase = esCompraExitosa
+                    ? (60L + (long) (intensidadVibracion * 2.2f))
+                    : (25L + (long) (intensidadVibracion * 1.3f));
+
             try {
-                if (frameRoot != null) {
+                if (frameRoot != null && intensidadVibracion >= 20) {
                     frameRoot.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS,
                             HapticFeedbackConstants.FLAG_IGNORE_GLOBAL_SETTING);
                 }
@@ -1563,12 +1707,14 @@ public class MainActivity extends Activity {
                 if (vib != null && vib.hasVibrator()) {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         if (esCompraExitosa) {
-                            vib.vibrate(VibrationEffect.createWaveform(new long[]{0, 90, 60, 180}, -1));
+                            vib.vibrate(VibrationEffect.createWaveform(
+                                    new long[]{0, duracionBase / 2, 55, duracionBase},
+                                    new int[]{0, amp, 0, amp}, -1));
                         } else {
-                            vib.vibrate(VibrationEffect.createOneShot(130, VibrationEffect.DEFAULT_AMPLITUDE));
+                            vib.vibrate(VibrationEffect.createOneShot(duracionBase, amp));
                         }
                     } else {
-                        vib.vibrate(esCompraExitosa ? 260 : 130);
+                        vib.vibrate(duracionBase);
                     }
                 }
             } catch (Exception ignored) {}
@@ -1764,79 +1910,76 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * Dibujo de vista previa para "Barra Glass" en el panel de Apariencia:
-     * Muestra las letras/líneas de fondo difuminadas detrás de una cápsula de cristal estilo iPhone.
+     * Dibujo miniatura de vista previa estilo iOS Glass (con manchas de color difuminadas
+     * detrás del cristal esmerilado y borde especular luminoso).
      */
     private Bitmap crearImagenPreviewBarraGlass(boolean activa) {
-        int w = dp(76);
+        int w = dp(78);
         int h = dp(52);
         Bitmap bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
         Canvas c = new Canvas(bmp);
         Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
 
         p.setStyle(Paint.Style.FILL);
-        p.setColor(Color.parseColor(temaActual == 1 ? "#0A1936" : "#12141C"));
-        c.drawRoundRect(new RectF(0, 0, w, h), dp(10), dp(10), p);
+        p.setColor(Color.parseColor("#0D1017"));
+        c.drawRoundRect(new RectF(0, 0, w, h), dp(12), dp(12), p);
 
-        // Líneas de texto y tarjetas simuladas pasando por detrás de la barra
-        p.setColor(Color.parseColor("#38BDF8"));
-        p.setAlpha(150);
-        c.drawRoundRect(new RectF(dp(10), dp(8), w - dp(18), dp(13)), dp(2), dp(2), p);
-        p.setColor(Color.parseColor("#4ADE80"));
-        p.setAlpha(140);
-        c.drawRoundRect(new RectF(dp(14), dp(17), w - dp(12), dp(22)), dp(2), dp(2), p);
-        p.setColor(Color.parseColor("#A1A1AA"));
-        p.setAlpha(110);
-        c.drawRoundRect(new RectF(dp(8), dp(26), w - dp(20), dp(31)), dp(2), dp(2), p);
-        p.setAlpha(255);
+        // Esferas de color suaves detrás del cristal (como en la foto de iOS)
+        RadialGradient gRojo = new RadialGradient(w * 0.35f, h * 0.62f, dp(22),
+                new int[]{Color.parseColor("#CCEF4444"), Color.TRANSPARENT}, null, Shader.TileMode.CLAMP);
+        p.setShader(gRojo);
+        c.drawCircle(w * 0.35f, h * 0.62f, dp(22), p);
 
-        // Cápsula inferior con efecto Glass translúcido + brillo de cristal
-        RectF rBar = new RectF(dp(6), dp(20), w - dp(6), h - dp(6));
-        LinearGradient glassGrad = new LinearGradient(
-                0, rBar.top, 0, rBar.bottom,
-                new int[]{Color.parseColor("#88FFFFFF"), Color.parseColor("#3394A3B8")},
-                null, Shader.TileMode.CLAMP
-        );
-        p.setShader(glassGrad);
-        c.drawRoundRect(rBar, dp(12), dp(12), p);
+        RadialGradient gAzul = new RadialGradient(w * 0.68f, h * 0.45f, dp(20),
+                new int[]{Color.parseColor("#CC38BDF8"), Color.TRANSPARENT}, null, Shader.TileMode.CLAMP);
+        p.setShader(gAzul);
+        c.drawCircle(w * 0.68f, h * 0.45f, dp(20), p);
         p.setShader(null);
 
-        // Cápsula activa dentro de la barra glass + 4 iconos
-        p.setColor(Color.parseColor("#5538BDF8"));
-        c.drawRoundRect(new RectF(dp(9), dp(23), dp(25), h - dp(9)), dp(8), dp(8), p);
+        RectF rBar = new RectF(dp(6), dp(16), w - dp(6), h - dp(6));
+        LinearGradient frostGrad = new LinearGradient(
+                0, rBar.top, 0, rBar.bottom,
+                new int[]{Color.parseColor("#90FFFFFF"), Color.parseColor("#45CBD5E1")},
+                null, Shader.TileMode.CLAMP
+        );
+        p.setShader(frostGrad);
+        c.drawRoundRect(rBar, dp(14), dp(14), p);
+        p.setShader(null);
 
-        float[] posX = {dp(17), dp(31), dp(45), dp(59)};
+        p.setColor(Color.parseColor("#66FFFFFF"));
+        c.drawRoundRect(new RectF(dp(9), dp(19), dp(26), h - dp(9)), dp(10), dp(10), p);
+
+        float[] posX = {dp(17.5f), dp(32), dp(46), dp(60)};
         for (int i = 0; i < 4; i++) {
-            p.setColor(i == 0 ? Color.WHITE : Color.parseColor("#E2E8F0"));
-            p.setAlpha(i == 0 ? 255 : 185);
+            p.setColor(i == 0 ? Color.WHITE : Color.parseColor("#F1F5F9"));
+            p.setAlpha(i == 0 ? 255 : 190);
             c.drawCircle(posX[i], rBar.centerY(), dp(3), p);
         }
         p.setAlpha(255);
 
-        // Borde brillante de cristal
         p.setStyle(Paint.Style.STROKE);
         p.setStrokeWidth(dp(1));
-        p.setColor(Color.parseColor(activa ? "#38BDF8" : "#99FFFFFF"));
-        c.drawRoundRect(rBar, dp(12), dp(12), p);
+        p.setColor(Color.parseColor(activa ? "#FFFFFF" : "#AAFFFFFF"));
+        c.drawRoundRect(rBar, dp(14), dp(14), p);
 
         return bmp;
     }
 
     /**
-     * Difumina en tiempo real las letras y tarjetas que están justo detrás de la barra flotante
-     * cuando "Barra Glass" está activada (efecto translúcido tipo iPhone).
+     * Motor de desenfoque esmerilado profundo tipo iOS (Frosted Glass):
+     * Captura lo que pasa por detrás de la barra, aplica desenfoque de radio amplio,
+     * mezcla una capa lechosa translúcida y dibuja el reflejo especular en el borde.
      */
     private void actualizarEfectoBlurBarraGlass() {
         if (!barraGlassActiva || imgFondoBlurGlass == null || contenedorBarraFlotante == null || mainVertical == null) {
-            if (imgFondoBlurGlass != null) {
-                imgFondoBlurGlass.setVisibility(View.GONE);
-            }
+            if (imgFondoBlurGlass != null) imgFondoBlurGlass.setVisibility(View.GONE);
+            if (vistaBrilloEspecularGlass != null) vistaBrilloEspecularGlass.setVisibility(View.GONE);
             return;
         }
-        if (contenedorBarraFlotante.getVisibility() != View.VISIBLE || barraInferiorOcultaPorScroll) return;
+        if (contenedorBarraFlotante.getVisibility() != View.VISIBLE || traduccionBarraY >= dp(70)) return;
 
         long ahora = System.currentTimeMillis();
-        if (ahora - ultimoRenderGlassMs < 90) return;
+        if (ahora - ultimoRenderGlassMs < 65) return;
         ultimoRenderGlassMs = ahora;
 
         int barW = contenedorBarraFlotante.getWidth();
@@ -1844,23 +1987,33 @@ public class MainActivity extends Activity {
         if (barW <= 0 || barH <= 0) return;
 
         try {
-            int scale = 6;
-            int wSmall = Math.max(16, barW / scale);
-            int hSmall = Math.max(8, barH / scale);
+            int scale = 8; // Mayor factor de reducción para lograr el difuminado cremoso de iPhone
+            int wSmall = Math.max(18, barW / scale);
+            int hSmall = Math.max(10, barH / scale);
 
             Bitmap bmpSmall = Bitmap.createBitmap(wSmall, hSmall, Bitmap.Config.ARGB_8888);
             Canvas cSmall = new Canvas(bmpSmall);
             cSmall.scale(1f / scale, 1f / scale);
-            cSmall.translate(-contenedorBarraFlotante.getLeft(), -contenedorBarraFlotante.getTop());
+            float realTop = contenedorBarraFlotante.getTop() + traduccionBarraY;
+            cSmall.translate(-contenedorBarraFlotante.getLeft(), -realTop);
             mainVertical.draw(cSmall);
 
-            Bitmap blurred = desenfocarBitmapRapido(bmpSmall, 3);
-            Canvas cTint = new Canvas(blurred);
-            cTint.drawColor(Color.parseColor(temaActual == 2 ? "#77FFFFFF" : "#6612151E"));
+            Bitmap blurred = desenfocarBitmapRapido(bmpSmall, 5);
+            Canvas cFrost = new Canvas(blurred);
+            // Capa esmerilada estilo iOS (lechosa suave que deja pasar los tonos de luz de atrás)
+            cFrost.drawColor(Color.parseColor(temaActual == 2 ? "#88F8FAFC" : "#68242936"));
+            Paint pSheen = new Paint(Paint.ANTI_ALIAS_FLAG);
+            pSheen.setShader(new LinearGradient(0, 0, wSmall, hSmall,
+                    new int[]{Color.parseColor("#42FFFFFF"), Color.parseColor("#12FFFFFF"), Color.parseColor("#28FFFFFF")},
+                    new float[]{0f, 0.5f, 1f}, Shader.TileMode.CLAMP));
+            cFrost.drawRect(0, 0, wSmall, hSmall, pSheen);
 
-            Bitmap finalGlass = crearBitmapRedondeado(blurred, barW, barH, dp(22));
+            Bitmap finalGlass = crearBitmapRedondeado(blurred, barW, barH, dp(24));
             imgFondoBlurGlass.setVisibility(View.VISIBLE);
             imgFondoBlurGlass.setImageBitmap(finalGlass);
+            if (vistaBrilloEspecularGlass != null) {
+                vistaBrilloEspecularGlass.setVisibility(View.VISIBLE);
+            }
         } catch (Throwable ignored) {}
     }
 
@@ -1875,7 +2028,7 @@ public class MainActivity extends Activity {
             for (int y = 0; y < h; y++) {
                 for (int x = 0; x < w; x++) {
                     int r = 0, g = 0, b = 0, count = 0;
-                    for (int dx = -2; dx <= 2; dx++) {
+                    for (int dx = -3; dx <= 3; dx++) {
                         int nx = Math.min(w - 1, Math.max(0, x + dx));
                         int c = pix[y * w + nx];
                         r += (c >> 16) & 0xFF;
@@ -1889,7 +2042,7 @@ public class MainActivity extends Activity {
             for (int y = 0; y < h; y++) {
                 for (int x = 0; x < w; x++) {
                     int r = 0, g = 0, b = 0, count = 0;
-                    for (int dy = -2; dy <= 2; dy++) {
+                    for (int dy = -3; dy <= 3; dy++) {
                         int ny = Math.min(h - 1, Math.max(0, y + dy));
                         int c = tmp[ny * w + x];
                         r += (c >> 16) & 0xFF;
@@ -1919,49 +2072,68 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * Oculta suavemente la barra inferior cuando deslizas con el dedo hacia abajo para bajar en el bot,
-     * y la vuelve a mostrar de inmediato cuando subes con el dedo.
+     * Ocultado progresivo al bajar con el dedo y reaparición inmediata al subir:
+     * Funciona tanto con la Barra Glass activada como desactivada.
      */
-    private void cambiarVisibilidadBarraPorScroll(boolean ocultar) {
-        if (contenedorBarraFlotante == null || loginClienteOverlay.getVisibility() == View.VISIBLE) return;
-        if (barraInferiorOcultaPorScroll == ocultar) return;
-        barraInferiorOcultaPorScroll = ocultar;
-
-        contenedorBarraFlotante.animate().cancel();
-        if (ocultar) {
-            contenedorBarraFlotante.animate()
-                    .translationY(dp(75))
-                    .alpha(0f)
-                    .setDuration(210)
-                    .start();
-        } else {
-            contenedorBarraFlotante.animate()
-                    .translationY(0f)
-                    .alpha(1f)
-                    .setDuration(210)
-                    .withEndAction(this::actualizarEfectoBlurBarraGlass)
-                    .start();
-        }
-    }
-
     private void conectarAutoOcultadoBarraEnScroll(final ScrollView sv) {
         if (sv == null) return;
         sv.getViewTreeObserver().addOnScrollChangedListener(() -> {
+            if (contenedorBarraFlotante == null || loginClienteOverlay.getVisibility() == View.VISIBLE) return;
             Object tagObj = sv.getTag();
-            int oldY = (tagObj instanceof Integer) ? (Integer) tagObj : 0;
+            int oldY = (tagObj instanceof Integer) ? (Integer) tagObj : sv.getScrollY();
             int newY = sv.getScrollY();
             int dy = newY - oldY;
             sv.setTag(newY);
 
-            if (dy > dp(7) && newY > dp(25)) {
-                cambiarVisibilidadBarraPorScroll(true);
-            } else if (dy < -dp(6) || newY <= dp(10)) {
-                cambiarVisibilidadBarraPorScroll(false);
+            if (Math.abs(dy) > dp(120)) return; // Ignora saltos bruscos de layout
+
+            float maxHidePx = dp(76);
+            if (newY <= dp(12)) {
+                acumuladorBajandoScroll = 0f;
+                aplicarTraduccionProgresivaBarra(0f);
+            } else if (dy > 0) {
+                acumuladorBajandoScroll += dy;
+                // Espera un pequeño margen de 20dp antes de empezar a ocultarla poco a poco
+                if (acumuladorBajandoScroll > dp(20)) {
+                    float nuevaT = Math.min(maxHidePx, traduccionBarraY + (dy * 0.85f));
+                    aplicarTraduccionProgresivaBarra(nuevaT);
+                }
+            } else if (dy < 0) {
+                acumuladorBajandoScroll = 0f;
+                float nuevaT = Math.max(0f, traduccionBarraY + (dy * 1.35f));
+                aplicarTraduccionProgresivaBarra(nuevaT);
             }
-            if (barraGlassActiva && !barraInferiorOcultaPorScroll) {
+
+            if (barraGlassActiva && traduccionBarraY < maxHidePx) {
                 actualizarEfectoBlurBarraGlass();
             }
         });
+    }
+
+    private void aplicarTraduccionProgresivaBarra(float nuevaTraduccionY) {
+        if (contenedorBarraFlotante == null) return;
+        traduccionBarraY = nuevaTraduccionY;
+        float maxHidePx = dp(76);
+        float progresoOculto = Math.min(1f, Math.max(0f, traduccionBarraY / maxHidePx));
+        contenedorBarraFlotante.setTranslationY(traduccionBarraY);
+        contenedorBarraFlotante.setAlpha(1f - (progresoOculto * 0.95f));
+    }
+
+    private ScrollView obtenerVistaPestana(int idx) {
+        switch (idx) {
+            case 0: return vistaCuentasScroll;
+            case 1: return vistaHistorialScroll;
+            case 2: return vistaAjustesScroll;
+            case 3: return vistaPerfilScroll;
+            default: return null;
+        }
+    }
+
+    private void actualizarPosicionIndicadorBarra(float posicionContinua) {
+        if (indicadorDeslizanteBarra == null) return;
+        float clamped = Math.max(0f, Math.min(3f, posicionContinua));
+        float pasoPx = dp(71); // 68dp de botón + 3dp de separación
+        indicadorDeslizanteBarra.setTranslationX(clamped * pasoPx);
     }
 
     private Drawable crearCirculoNeon(boolean encendido, boolean faseBrillante, int sizeDp) {
@@ -2229,7 +2401,7 @@ public class MainActivity extends Activity {
     }
 
     // =========================================================================================
-    // CONSTRUCCIÓN DE LA INTERFAZ COMPLETA (BARRA GLASS + AUTO-HIDE SCROLL + CONFIG AVANZADA)
+    // CONSTRUCCIÓN DE LA INTERFAZ CON GESTOS SWIPE ENTRE PESTAÑAS Y BARRA GLASS iOS
     // =========================================================================================
     @SuppressLint({"SetJavaScriptEnabled", "ClickableViewAccessibility"})
     private void construirInterfazCompleta() {
@@ -2292,6 +2464,136 @@ public class MainActivity extends Activity {
         badgeEstadoGlobal.setBackground(fondoRedondeado("#450A0A", 12));
         topBar.addView(badgeEstadoGlobal);
         mainVertical.addView(topBar);
+
+        // Contenedor de páginas con soporte de arrastre horizontal en vivo (Swipe izquierda/derecha)
+        final int touchSlop = ViewConfiguration.get(this).getScaledTouchSlop();
+        contenedorPaginasSwipe = new FrameLayout(this) {
+            @Override
+            public boolean onInterceptTouchEvent(MotionEvent ev) {
+                int action = ev.getActionMasked();
+                if (action == MotionEvent.ACTION_DOWN) {
+                    touchStartX = ev.getRawX();
+                    touchStartY = ev.getRawY();
+                    deslizandoPestanaHorizontal = false;
+                    gestoDescartado = false;
+                    pestanaVecinaSwipe = -1;
+                    if (velocityTrackerSwipe == null) velocityTrackerSwipe = VelocityTracker.obtain();
+                    else velocityTrackerSwipe.clear();
+                    velocityTrackerSwipe.addMovement(ev);
+                } else if (action == MotionEvent.ACTION_MOVE && !gestoDescartado) {
+                    float dx = ev.getRawX() - touchStartX;
+                    float dy = ev.getRawY() - touchStartY;
+                    if (Math.abs(dy) > touchSlop && Math.abs(dy) > Math.abs(dx)) {
+                        gestoDescartado = true;
+                        return false;
+                    }
+                    if (Math.abs(dx) > touchSlop * 1.4f && Math.abs(dx) > Math.abs(dy) * 1.35f) {
+                        deslizandoPestanaHorizontal = true;
+                        return true;
+                    }
+                }
+                return super.onInterceptTouchEvent(ev);
+            }
+
+            @Override
+            public boolean onTouchEvent(MotionEvent ev) {
+                if (velocityTrackerSwipe == null) velocityTrackerSwipe = VelocityTracker.obtain();
+                velocityTrackerSwipe.addMovement(ev);
+                int action = ev.getActionMasked();
+                int w = Math.max(1, getWidth());
+                float dx = ev.getRawX() - touchStartX;
+
+                if (action == MotionEvent.ACTION_MOVE) {
+                    if ((pestanaInferiorActual == 0 && dx > 0) || (pestanaInferiorActual == 3 && dx < 0)) {
+                        dx = dx * 0.25f;
+                    }
+                    int nuevoVecino = (dx < 0) ? (pestanaInferiorActual + 1) : (dx > 0 ? (pestanaInferiorActual - 1) : -1);
+                    if (nuevoVecino < 0 || nuevoVecino > 3) nuevoVecino = -1;
+
+                    if (pestanaVecinaSwipe != nuevoVecino) {
+                        ScrollView viejoVec = obtenerVistaPestana(pestanaVecinaSwipe);
+                        if (viejoVec != null && pestanaVecinaSwipe != pestanaInferiorActual) {
+                            viejoVec.setVisibility(View.GONE);
+                            viejoVec.setTranslationX(0f);
+                        }
+                        pestanaVecinaSwipe = nuevoVecino;
+                        ScrollView actVec = obtenerVistaPestana(pestanaVecinaSwipe);
+                        if (actVec != null) {
+                            actVec.setVisibility(View.VISIBLE);
+                            if (pestanaVecinaSwipe == 1) {
+                                reconstruirFiltrosHistorial();
+                                refrescarVistaHistorial();
+                                reconstruirListaComprasExitosas();
+                            } else if (pestanaVecinaSwipe == 3) {
+                                refrescarDatosVistaPerfil();
+                            }
+                        }
+                    }
+
+                    ScrollView vistaActual = obtenerVistaPestana(pestanaInferiorActual);
+                    if (vistaActual != null) vistaActual.setTranslationX(dx);
+
+                    ScrollView vistaVecina = obtenerVistaPestana(pestanaVecinaSwipe);
+                    if (vistaVecina != null) {
+                        float offsetBase = (pestanaVecinaSwipe > pestanaInferiorActual) ? w : -w;
+                        vistaVecina.setTranslationX(offsetBase + dx);
+                    }
+
+                    actualizarPosicionIndicadorBarra(pestanaInferiorActual - (dx / (float) w));
+                    if (barraGlassActiva) actualizarEfectoBlurBarraGlass();
+                    return true;
+                } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                    velocityTrackerSwipe.computeCurrentVelocity(1000);
+                    float vx = velocityTrackerSwipe.getXVelocity();
+                    boolean cambiar = false;
+                    int destino = pestanaInferiorActual;
+
+                    if (pestanaVecinaSwipe >= 0 && pestanaVecinaSwipe <= 3) {
+                        if (Math.abs(dx) > w * 0.32f || Math.abs(vx) > 950f) {
+                            if ((dx < 0 && vx <= 200f && pestanaVecinaSwipe > pestanaInferiorActual)
+                                    || (dx > 0 && vx >= -200f && pestanaVecinaSwipe < pestanaInferiorActual)) {
+                                cambiar = true;
+                                destino = pestanaVecinaSwipe;
+                            }
+                        }
+                    }
+
+                    final ScrollView vAct = obtenerVistaPestana(pestanaInferiorActual);
+                    final ScrollView vVec = obtenerVistaPestana(pestanaVecinaSwipe);
+                    final int destFinal = destino;
+                    final boolean cambiarFinal = cambiar;
+                    float finActX = cambiarFinal ? ((destFinal > pestanaInferiorActual) ? -w : w) : 0f;
+                    float finVecX = cambiarFinal ? 0f : ((pestanaVecinaSwipe > pestanaInferiorActual) ? w : -w);
+
+                    if (vAct != null) {
+                        vAct.animate().translationX(finActX).setDuration(210)
+                                .setInterpolator(new DecelerateInterpolator()).start();
+                    }
+                    if (vVec != null) {
+                        vVec.animate().translationX(finVecX).setDuration(210)
+                                .setInterpolator(new DecelerateInterpolator())
+                                .withEndAction(() -> {
+                                    if (vAct != null) vAct.setTranslationX(0f);
+                                    if (vVec != null) vVec.setTranslationX(0f);
+                                    cambiarPestanaInferior(destFinal);
+                                }).start();
+                    } else {
+                        cambiarPestanaInferior(destFinal);
+                    }
+                    if (indicadorDeslizanteBarra != null) {
+                        indicadorDeslizanteBarra.animate()
+                                .translationX(destFinal * dp(71))
+                                .setDuration(210)
+                                .setInterpolator(new DecelerateInterpolator())
+                                .start();
+                    }
+                    deslizandoPestanaHorizontal = false;
+                    pestanaVecinaSwipe = -1;
+                    return true;
+                }
+                return super.onTouchEvent(ev);
+            }
+        };
 
         vistaCuentasScroll = new ScrollView(this);
         vistaCuentasScroll.setFillViewport(true);
@@ -2423,8 +2725,8 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         vistaCuentasScroll.addView(contenidoScrollCuentas);
-        mainVertical.addView(vistaCuentasScroll, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        contenedorPaginasSwipe.addView(vistaCuentasScroll, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         vistaHistorialScroll = new ScrollView(this);
         vistaHistorialScroll.setFillViewport(true);
@@ -2517,11 +2819,10 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         vistaHistorialScroll.addView(vistaHistorialContainer);
-        mainVertical.addView(vistaHistorialScroll, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        contenedorPaginasSwipe.addView(vistaHistorialScroll, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        // 4. VISTA 3: "AJUSTES" + DIBUJO DE BARRA GLASS EN APARIENCIA + CONFIGURACIÓN AVANZADA OSCURA
-        vistaAjustesScroll = new ScrollView(this);
+            vistaAjustesScroll = new ScrollView(this);
         vistaAjustesScroll.setFillViewport(true);
         vistaAjustesScroll.setVerticalScrollBarEnabled(false);
         vistaAjustesScroll.setVisibility(View.GONE);
@@ -2600,7 +2901,6 @@ public class MainActivity extends Activity {
         filaTarjetasTema.addView(cardPrevClaro, lpPrevCard);
         cardTemaAjustes.addView(filaTarjetasTema);
 
-        // Recuadro con dibujito de vista previa de "Barra Glass" abajo de los cartelitos de Apariencia
         panelBarraGlass = new LinearLayout(this);
         panelBarraGlass.setOrientation(LinearLayout.HORIZONTAL);
         panelBarraGlass.setGravity(Gravity.CENTER_VERTICAL);
@@ -2759,28 +3059,53 @@ public class MainActivity extends Activity {
         panelItemCompra.addView(btnToggleCompra, new LinearLayout.LayoutParams(dp(96), dp(34)));
         cardAlertasAjustes.addView(panelItemCompra, lpSubPanel);
 
+        // Panel de Vibración del Dispositivo con Barrita Corta regulable (0% a 100%)
         panelItemVib = new LinearLayout(this);
-        panelItemVib.setOrientation(LinearLayout.HORIZONTAL);
-        panelItemVib.setGravity(Gravity.CENTER_VERTICAL);
+        panelItemVib.setOrientation(LinearLayout.VERTICAL);
         panelItemVib.setPadding(dp(14), dp(12), dp(12), dp(12));
+        panelItemVib.setBackground(fondoRedondeadoConBorde("#202227", "#27272A", 14, 1));
+
+        LinearLayout filaTopVib = new LinearLayout(this);
+        filaTopVib.setOrientation(LinearLayout.HORIZONTAL);
+        filaTopVib.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout colTxtVib = new LinearLayout(this);
         colTxtVib.setOrientation(LinearLayout.VERTICAL);
         lblItemVib = crearTexto("Vibración del Dispositivo", "#F4F4F5", 13.5f, true);
-        lblDescItemVib = crearTexto("Vibración breve junto a los avisos de Ordinaria y compra.", "#A1A1AA", 10.5f, false);
+        lblDescItemVib = crearTexto("Intensidad del motor háptico para avisos y compras.", "#A1A1AA", 10.5f, false);
         lblDescItemVib.setPadding(0, dp(2), dp(8), 0);
         colTxtVib.addView(lblItemVib);
         colTxtVib.addView(lblDescItemVib);
-        btnToggleVib = crearBoton("", "#14532D", "#4ADE80", 10, () -> {
-            vibracionActiva = !vibracionActiva;
-            prefs.edit().putBoolean("vibracion_app", vibracionActiva).apply();
-            actualizarBotonesAjustes();
-            if (vibracionActiva) vibrarDispositivo(false);
+
+        lblNivelVibValor = crearTexto(textoNivelVibracion(intensidadVibracion), "#38BDF8", 11.5f, true);
+        lblNivelVibValor.setGravity(Gravity.END);
+        filaTopVib.addView(colTxtVib, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        filaTopVib.addView(lblNivelVibValor);
+        panelItemVib.addView(filaTopVib);
+
+        seekBarVibracion = new SeekBar(this);
+        seekBarVibracion.setMax(100);
+        seekBarVibracion.setProgress(intensidadVibracion);
+        LinearLayout.LayoutParams lpSeekVib = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lpSeekVib.setMargins(0, dp(8), 0, 0);
+        seekBarVibracion.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                intensidadVibracion = progress;
+                prefs.edit().putInt("intensidad_vibracion_v1", intensidadVibracion).apply();
+                if (lblNivelVibValor != null) {
+                    lblNivelVibValor.setText(textoNivelVibracion(intensidadVibracion));
+                }
+            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+            @Override public void onStopTrackingTouch(SeekBar seekBar) {
+                if (intensidadVibracion > 0) vibrarDispositivo(false);
+            }
         });
-        panelItemVib.addView(colTxtVib, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        panelItemVib.addView(btnToggleVib, new LinearLayout.LayoutParams(dp(96), dp(34)));
+        panelItemVib.addView(seekBarVibracion, lpSeekVib);
         cardAlertasAjustes.addView(panelItemVib, lpSubPanel);
 
-        // Botón desplegable "Configuración avanzada" en Modo Oscuro como el resto del programa
+        // Botón desplegable "Configuración avanzada" en modo oscuro
         btnTextoConfigAvanzada = crearTexto("▼ Configuración avanzada", "#E4E4E7", 12.5f, true);
         btnTextoConfigAvanzada.setGravity(Gravity.CENTER);
         btnTextoConfigAvanzada.setPadding(dp(12), dp(10), dp(12), dp(10));
@@ -2860,7 +3185,29 @@ public class MainActivity extends Activity {
         btnToggleAdvIntervencion = crearBoton("", "#450A0A", "#FCA5A5", 10, () -> intentarCambiarModoAvanzadoProxy(MODO_PROXY_EN_INTERVENCION));
         panelAdvIntervencion.addView(colAdvInt, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         panelAdvIntervencion.addView(btnToggleAdvIntervencion, new LinearLayout.LayoutParams(dp(96), dp(34)));
-        contenedorConfigAvanzada.addView(panelAdvIntervencion);
+        contenedorConfigAvanzada.addView(panelAdvIntervencion, lpSubPanel);
+
+        // Recuadro nuevo: Proxy personalizado por cuenta (Abre panel por cuenta)
+        panelAdvPorCuenta = new LinearLayout(this);
+        panelAdvPorCuenta.setOrientation(LinearLayout.HORIZONTAL);
+        panelAdvPorCuenta.setGravity(Gravity.CENTER_VERTICAL);
+        panelAdvPorCuenta.setPadding(dp(14), dp(12), dp(12), dp(12));
+        LinearLayout colAdvCta = new LinearLayout(this);
+        colAdvCta.setOrientation(LinearLayout.VERTICAL);
+        lblAdvPorCuenta = crearTexto("Proxy personalizado por cuenta", "#F4F4F5", 13f, true);
+        lblDescAdvPorCuenta = crearTexto("Configura un modo de proxy independiente para cada cuenta registrada.", "#A1A1AA", 10.5f, false);
+        lblDescAdvPorCuenta.setPadding(0, dp(2), dp(8), 0);
+        colAdvCta.addView(lblAdvPorCuenta);
+        colAdvCta.addView(lblDescAdvPorCuenta);
+        btnToggleAdvPorCuenta = crearBoton("", "#450A0A", "#FCA5A5", 10, () -> {
+            intentarCambiarModoAvanzadoProxy(MODO_PROXY_PERSONALIZADO_CUENTA);
+            if (modoAvanzadoProxy == MODO_PROXY_PERSONALIZADO_CUENTA) {
+                mostrarPopupConfiguracionProxyPorCuenta();
+            }
+        });
+        panelAdvPorCuenta.addView(colAdvCta, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        panelAdvPorCuenta.addView(btnToggleAdvPorCuenta, new LinearLayout.LayoutParams(dp(96), dp(34)));
+        contenedorConfigAvanzada.addView(panelAdvPorCuenta);
 
         cardAlertasAjustes.addView(contenedorConfigAvanzada);
         contenidoAjustes.addView(cardAlertasAjustes, lpCardAj);
@@ -2868,7 +3215,6 @@ public class MainActivity extends Activity {
         mainVertical.addView(vistaAjustesScroll, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        // 5. VISTA 4: PESTAÑA "PERFIL"
         vistaPerfilScroll = new ScrollView(this);
         vistaPerfilScroll.setFillViewport(true);
         vistaPerfilScroll.setVerticalScrollBarEnabled(false);
@@ -2987,7 +3333,7 @@ public class MainActivity extends Activity {
 
         frameRoot.addView(mainVertical);
 
-        // 6. BARRA FLOTANTE INFERIOR CON EFECTO GLASS IPHONE Y OCULTADO AL BAJAR CON EL DEDO
+        // Barra flotante con soporte de Efecto Glass iPhone iOS Real
         contenedorBarraFlotante = new FrameLayout(this);
         contenedorBarraFlotante.setVisibility(View.GONE);
         contenedorBarraFlotante.setLayerType(View.LAYER_TYPE_HARDWARE, null);
@@ -2998,11 +3344,22 @@ public class MainActivity extends Activity {
         contenedorBarraFlotante.addView(imgFondoBlurGlass, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
+        vistaBrilloEspecularGlass = new View(this);
+        vistaBrilloEspecularGlass.setVisibility(View.GONE);
+        contenedorBarraFlotante.addView(vistaBrilloEspecularGlass, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(1.5f)));
+
         barraFlotante = new LinearLayout(this);
         barraFlotante.setOrientation(LinearLayout.HORIZONTAL);
         barraFlotante.setGravity(Gravity.CENTER);
         barraFlotante.setPadding(dp(4), dp(3), dp(4), dp(3));
         barraFlotante.setBackground(fondoRedondeadoConBorde("#18181B", "#2E323B", 22, 1));
+
+        indicadorDeslizanteBarra = new View(this);
+        FrameLayout.LayoutParams lpInd = new FrameLayout.LayoutParams(dp(68), dp(36));
+        lpInd.gravity = Gravity.CENTER_VERTICAL;
+        indicadorDeslizanteBarra.setLayoutParams(lpInd);
+        contenedorBarraFlotante.addView(indicadorDeslizanteBarra);
 
         navBtnCuentas = new LinearLayout(this);
         navBtnCuentas.setOrientation(LinearLayout.VERTICAL);
@@ -3133,6 +3490,11 @@ public class MainActivity extends Activity {
         }, 2000);
     }
 
+    /**
+     * Regla exclusiva para los 5 botones de Configuración avanzada:
+     * Solo permite tener 1 opción activa a la vez. Si activas "Proxy personalizado por cuenta",
+     * abre el panel oscuro con las cuentas registradas.
+     */
     private void intentarCambiarModoAvanzadoProxy(int modoClickeado) {
         if (modoAvanzadoProxy == modoClickeado) {
             modoAvanzadoProxy = MODO_PROXY_NINGUNO;
@@ -3149,7 +3511,7 @@ public class MainActivity extends Activity {
         if (modoAvanzadoProxy != MODO_PROXY_NINGUNO) {
             new AlertDialog.Builder(this)
                     .setTitle("Opción en uso")
-                    .setMessage("Solo puedes tener una opción activa a la vez en Configuración avanzada.\n\nDesactiva primero la opción que tienes activa actualmente para poder activar esta.")
+                    .setMessage("Solo puedes activar una opción a la vez en Configuración avanzada.\n\nDesactiva primero la opción activa para seleccionar otra.")
                     .setPositiveButton("Aceptar", null)
                     .show();
             return;
@@ -3159,7 +3521,7 @@ public class MainActivity extends Activity {
         prefs.edit().putInt("modo_avanzado_proxy_v1", modoAvanzadoProxy).apply();
         actualizarBotonesAjustes();
         for (SesionBot s : obtenerSesionesRegistradas()) {
-            if (modoAvanzadoProxy == MODO_PROXY_SIEMPRE_ACTIVO && proxyRotativoActivo) {
+            if (s.obtenerModoProxyEfectivo() == MODO_PROXY_SIEMPRE_ACTIVO && proxyRotativoActivo) {
                 s.proxyActivoEnEstaCuenta = true;
             } else {
                 s.proxyActivoEnEstaCuenta = false;
@@ -3167,6 +3529,139 @@ public class MainActivity extends Activity {
             cerrarSocketsDeSesion(s);
             actualizarVisualTarjeta(s);
         }
+    }
+
+    /**
+     * Panel en modo oscuro para "Proxy personalizado por cuenta":
+     * Muestra únicamente las cuentas registradas actualmente con un recuadro limpio por usuario
+     * para elegir su modo de proxy independiente.
+     */
+    private void mostrarPopupConfiguracionProxyPorCuenta() {
+        ArrayList<SesionBot> cuentasReg = obtenerSesionesRegistradas();
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        ScrollView scroll = new ScrollView(this);
+        scroll.setBackgroundColor(Color.parseColor("#18181B"));
+
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(16), dp(16), dp(16), dp(16));
+        root.setBackgroundColor(Color.parseColor("#18181B"));
+        scroll.addView(root);
+
+        TextView titulo = crearTexto("Proxy por cuenta", "#F4F4F5", 16f, true);
+        TextView sub = crearTexto("Elige cómo funcionará el proxy en cada cuenta activa.", "#A1A1AA", 11f, false);
+        sub.setPadding(0, dp(2), 0, dp(12));
+        root.addView(titulo);
+        root.addView(sub);
+
+        if (cuentasReg.isEmpty()) {
+            TextView vacio = crearTexto("No hay cuentas agregadas todavía.", "#A1A1AA", 12f, false);
+            vacio.setPadding(dp(12), dp(14), dp(12), dp(14));
+            vacio.setBackground(fondoRedondeadoConBorde("#202227", "#27272A", 10, 1));
+            root.addView(vacio);
+        } else {
+            final String[] nombresModos = {
+                    "Posición global",
+                    "Siempre activo",
+                    "En contraseña",
+                    "En intervención"
+            };
+            final int[] codigosModos = {
+                    MODO_PROXY_POSICION_GLOBAL,
+                    MODO_PROXY_SIEMPRE_ACTIVO,
+                    MODO_PROXY_EN_CONTRASENA,
+                    MODO_PROXY_EN_INTERVENCION
+            };
+
+            for (final SesionBot cta : cuentasReg) {
+                LinearLayout boxCta = new LinearLayout(this);
+                boxCta.setOrientation(LinearLayout.VERTICAL);
+                boxCta.setPadding(dp(12), dp(10), dp(12), dp(10));
+                boxCta.setBackground(fondoRedondeadoConBorde("#202227", "#2E323B", 12, 1));
+                LinearLayout.LayoutParams lpBox = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+                lpBox.setMargins(0, 0, 0, dp(10));
+
+                LinearLayout filaUser = new LinearLayout(this);
+                filaUser.setOrientation(LinearLayout.HORIZONTAL);
+                filaUser.setGravity(Gravity.CENTER_VERTICAL);
+
+                TextView tvUser = crearTexto(cta.usuario, "#F4F4F5", 13.5f, true);
+                final TextView tvModoAct = crearTexto(cta.nombreCortoModoIndividual(), "#4ADE80", 10.5f, true);
+                tvModoAct.setPadding(dp(8), dp(2), dp(8), dp(2));
+                tvModoAct.setBackground(fondoRedondeadoConBorde("#14532D", "#22C55E", 8, 1));
+
+                filaUser.addView(tvUser, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+                filaUser.addView(tvModoAct);
+                boxCta.addView(filaUser);
+
+                LinearLayout filaOpciones1 = new LinearLayout(this);
+                filaOpciones1.setOrientation(LinearLayout.HORIZONTAL);
+                filaOpciones1.setPadding(0, dp(8), 0, dp(4));
+
+                LinearLayout filaOpciones2 = new LinearLayout(this);
+                filaOpciones2.setOrientation(LinearLayout.HORIZONTAL);
+
+                final Button[] botonesCta = new Button[4];
+                for (int idx = 0; idx < 4; idx++) {
+                    final int modoVal = codigosModos[idx];
+                    final Button bModo = new Button(this);
+                    bModo.setText(nombresModos[idx]);
+                    bModo.setAllCaps(false);
+                    bModo.setTextSize(10.5f);
+                    bModo.setTypeface(null, Typeface.BOLD);
+                    bModo.setPadding(dp(6), 0, dp(6), 0);
+                    botonesCta[idx] = bModo;
+
+                    bModo.setOnClickListener(v -> {
+                        cta.modoProxyIndividual = modoVal;
+                        prefs.edit().putInt("modo_proxy_indiv_slot_" + cta.slotIndex, modoVal).apply();
+                        tvModoAct.setText(cta.nombreCortoModoIndividual());
+                        for (int k = 0; k < 4; k++) {
+                            boolean sel = (codigosModos[k] == cta.modoProxyIndividual);
+                            botonesCta[k].setTextColor(Color.parseColor(sel ? "#4ADE80" : "#A1A1AA"));
+                            botonesCta[k].setBackground(fondoRedondeadoConBorde(
+                                    sel ? "#14532D" : "#18181B",
+                                    sel ? "#22C55E" : "#2E323B", 8, 1));
+                        }
+                        if (cta.obtenerModoProxyEfectivo() == MODO_PROXY_SIEMPRE_ACTIVO && proxyRotativoActivo) {
+                            cta.proxyActivoEnEstaCuenta = true;
+                        } else if (!cta.estaCorriendo()) {
+                            cta.proxyActivoEnEstaCuenta = false;
+                        }
+                        cerrarSocketsDeSesion(cta);
+                        actualizarVisualTarjeta(cta);
+                    });
+
+                    boolean sel = (modoVal == cta.modoProxyIndividual);
+                    bModo.setTextColor(Color.parseColor(sel ? "#4ADE80" : "#A1A1AA"));
+                    bModo.setBackground(fondoRedondeadoConBorde(
+                            sel ? "#14532D" : "#18181B",
+                            sel ? "#22C55E" : "#2E323B", 8, 1));
+
+                    LinearLayout.LayoutParams lpBtnM = new LinearLayout.LayoutParams(0, dp(32), 1f);
+                    lpBtnM.setMargins(dp(2), 0, dp(2), 0);
+                    if (idx < 2) filaOpciones1.addView(bModo, lpBtnM);
+                    else filaOpciones2.addView(bModo, lpBtnM);
+                }
+
+                boxCta.addView(filaOpciones1);
+                boxCta.addView(filaOpciones2);
+                root.addView(boxCta, lpBox);
+            }
+        }
+
+        builder.setView(scroll);
+        final AlertDialog dialog = builder.create();
+
+        Button btnListo = crearBoton("Listo", "#27272A", "#F4F4F5", 12, dialog::dismiss);
+        LinearLayout.LayoutParams lpClose = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(38));
+        lpClose.setMargins(0, dp(4), 0, 0);
+        root.addView(btnListo, lpClose);
+
+        dialog.show();
     }
 
     private void cambiarTema(int nuevoTema) {
@@ -3213,7 +3708,36 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void asegurarJerarquiaPaginasSwipe() {
+        if (contenedorPaginasSwipe == null || mainVertical == null) return;
+        if (vistaAjustesScroll != null && vistaAjustesScroll.getParent() != contenedorPaginasSwipe) {
+            ViewGroup p = (ViewGroup) vistaAjustesScroll.getParent();
+            if (p != null) p.removeView(vistaAjustesScroll);
+            contenedorPaginasSwipe.addView(vistaAjustesScroll, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        }
+        if (vistaPerfilScroll != null && vistaPerfilScroll.getParent() != contenedorPaginasSwipe) {
+            ViewGroup p = (ViewGroup) vistaPerfilScroll.getParent();
+            if (p != null) p.removeView(vistaPerfilScroll);
+            contenedorPaginasSwipe.addView(vistaPerfilScroll, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        }
+        if (contenedorPaginasSwipe.getParent() == null) {
+            mainVertical.addView(contenedorPaginasSwipe, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        }
+        if (panelAdvPorCuenta != null) {
+            panelAdvPorCuenta.setOnClickListener(v -> {
+                if (modoAvanzadoProxy == MODO_PROXY_PERSONALIZADO_CUENTA) {
+                    mostrarPopupConfiguracionProxyPorCuenta();
+                }
+            });
+        }
+    }
+
     private void aplicarTemaVisual() {
+        asegurarJerarquiaPaginasSwipe();
+
         String bgApp = colFondoApp();
         String bgCard = colFondoTarjeta();
         String bgSub = colFondoSubPanel();
@@ -3287,6 +3811,8 @@ public class MainActivity extends Activity {
         if (lblDescAdvPass != null) lblDescAdvPass.setTextColor(Color.parseColor(txtSec));
         if (lblAdvIntervencion != null) lblAdvIntervencion.setTextColor(Color.parseColor(txtPri));
         if (lblDescAdvIntervencion != null) lblDescAdvIntervencion.setTextColor(Color.parseColor(txtSec));
+        if (lblAdvPorCuenta != null) lblAdvPorCuenta.setTextColor(Color.parseColor(txtPri));
+        if (lblDescAdvPorCuenta != null) lblDescAdvPorCuenta.setTextColor(Color.parseColor(txtSec));
 
         if (btnTextoConfigAvanzada != null) {
             btnTextoConfigAvanzada.setTextColor(Color.parseColor(txtPri));
@@ -3319,6 +3845,7 @@ public class MainActivity extends Activity {
         if (panelAdvSiempre != null) panelAdvSiempre.setBackground(fondoRedondeadoConBorde(bgSub, borderCard, 14, 1));
         if (panelAdvPass != null) panelAdvPass.setBackground(fondoRedondeadoConBorde(bgSub, borderCard, 14, 1));
         if (panelAdvIntervencion != null) panelAdvIntervencion.setBackground(fondoRedondeadoConBorde(bgSub, borderCard, 14, 1));
+        if (panelAdvPorCuenta != null) panelAdvPorCuenta.setBackground(fondoRedondeadoConBorde(bgSub, borderCard, 14, 1));
 
         if (scrollHistorialConsola != null) {
             scrollHistorialConsola.setBackground(fondoRedondeadoConBorde(colFondoConsola(), borderCard, 12, 1));
@@ -3391,12 +3918,12 @@ public class MainActivity extends Activity {
         configurarBotonInterruptor(btnToggleProxy, proxyRotativoActivo);
         configurarBotonInterruptor(btnToggleOrd, alertaOrdinariaActiva);
         configurarBotonInterruptor(btnToggleCompra, alertaCompraActiva);
-        configurarBotonInterruptor(btnToggleVib, vibracionActiva);
 
         configurarBotonInterruptor(btnToggleAdvPosGlobal, modoAvanzadoProxy == MODO_PROXY_POSICION_GLOBAL);
         configurarBotonInterruptor(btnToggleAdvSiempre, modoAvanzadoProxy == MODO_PROXY_SIEMPRE_ACTIVO);
         configurarBotonInterruptor(btnToggleAdvPass, modoAvanzadoProxy == MODO_PROXY_EN_CONTRASENA);
         configurarBotonInterruptor(btnToggleAdvIntervencion, modoAvanzadoProxy == MODO_PROXY_EN_INTERVENCION);
+        configurarBotonInterruptor(btnToggleAdvPorCuenta, modoAvanzadoProxy == MODO_PROXY_PERSONALIZADO_CUENTA);
     }
 
     private void configurarBotonInterruptor(Button b, boolean activo) {
@@ -3433,26 +3960,40 @@ public class MainActivity extends Activity {
     }
 
     private void cambiarPestanaInferior(int nuevaPestana) {
-        pestanaInferiorActual = nuevaPestana;
-        cambiarVisibilidadBarraPorScroll(false);
-        vistaCuentasScroll.setVisibility(nuevaPestana == 0 ? View.VISIBLE : View.GONE);
-        vistaHistorialScroll.setVisibility(nuevaPestana == 1 ? View.VISIBLE : View.GONE);
-        vistaAjustesScroll.setVisibility(nuevaPestana == 2 ? View.VISIBLE : View.GONE);
-        vistaPerfilScroll.setVisibility(nuevaPestana == 3 ? View.VISIBLE : View.GONE);
+        pestanaInferiorActual = Math.max(0, Math.min(3, nuevaPestana));
+        acumuladorBajandoScroll = 0f;
+        aplicarTraduccionProgresivaBarra(0f);
 
-        if (badgeEstadoGlobal != null) {
-            badgeEstadoGlobal.setVisibility(nuevaPestana == 0 ? View.VISIBLE : View.GONE);
+        if (vistaCuentasScroll != null) {
+            vistaCuentasScroll.setTranslationX(0f);
+            vistaCuentasScroll.setVisibility(pestanaInferiorActual == 0 ? View.VISIBLE : View.GONE);
+        }
+        if (vistaHistorialScroll != null) {
+            vistaHistorialScroll.setTranslationX(0f);
+            vistaHistorialScroll.setVisibility(pestanaInferiorActual == 1 ? View.VISIBLE : View.GONE);
+        }
+        if (vistaAjustesScroll != null) {
+            vistaAjustesScroll.setTranslationX(0f);
+            vistaAjustesScroll.setVisibility(pestanaInferiorActual == 2 ? View.VISIBLE : View.GONE);
+        }
+        if (vistaPerfilScroll != null) {
+            vistaPerfilScroll.setTranslationX(0f);
+            vistaPerfilScroll.setVisibility(pestanaInferiorActual == 3 ? View.VISIBLE : View.GONE);
         }
 
-        if (nuevaPestana == 1) {
+        if (badgeEstadoGlobal != null) {
+            badgeEstadoGlobal.setVisibility(pestanaInferiorActual == 0 ? View.VISIBLE : View.GONE);
+        }
+
+        if (pestanaInferiorActual == 1) {
             reconstruirFiltrosHistorial();
             refrescarVistaHistorial();
             reconstruirListaComprasExitosas();
-        } else if (nuevaPestana == 3) {
+        } else if (pestanaInferiorActual == 3) {
             refrescarDatosVistaPerfil();
         }
         actualizarEstiloBarraFlotante();
-        handler.postDelayed(this::actualizarEfectoBlurBarraGlass, 50);
+        handler.postDelayed(this::actualizarEfectoBlurBarraGlass, 45);
     }
 
     private void actualizarEstiloBarraFlotante() {
@@ -3472,33 +4013,45 @@ public class MainActivity extends Activity {
             if (barraGlassActiva) {
                 barraFlotante.setBackground(fondoCristalIphone(temaActual == 2));
                 if (imgFondoBlurGlass != null) imgFondoBlurGlass.setVisibility(View.VISIBLE);
+                if (vistaBrilloEspecularGlass != null) {
+                    vistaBrilloEspecularGlass.setVisibility(View.VISIBLE);
+                    vistaBrilloEspecularGlass.setBackground(fondoRedondeado("#AAFFFFFF", 20));
+                }
             } else {
                 barraFlotante.setBackground(fondoRedondeadoConBorde(bgCard, borderCard, 22, 1));
                 if (imgFondoBlurGlass != null) imgFondoBlurGlass.setVisibility(View.GONE);
+                if (vistaBrilloEspecularGlass != null) vistaBrilloEspecularGlass.setVisibility(View.GONE);
             }
         }
 
-        Drawable bgPillActiva = barraGlassActiva
-                ? fondoRedondeadoConBorde(temaActual == 2 ? "#CC0284C7" : "#8838BDF8", "#CCFFFFFF", 16, 1)
-                : fondoRedondeado(acento, 16);
-        Drawable bgPillInactiva = barraGlassActiva
-                ? fondoRedondeado("#00000000", 16)
-                : fondoRedondeado(bgCard, 16);
+        if (indicadorDeslizanteBarra != null) {
+            FrameLayout.LayoutParams lpInd = (FrameLayout.LayoutParams) indicadorDeslizanteBarra.getLayoutParams();
+            lpInd.leftMargin = dp(4);
+            indicadorDeslizanteBarra.setLayoutParams(lpInd);
+            indicadorDeslizanteBarra.setBackground(barraGlassActiva
+                    ? fondoCapsulaActivaGlass(temaActual == 2)
+                    : fondoRedondeado(acento, 16));
+            indicadorDeslizanteBarra.animate()
+                    .translationX(pestanaInferiorActual * dp(71))
+                    .setDuration(190)
+                    .setInterpolator(new DecelerateInterpolator())
+                    .start();
+        }
 
-        navBtnCuentas.setBackground(enCuentas ? bgPillActiva : bgPillInactiva);
+        navBtnCuentas.setBackgroundColor(Color.TRANSPARENT);
         navIconCuentas.setImageDrawable(crearIconoVectorial("USERS", enCuentas ? "#FFFFFF" : txtInact, 15));
         navTxtCuentas.setTextColor(Color.parseColor(enCuentas ? "#FFFFFF" : txtInact));
 
-        navBtnHistorial.setBackground(enHist ? bgPillActiva : bgPillInactiva);
+        navBtnHistorial.setBackgroundColor(Color.TRANSPARENT);
         navIconHistorial.setImageDrawable(crearIconoVectorial("HISTORY", enHist ? "#FFFFFF" : txtInact, 15));
         navTxtHistorial.setTextColor(Color.parseColor(enHist ? "#FFFFFF" : txtInact));
 
-        navBtnAjustes.setBackground(enAjustes ? bgPillActiva : bgPillInactiva);
+        navBtnAjustes.setBackgroundColor(Color.TRANSPARENT);
         navIconAjustes.setImageDrawable(crearIconoVectorial("SETTINGS", enAjustes ? "#FFFFFF" : txtInact, 15));
         navTxtAjustes.setTextColor(Color.parseColor(enAjustes ? "#FFFFFF" : txtInact));
 
         if (navBtnPerfil != null) {
-            navBtnPerfil.setBackground(enPerfil ? bgPillActiva : bgPillInactiva);
+            navBtnPerfil.setBackgroundColor(Color.TRANSPARENT);
             navIconPerfil.setImageDrawable(crearIconoVectorial("PROFILE", enPerfil ? "#FFFFFF" : txtInact, 15));
             navTxtPerfil.setTextColor(Color.parseColor(enPerfil ? "#FFFFFF" : txtInact));
         }
@@ -3512,7 +4065,7 @@ public class MainActivity extends Activity {
             s.webViewOculto.getSettings().setTextZoom(z);
         } catch (Exception ignored) {}
         if (s.btnZoomUrlCard != null) {
-            s.btnZoomUrlCard.setText("🔍 " + z + "%");
+            s.btnZoomUrlCard.setText(z + "%");
         }
     }
 
@@ -3651,22 +4204,21 @@ public class MainActivity extends Activity {
             boxDesplegable.setPadding(0, dp(8), 0, 0);
             boxDesplegable.setClickable(true);
 
+            // Cabecera limpia sin el texto "Consola y Página del Banco en Vivo" y con botón en Modo Oscuro
             LinearLayout filaCabeceraConsola = new LinearLayout(this);
             filaCabeceraConsola.setOrientation(LinearLayout.HORIZONTAL);
-            filaCabeceraConsola.setGravity(Gravity.CENTER_VERTICAL);
+            filaCabeceraConsola.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
             filaCabeceraConsola.setPadding(0, 0, 0, dp(5));
 
-            TextView lblMiniTit = crearTexto("Consola y Página del Banco en Vivo", "#94A3B8", 10.5f, true);
-            TextView btnToggleCon = crearTexto("▲ Ocultar consola", "#38BDF8", 9.5f, true);
-            btnToggleCon.setPadding(dp(8), dp(2), dp(8), dp(2));
-            btnToggleCon.setBackground(fondoRedondeadoConBorde("#1E293B", "#334155", 6, 1));
+            TextView btnToggleCon = crearTexto("▲ Ocultar consola", "#E4E4E7", 9.5f, true);
+            btnToggleCon.setPadding(dp(10), dp(3), dp(10), dp(3));
+            btnToggleCon.setBackground(fondoRedondeadoConBorde("#202227", "#3F3F46", 7, 1));
             btnToggleCon.setOnClickListener(v -> {
                 sesion.mostrarConsolaEnPanel = !sesion.mostrarConsolaEnPanel;
                 prefs.edit().putBoolean("mostrar_consola_slot_" + sesion.slotIndex, sesion.mostrarConsolaEnPanel).apply();
                 sincronizarVistaPanelCuenta(sesion);
             });
 
-            filaCabeceraConsola.addView(lblMiniTit, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
             filaCabeceraConsola.addView(btnToggleCon);
             boxDesplegable.addView(filaCabeceraConsola);
 
@@ -3705,6 +4257,7 @@ public class MainActivity extends Activity {
             frameCon.addView(btnLimpiarMini, lpLimp);
             boxDesplegable.addView(frameCon, lpFrameCon);
 
+            // Barra de Navegador en Modo Oscuro (Atrás, Recargar y Zoom en el mismo tono oscuro del bot)
             LinearLayout barraNav = new LinearLayout(this);
             barraNav.setOrientation(LinearLayout.HORIZONTAL);
             barraNav.setGravity(Gravity.CENTER_VERTICAL);
@@ -3714,10 +4267,10 @@ public class MainActivity extends Activity {
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
             lpBarraNav.setMargins(0, 0, 0, dp(6));
 
-            ImageView btnBack = crearBotonAccionTarjeta("BACK", "#202227", "#E4E4E7", () -> {
+            ImageView btnBack = crearBotonAccionTarjetaOscuro("BACK", "#202227", "#3F3F46", "#E4E4E7", () -> {
                 if (sesion.webViewOculto != null && sesion.webViewOculto.canGoBack()) sesion.webViewOculto.goBack();
             });
-            ImageView btnReload = crearBotonAccionTarjeta("RELOAD", "#202227", "#38BDF8", () -> {
+            ImageView btnReload = crearBotonAccionTarjetaOscuro("RELOAD", "#202227", "#3F3F46", "#E4E4E7", () -> {
                 if (sesion.webViewOculto != null) sesion.webViewOculto.reload();
             });
 
@@ -3731,9 +4284,9 @@ public class MainActivity extends Activity {
             txtUrl.setSingleLine(true);
             txtUrl.setEllipsize(TextUtils.TruncateAt.END);
 
-            TextView btnZoom = crearTexto("🔍 " + sesion.zoomPorcentaje + "%", "#38BDF8", 9.5f, true);
-            btnZoom.setPadding(dp(7), dp(2), dp(7), dp(2));
-            btnZoom.setBackground(fondoRedondeadoConBorde("#1E293B", "#334155", 6, 1));
+            TextView btnZoom = crearTexto(sesion.zoomPorcentaje + "%", "#E4E4E7", 9.5f, true);
+            btnZoom.setPadding(dp(8), dp(2), dp(8), dp(2));
+            btnZoom.setBackground(fondoRedondeadoConBorde("#202227", "#3F3F46", 6, 1));
             btnZoom.setOnClickListener(v -> {
                 int idxZ = 0;
                 for (int k = 0; k < ESCALAS_ZOOM.length; k++) {
@@ -3805,6 +4358,7 @@ public class MainActivity extends Activity {
             ws.setSupportZoom(true);
             ws.setBuiltInZoomControls(true);
             ws.setDisplayZoomControls(false);
+            ws.setRenderPriority(WebSettings.RenderPriority.HIGH);
             ws.setLoadsImagesAutomatically(!modoTurboSinImagenes);
             ws.setBlockNetworkImage(modoTurboSinImagenes);
             ws.setBlockNetworkLoads(false);
@@ -3913,6 +4467,17 @@ public class MainActivity extends Activity {
         return iv;
     }
 
+    private ImageView crearBotonAccionTarjetaOscuro(String icono, String bgHex, String borderHex, String iconHex, Runnable accion) {
+        ImageView iv = new ImageView(this);
+        iv.setScaleType(ImageView.ScaleType.CENTER);
+        iv.setClickable(true);
+        iv.setFocusable(false);
+        iv.setImageDrawable(crearIconoVectorial(icono, iconHex, 12));
+        iv.setBackground(fondoRedondeadoConBorde(bgHex, borderHex, 7, 1));
+        iv.setOnClickListener(v -> { if (accion != null) accion.run(); });
+        return iv;
+    }
+
     private void configurarPerfilAisladoWebView(WebView wv, int slotIdx) {
         try {
             Class<?> featureClass = Class.forName("androidx.webkit.WebViewFeature");
@@ -3971,6 +4536,7 @@ public class MainActivity extends Activity {
         boolean enFormularioDorado = s.estaEnFormularioCompra();
         long ahora = System.currentTimeMillis();
         boolean titilandoCompraVerde = s.compraCompletada && (ahora - s.tiempoCompraExitosaMs <= 3000);
+        int modoEf = s.obtenerModoProxyEfectivo();
 
         String bgCard = colFondoTarjeta();
         String bgSub = colFondoSubPanel();
@@ -4023,8 +4589,8 @@ public class MainActivity extends Activity {
         }
         if (s.lblProxyCard != null) {
             s.lblProxyCard.setText(s.textoEstadoProxyMostrado());
-            s.lblProxyCard.setTextColor(Color.parseColor(proxyRotativoActivo && modoAvanzadoProxy != MODO_PROXY_NINGUNO
-                    ? (s.proxyActivoEnEstaCuenta || modoAvanzadoProxy == MODO_PROXY_SIEMPRE_ACTIVO
+            s.lblProxyCard.setTextColor(Color.parseColor(proxyRotativoActivo && modoEf != MODO_PROXY_NINGUNO
+                    ? (s.proxyActivoEnEstaCuenta || modoEf == MODO_PROXY_SIEMPRE_ACTIVO
                         ? (temaActual == 2 ? "#0D9488" : "#34D399") : "#FBBF24")
                     : txtSec));
         }
@@ -4037,6 +4603,23 @@ public class MainActivity extends Activity {
 
         if (s.scrollConsolaCard != null) s.scrollConsolaCard.setBackground(fondoRedondeadoConBorde(colFondoConsola(), borderCard, 10, 1));
         if (s.txtConsolaCard != null) s.txtConsolaCard.setTextColor(Color.parseColor(colTextoConsola()));
+
+        if (s.btnToggleConsolaMini != null) {
+            s.btnToggleConsolaMini.setTextColor(Color.parseColor(txtPri));
+            s.btnToggleConsolaMini.setBackground(fondoRedondeadoConBorde(bgSub, borderCard, 7, 1));
+        }
+        if (s.btnNavBackCard != null) {
+            s.btnNavBackCard.setBackground(fondoRedondeadoConBorde(bgSub, borderCard, 7, 1));
+            s.btnNavBackCard.setImageDrawable(crearIconoVectorial("BACK", txtPri, 12));
+        }
+        if (s.btnNavReloadCard != null) {
+            s.btnNavReloadCard.setBackground(fondoRedondeadoConBorde(bgSub, borderCard, 7, 1));
+            s.btnNavReloadCard.setImageDrawable(crearIconoVectorial("RELOAD", txtPri, 12));
+        }
+        if (s.btnZoomUrlCard != null) {
+            s.btnZoomUrlCard.setTextColor(Color.parseColor(txtPri));
+            s.btnZoomUrlCard.setBackground(fondoRedondeadoConBorde(bgSub, borderCard, 6, 1));
+        }
 
         String bgBtnPlay = temaActual == 1 ? "#134E4A" : (temaActual == 2 ? "#DCFCE7" : "#14532D");
         String fgBtnPlay = temaActual == 1 ? "#2DD4BF" : (temaActual == 2 ? "#15803D" : "#4ADE80");
@@ -4679,6 +5262,7 @@ public class MainActivity extends Activity {
     private void iniciarTodasLasCuentas() {
         ArrayList<SesionBot> reg = obtenerSesionesRegistradas();
         if (reg.isEmpty()) { mostrarPopupEditorCuenta(-1); return; }
+        concentrarRedAlMaximoEnEstePrograma(true);
         yaAvisoApertura = false;
         int delayEscalonado = 0;
         for (SesionBot s : reg) {
@@ -4698,6 +5282,7 @@ public class MainActivity extends Activity {
 
     private void iniciarSesionIndividual(final SesionBot s, int delayMs) {
         if (s == null || !s.registrada) return;
+        concentrarRedAlMaximoEnEstePrograma(true);
         ultimoSlotActivoRed = s.slotIndex;
         s.corriendo = true;
         s.detenerTrasCerrarSesion = false;
@@ -4710,9 +5295,10 @@ public class MainActivity extends Activity {
         s.esperandoCargaNuevaInt = false;
         s.yaActivoProxyEnIntervencion = false;
 
+        int modoEf = s.obtenerModoProxyEfectivo();
         if (!s.sesionAbiertaEnServidor) {
             s.yaAnuncioPaginaLoginCargada = false;
-            if (proxyRotativoActivo && modoAvanzadoProxy == MODO_PROXY_SIEMPRE_ACTIVO) {
+            if (proxyRotativoActivo && modoEf == MODO_PROXY_SIEMPRE_ACTIVO) {
                 activarModoProxySiempreActivoEnCuenta(s);
                 registrarPasoCuenta(s, "Cargando página de login con Proxy siempre activo (" + s.cedulaMostrada() + ")");
             } else {
@@ -4750,7 +5336,7 @@ public class MainActivity extends Activity {
         s.detenerTrasCerrarSesion = true;
         s.rotarIpTrasCerrarSesion = false;
         s.intentoLogout = 0;
-        if (modoAvanzadoProxy != MODO_PROXY_SIEMPRE_ACTIVO) usarWifiNormalEnCuenta(s);
+        if (s.obtenerModoProxyEfectivo() != MODO_PROXY_SIEMPRE_ACTIVO) usarWifiNormalEnCuenta(s);
         cambiarEstado(s, EstadoBot.CERRANDO_SESION);
         registrarPasoCuenta(s, "Cerrando sesión en 1 intento...");
         ejecutarPasoMaquinaEstados(s);
@@ -4820,7 +5406,7 @@ public class MainActivity extends Activity {
                 ArrayList<SesionBot> reg = obtenerSesionesRegistradas();
                 for (SesionBot s : reg) actualizarVisualTarjeta(s);
                 actualizarResumenYBotonesGlobales();
-                if (barraGlassActiva && !barraInferiorOcultaPorScroll) actualizarEfectoBlurBarraGlass();
+                if (barraGlassActiva && traduccionBarraY < dp(70)) actualizarEfectoBlurBarraGlass();
 
                 long ahoraCiclo = System.currentTimeMillis();
                 if (ahoraCiclo - ultimaVerificacionNubeMs > 30000) {
@@ -4884,7 +5470,7 @@ public class MainActivity extends Activity {
                     s.intentoLogout = 0;
                     s.detenerTrasCerrarSesion = false;
                     s.rotarIpTrasCerrarSesion = true;
-                    if (modoAvanzadoProxy != MODO_PROXY_SIEMPRE_ACTIVO) usarWifiNormalEnCuenta(s);
+                    if (s.obtenerModoProxyEfectivo() != MODO_PROXY_SIEMPRE_ACTIVO) usarWifiNormalEnCuenta(s);
                     registrarPasoCuenta(s, "Tiempo de reinicio cumplido - Cerrando sesión en 1 intento...");
                     cambiarEstado(s, EstadoBot.CERRANDO_SESION);
                 }
@@ -4897,10 +5483,6 @@ public class MainActivity extends Activity {
         }
     }
 
-    /**
-     * Cierra el cartel "OK" de Sesión Activa y limpia el contenedor del aviso para poder
-     * volver a colocar la contraseña cada 6 segundos sin regresar a /lg.
-     */
     private void darClickOkEnCartelSesionActiva(SesionBot s) {
         String jsClickOk =
                 "(function(){" +
@@ -4921,9 +5503,6 @@ public class MainActivity extends Activity {
         evaluarJS(s, jsClickOk, null);
     }
 
-    // =========================================================================================
-    // MÁQUINA DE ESTADOS: REINTENTO DE CONTRASEÑA CADA 6S EN SESIÓN ACTIVA + TIMEOUT DE 12S
-    // =========================================================================================
     private void ejecutarPasoMaquinaEstados(final SesionBot sesion) {
         if (sesion == null || sesion.webViewOculto == null) return;
         final long ahora = System.currentTimeMillis();
@@ -5043,6 +5622,7 @@ public class MainActivity extends Activity {
             actualizarSaldosEnSegundoPlano(s, false);
         }
 
+        int modoEf = s.obtenerModoProxyEfectivo();
         String codTipoDoc = s.codigoNumericoTipoDoc();
         String cedSafe = s.cedula.replace("\\", "\\\\").replace("'", "\\'");
         String usrSafe = s.usuario.replace("\\", "\\\\").replace("'", "\\'");
@@ -5187,7 +5767,7 @@ public class MainActivity extends Activity {
                     return;
                 }
                 if (ahora - s.tiempoEstadoMs >= 160) {
-                    if (proxyRotativoActivo && modoAvanzadoProxy == MODO_PROXY_EN_CONTRASENA && !s.proxyActivoEnEstaCuenta) {
+                    if (proxyRotativoActivo && modoEf == MODO_PROXY_EN_CONTRASENA && !s.proxyActivoEnEstaCuenta) {
                         activarProxyYCambiarIpConVerificacion(s, "Contraseña");
                         cambiarEstado(s, EstadoBot.ACTIVANDO_PROXY_EN_PASS);
                     } else {
@@ -5255,18 +5835,14 @@ public class MainActivity extends Activity {
                 }
                 break;
 
-            // Al pasar los 6 segundos de Sesión Activa: le da a OK si sigue el cartel y vuelve a meter la contraseña sin ir al login
             case ESPERANDO_REINTENTO_SESION_ACTIVA:
-                if (haySesionActivaErr) {
-                    darClickOkEnCartelSesionActiva(s);
-                }
+                if (haySesionActivaErr) darClickOkEnCartelSesionActiva(s);
                 if (ahora - s.tiempoEstadoMs >= 6000) {
                     darClickOkEnCartelSesionActiva(s);
                     if (visPass) {
                         registrarPasoCuenta(s, "Reintentando contraseña tras 6s...");
                         cambiarEstado(s, EstadoBot.ENVIANDO_FASE2);
                     } else if (visDoc) {
-                        // Solo si el propio banco devolvió al usuario a la cédula, la llena rápido para volver a contraseña
                         cambiarEstado(s, EstadoBot.ENVIANDO_FASE1);
                     } else {
                         registrarPasoCuenta(s, "Reintentando contraseña tras 6s...");
@@ -5277,7 +5853,7 @@ public class MainActivity extends Activity {
 
             case ESPERANDO_ESTABILIZAR_INICIO:
                 if (ahora - s.tiempoEstadoMs >= 260) {
-                    if (proxyRotativoActivo && modoAvanzadoProxy == MODO_PROXY_POSICION_GLOBAL && !s.proxyActivoEnEstaCuenta) {
+                    if (proxyRotativoActivo && modoEf == MODO_PROXY_POSICION_GLOBAL && !s.proxyActivoEnEstaCuenta) {
                         activarProxyYCambiarIpConVerificacion(s, "Posición Global");
                         cambiarEstado(s, EstadoBot.ACTIVANDO_PROXY_EN_PG);
                     } else {
@@ -5321,7 +5897,7 @@ public class MainActivity extends Activity {
                 }
                 if (visOrd) {
                     s.esperandoCargaNuevaInt = false;
-                    if (proxyRotativoActivo && modoAvanzadoProxy == MODO_PROXY_EN_INTERVENCION && !s.yaActivoProxyEnIntervencion) {
+                    if (proxyRotativoActivo && modoEf == MODO_PROXY_EN_INTERVENCION && !s.yaActivoProxyEnIntervencion) {
                         s.yaActivoProxyEnIntervencion = true;
                         activarProxyYCambiarIpConVerificacion(s, "Intervención");
                         cambiarEstado(s, EstadoBot.ACTIVANDO_PROXY_EN_INT);
@@ -5338,7 +5914,7 @@ public class MainActivity extends Activity {
                 }
                 if (s.esperandoCargaNuevaInt && intCargado) {
                     s.esperandoCargaNuevaInt = false;
-                    if (proxyRotativoActivo && modoAvanzadoProxy == MODO_PROXY_EN_INTERVENCION && !s.yaActivoProxyEnIntervencion) {
+                    if (proxyRotativoActivo && modoEf == MODO_PROXY_EN_INTERVENCION && !s.yaActivoProxyEnIntervencion) {
                         s.yaActivoProxyEnIntervencion = true;
                         registrarPasoCuenta(s, "Intervención cargada - Activando Proxy y cambiando IP");
                         activarProxyYCambiarIpConVerificacion(s, "Intervención");
@@ -5401,7 +5977,7 @@ public class MainActivity extends Activity {
                     s.intentoLogout = 0;
                     s.detenerTrasCerrarSesion = false;
                     s.rotarIpTrasCerrarSesion = true;
-                    if (modoAvanzadoProxy != MODO_PROXY_SIEMPRE_ACTIVO) usarWifiNormalEnCuenta(s);
+                    if (modoEf != MODO_PROXY_SIEMPRE_ACTIVO) usarWifiNormalEnCuenta(s);
                     registrarPasoCuenta(s, "Error en Ordinaria - Cerrando sesión con Wi-Fi normal y borrando datos...");
                     cambiarEstado(s, EstadoBot.CERRANDO_SESION);
                     return;
@@ -5410,7 +5986,7 @@ public class MainActivity extends Activity {
                     s.intentoLogout = 0;
                     s.detenerTrasCerrarSesion = false;
                     s.rotarIpTrasCerrarSesion = true;
-                    if (modoAvanzadoProxy != MODO_PROXY_SIEMPRE_ACTIVO) usarWifiNormalEnCuenta(s);
+                    if (modoEf != MODO_PROXY_SIEMPRE_ACTIVO) usarWifiNormalEnCuenta(s);
                     registrarPasoCuenta(s, "Formulario no cargó - Cerrando sesión con Wi-Fi normal...");
                     cambiarEstado(s, EstadoBot.CERRANDO_SESION);
                 }
@@ -5424,7 +6000,7 @@ public class MainActivity extends Activity {
                     s.intentoLogout = 0;
                     s.detenerTrasCerrarSesion = false;
                     s.rotarIpTrasCerrarSesion = true;
-                    if (modoAvanzadoProxy != MODO_PROXY_SIEMPRE_ACTIVO) usarWifiNormalEnCuenta(s);
+                    if (modoEf != MODO_PROXY_SIEMPRE_ACTIVO) usarWifiNormalEnCuenta(s);
                     cambiarEstado(s, EstadoBot.CERRANDO_SESION);
                 }
                 break;
@@ -5561,7 +6137,7 @@ public class MainActivity extends Activity {
                     s.accionEnCurso = true;
                     s.intentoLogout = 1;
                     s.tiempoEstadoMs = ahora;
-                    if (modoAvanzadoProxy != MODO_PROXY_SIEMPRE_ACTIVO) usarWifiNormalEnCuenta(s);
+                    if (modoEf != MODO_PROXY_SIEMPRE_ACTIVO) usarWifiNormalEnCuenta(s);
                     registrarPasoCuenta(s, "Cerrando sesión en 1 intento...");
                     ejecutarScriptLogoutDirecto(s);
                 } else if (ahora - s.tiempoEstadoMs > 2200) {
