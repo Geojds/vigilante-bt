@@ -121,21 +121,17 @@ public class MainActivity extends Activity {
     private static final String ORIGEN_FONDOS = "Sueldos y Salarios";
     private static final String DESTINO_FONDOS = "Ahorro";
     private static final int MAX_CUENTAS = 4;
-    private static final long TIMEOUT_CARGA_INT_MS = 12000L; // 12 segundos máximo esperando carga de intervención
+    private static final long TIMEOUT_CARGA_INT_MS = 12000L;
     private final int[] OPCIONES_MINUTOS = {1, 3, 5, 10, 15, 20, 30};
     private final int[] ESCALAS_ZOOM = {60, 75, 85, 100};
 
-    // Modos de Configuración Avanzada de Proxy (Exclusivos: solo 1 activo a la vez)
     private static final int MODO_PROXY_NINGUNO = -1;
-    private static final int MODO_PROXY_POSICION_GLOBAL = 0; // Por defecto activado
+    private static final int MODO_PROXY_POSICION_GLOBAL = 0;
     private static final int MODO_PROXY_SIEMPRE_ACTIVO = 1;
     private static final int MODO_PROXY_EN_CONTRASENA = 2;
     private static final int MODO_PROXY_EN_INTERVENCION = 3;
     private static final int MODO_PROXY_PERSONALIZADO_CUENTA = 4;
 
-    // =========================================================================================
-    // SISTEMA DE LICENCIAS EN LA NUBE (GITHUB licencias.json)
-    // =========================================================================================
     private static final String GH_REPO_OWNER = "Geojds";
     private static final String GH_REPO_NAME = "vigilante-bt";
     private static final String GH_TOKEN_B64 = "";
@@ -144,9 +140,6 @@ public class MainActivity extends Activity {
     private static final String LICENCIA_DEVICE_ID_FIJO = "LIBRE";
     private static final String CLAVE_MAESTRA_VENDEDOR = "geonal11";
 
-    // =========================================================================================
-    // CREDENCIALES DE PROXY RESIDENCIAL IPROYAL VENEZUELA
-    // =========================================================================================
     private static final String PRX_H_B64 = "Z2VvLmlwcm95YWwuY29t";
     private static final int PRX_PORT = 12321;
     private static final String PRX_USER_RAW = "ftNVsXfGVrFN3Pq3";
@@ -164,7 +157,6 @@ public class MainActivity extends Activity {
     });
     private final ConcurrentHashMap<String, byte[]> cacheEstaticosRam = new ConcurrentHashMap<>();
 
-    // Contenedores principales y gestor de Swipe Horizontal interactivo
     private FrameLayout frameRoot;
     private LinearLayout mainVertical;
     private FrameLayout contenedorPaginasSwipe;
@@ -183,35 +175,32 @@ public class MainActivity extends Activity {
     private ScrollView vistaAjustesScroll;
     private ScrollView vistaPerfilScroll;
 
-    // Variables del gesto de deslizar entre pestañas (Swipe en tiempo real)
     private VelocityTracker velocityTrackerSwipe;
     private float touchStartX = 0f, touchStartY = 0f;
+    private float ultimoTouchYScroll = 0f;
+    private long ultimoTouchTimeScroll = 0L;
     private boolean deslizandoPestanaHorizontal = false;
     private boolean gestoDescartado = false;
     private int pestanaVecinaSwipe = -1;
 
-    // Elementos de la Pestaña "Perfil"
     private LinearLayout cardPerfilPrincipal, boxPerfilDevice, boxPerfilCuentas, boxPerfilClave;
     private ImageView imgAvatarPerfil;
     private TextView lblNombrePerfil, lblValorDevicePerfil, lblValorCuentasPerfil, lblValorClavePerfil;
     private TextView btnMantenerMostrarClave, lblPieLicenciaPerfil;
     private Button btnCerrarSesionPerfil;
 
-    // Pantalla de bloqueo / Login de Licencia del Cliente
     private LinearLayout loginClienteOverlay;
     private EditText edtUserLicGlobal, edtPassLicGlobal;
     private Button btnOjoLicGlobal;
     private CheckBox chkRecordarGlobal;
     private TextView lblEstadoValidacionLic;
 
-    // Tarjetas y textos adaptables al tema
     private TextView lblTituloApp, lblCuentasBig, lblCuentasSub;
     private TextView lblHistBig, lblHistSub, lblAjustesBig, lblAjustesSub;
     private TextView lblTRel, lblReloginVal;
     private LinearLayout cardTiempos, cardTemaAjustes, cardAlertasAjustes;
     private TextView lblSubTema, lblDescTema, lblSubAlertas, lblDescAlertas;
 
-    // Tarjetas de vista previa de los 3 temas (Oscuro | Azul Zafiro | Claro) + Barra Glass
     private LinearLayout cardPrevOscuro, cardPrevZafiro, cardPrevClaro;
     private ImageView imgPrevOscuro, imgPrevZafiro, imgPrevClaro;
     private TextView txtPrevOscuro, txtPrevZafiro, txtPrevClaro;
@@ -219,7 +208,6 @@ public class MainActivity extends Activity {
     private TextView lblItemBarraGlass, lblDescItemBarraGlass;
     private Button btnToggleBarraGlass;
 
-    // Sub-paneles separados de Modo Turbo, Proxy VE, Alertas y Vibración con Barrita Corta
     private LinearLayout panelItemTurbo, panelItemProxy, panelItemOrd, panelItemCompra, panelItemVib;
     private TextView lblItemTurbo, lblDescItemTurbo;
     private TextView lblItemProxy, lblDescItemProxy;
@@ -229,7 +217,6 @@ public class MainActivity extends Activity {
     private Button btnToggleTurbo, btnToggleProxy, btnToggleOrd, btnToggleCompra;
     private SeekBar seekBarVibracion;
 
-    // Desplegable de "Configuración avanzada" en Ajustes (Con los 5 modos incluyendo Personalizado por cuenta)
     private TextView btnTextoConfigAvanzada;
     private LinearLayout contenedorConfigAvanzada;
     private boolean configAvanzadaExpandida = false;
@@ -241,29 +228,25 @@ public class MainActivity extends Activity {
     private TextView lblAdvPorCuenta, lblDescAdvPorCuenta;
     private Button btnToggleAdvPosGlobal, btnToggleAdvSiempre, btnToggleAdvPass, btnToggleAdvIntervencion, btnToggleAdvPorCuenta;
 
-    // Contenedor de motores en segundo plano cuando la tarjeta está cerrada
     private LinearLayout filaMotoresSup, filaMotoresInf;
     private final FrameLayout[] slotsFondoWebView = new FrameLayout[MAX_CUENTAS];
 
-    // Cabecera, chips y controles
     private TextView badgeEstadoGlobal;
     private TextView chipRegistradas, chipActivas, chipDetenidas;
     private Button btnIniciarTodas, btnDetenerTodas, btnNuevaCuenta, btnLimpiarHist;
 
-    // Barra flotante inferior con Efecto Glass iOS Real, Cápsula Deslizante y Ocultado Progresivo
     private FrameLayout contenedorBarraFlotante;
     private ImageView imgFondoBlurGlass;
-    private View vistaBrilloEspecularGlass;
     private View indicadorDeslizanteBarra;
     private LinearLayout barraFlotante;
     private LinearLayout navBtnCuentas, navBtnHistorial, navBtnAjustes, navBtnPerfil;
     private ImageView navIconCuentas, navIconHistorial, navIconAjustes, navIconPerfil;
     private TextView navTxtCuentas, navTxtHistorial, navTxtAjustes, navTxtPerfil;
-    private float traduccionBarraY = 0f;
-    private float acumuladorBajandoScroll = 0f;
-    private long ultimoRenderGlassMs = 0;
+    private boolean barraOcultaActualmente = false;
+    private long ultimoCambioTiempoScrollMs = 0L;
+    private float velocidadScrollSuavizada = 0f;
+    private long ultimoRenderGlassMs = 0L;
 
-    // 0 = Cuentas, 1 = Historial, 2 = Ajustes, 3 = Perfil
     private int pestanaInferiorActual = 0;
     private int filtroHistorialSlot = -1;
 
@@ -274,7 +257,7 @@ public class MainActivity extends Activity {
     private int modoAvanzadoProxy = MODO_PROXY_POSICION_GLOBAL;
     private boolean alertaOrdinariaActiva = true;
     private boolean alertaCompraActiva = true;
-    private int intensidadVibracion = 85; // 0 = Apagado, 1..100 = Intensidad progresiva
+    private int intensidadVibracion = 85;
 
     private int minutosRelogin = 10;
 
@@ -619,9 +602,6 @@ public class MainActivity extends Activity {
         super.onDestroy();
     }
 
-    // =========================================================================================
-    // CONCENTRACIÓN DEL 95% DEL RENDIMIENTO DE RED EN ESTE PROGRAMA CUANDO ESTÁ PRENDIDO
-    // =========================================================================================
     private void concentrarRedAlMaximoEnEstePrograma(boolean activarPrioridadMaxima) {
         try {
             ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
@@ -680,9 +660,6 @@ public class MainActivity extends Activity {
         } catch (Throwable ignored) {}
     }
 
-    // =========================================================================================
-    // MOTOR DE RED HÍBRIDO CON MODOS GLOBALES Y MODO PERSONALIZADO POR CUENTA
-    // =========================================================================================
     private String generarIdSesionProxyNuevo() {
         String chars = "abcdefghijklmnopqrstuvwxyz0123456789";
         StringBuilder sb = new StringBuilder(8);
@@ -991,7 +968,6 @@ public class MainActivity extends Activity {
             int finPrimeraLinea = rawStr.indexOf("\r\n");
             String primeraLinea = (finPrimeraLinea != -1) ? rawStr.substring(0, finPrimeraLinea) : rawStr;
 
-            // MODO 1: CONEXIÓN CON WI-FI / INTERNET NORMAL DE MÁXIMO RENDIMIENTO
             if (!usarTunelProxy && primeraLinea.toUpperCase(Locale.ROOT).startsWith("CONNECT ")) {
                 String[] partes = primeraLinea.split(" ");
                 String hostPort = (partes.length > 1) ? partes[1].trim() : "tesoroenlinea.bt.com.ve:443";
@@ -1037,7 +1013,6 @@ public class MainActivity extends Activity {
                 return;
             }
 
-            // MODO 2: TÚNEL PROXY IPROYAL VENEZUELA CON PRIORIDAD DE TRÁFICO
             String authRaw = PRX_USER_RAW + ":" + construirPasswordProxyVenezuela(sesionRef);
             String authB64 = Base64.encodeToString(authRaw.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
 
@@ -1141,9 +1116,6 @@ public class MainActivity extends Activity {
         } catch (Throwable ignored) {}
     }
 
-    // =========================================================================================
-    // VALIDACIÓN EN TIEMPO REAL EN LA NUBE (GITHUB licencias.json) + CANDADO Y PERFIL
-    // =========================================================================================
     @SuppressLint("HardwareIds")
     private String obtenerDeviceIdUnico() {
         try {
@@ -1577,15 +1549,19 @@ public class MainActivity extends Activity {
         return gd;
     }
 
+    /**
+     * Cristal Ahumado Oscuro (Smoked Dark Glass) igual al del video de referencia:
+     * Cápsula oscura translúcida sin líneas blancas salidas ni bordes estirados.
+     */
     private GradientDrawable fondoCristalIphone(boolean esTemaClaro) {
         GradientDrawable gd = new GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
                 esTemaClaro
-                        ? new int[]{Color.parseColor("#78FFFFFF"), Color.parseColor("#48E2E8F0")}
-                        : new int[]{Color.parseColor("#54FFFFFF"), Color.parseColor("#2494A3B8")}
+                        ? new int[]{Color.parseColor("#CCFFFFFF"), Color.parseColor("#B0E2E8F0")}
+                        : new int[]{Color.parseColor("#8820222A"), Color.parseColor("#9812141A")}
         );
-        gd.setCornerRadius(dp(24));
-        gd.setStroke(dp(1), Color.parseColor(esTemaClaro ? "#CCFFFFFF" : "#80FFFFFF"));
+        gd.setCornerRadius(dp(22));
+        gd.setStroke(dp(1), Color.parseColor(esTemaClaro ? "#99CBD5E1" : "#33FFFFFF"));
         return gd;
     }
 
@@ -1593,11 +1569,11 @@ public class MainActivity extends Activity {
         GradientDrawable gd = new GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
                 esTemaClaro
-                        ? new int[]{Color.parseColor("#AA0284C7"), Color.parseColor("#880369A1")}
-                        : new int[]{Color.parseColor("#66FFFFFF"), Color.parseColor("#33CBD5E1")}
+                        ? new int[]{Color.parseColor("#CC0284C7"), Color.parseColor("#AA0369A1")}
+                        : new int[]{Color.parseColor("#42FFFFFF"), Color.parseColor("#24FFFFFF")}
         );
-        gd.setCornerRadius(dp(18));
-        gd.setStroke(dp(1), Color.parseColor("#99FFFFFF"));
+        gd.setCornerRadius(dp(16));
+        gd.setStroke(dp(1), Color.parseColor(esTemaClaro ? "#88FFFFFF" : "#48FFFFFF"));
         return gd;
     }
 
@@ -1919,13 +1895,13 @@ public class MainActivity extends Activity {
         p.setColor(Color.parseColor("#0D1017"));
         c.drawRoundRect(new RectF(0, 0, w, h), dp(12), dp(12), p);
 
-        RadialGradient gRojo = new RadialGradient(w * 0.35f, h * 0.62f, dp(22),
-                new int[]{Color.parseColor("#CCEF4444"), Color.TRANSPARENT}, null, Shader.TileMode.CLAMP);
-        p.setShader(gRojo);
-        c.drawCircle(w * 0.35f, h * 0.62f, dp(22), p);
+        RadialGradient gVerde = new RadialGradient(w * 0.35f, h * 0.55f, dp(20),
+                new int[]{Color.parseColor("#6622C55E"), Color.TRANSPARENT}, null, Shader.TileMode.CLAMP);
+        p.setShader(gVerde);
+        c.drawCircle(w * 0.35f, h * 0.55f, dp(20), p);
 
         RadialGradient gAzul = new RadialGradient(w * 0.68f, h * 0.45f, dp(20),
-                new int[]{Color.parseColor("#CC38BDF8"), Color.TRANSPARENT}, null, Shader.TileMode.CLAMP);
+                new int[]{Color.parseColor("#6638BDF8"), Color.TRANSPARENT}, null, Shader.TileMode.CLAMP);
         p.setShader(gAzul);
         c.drawCircle(w * 0.68f, h * 0.45f, dp(20), p);
         p.setShader(null);
@@ -1933,75 +1909,75 @@ public class MainActivity extends Activity {
         RectF rBar = new RectF(dp(6), dp(16), w - dp(6), h - dp(6));
         LinearGradient frostGrad = new LinearGradient(
                 0, rBar.top, 0, rBar.bottom,
-                new int[]{Color.parseColor("#90FFFFFF"), Color.parseColor("#45CBD5E1")},
+                new int[]{Color.parseColor("#CC222530"), Color.parseColor("#DD14161D")},
                 null, Shader.TileMode.CLAMP
         );
         p.setShader(frostGrad);
         c.drawRoundRect(rBar, dp(14), dp(14), p);
         p.setShader(null);
 
-        p.setColor(Color.parseColor("#66FFFFFF"));
+        p.setColor(Color.parseColor("#40FFFFFF"));
         c.drawRoundRect(new RectF(dp(9), dp(19), dp(26), h - dp(9)), dp(10), dp(10), p);
 
         float[] posX = {dp(18), dp(32), dp(46), dp(60)};
         for (int i = 0; i < 4; i++) {
-            p.setColor(i == 0 ? Color.WHITE : Color.parseColor("#F1F5F9"));
-            p.setAlpha(i == 0 ? 255 : 190);
+            p.setColor(i == 0 ? Color.WHITE : Color.parseColor("#CBD5E1"));
+            p.setAlpha(i == 0 ? 255 : 185);
             c.drawCircle(posX[i], rBar.centerY(), dp(3), p);
         }
         p.setAlpha(255);
 
         p.setStyle(Paint.Style.STROKE);
         p.setStrokeWidth(dp(1));
-        p.setColor(Color.parseColor(activa ? "#FFFFFF" : "#AAFFFFFF"));
+        p.setColor(Color.parseColor(activa ? "#38BDF8" : "#44FFFFFF"));
         c.drawRoundRect(rBar, dp(14), dp(14), p);
 
         return bmp;
     }
 
+    /**
+     * Desenfoque recortado exactamente al tamaño de la cápsula de la barra (289dp x 42dp)
+     * con cristal oscuro ahumado como el del video, sin salirse a los lados.
+     */
     private void actualizarEfectoBlurBarraGlass() {
-        if (!barraGlassActiva || imgFondoBlurGlass == null || contenedorBarraFlotante == null || mainVertical == null) {
+        if (!barraGlassActiva || imgFondoBlurGlass == null || contenedorBarraFlotante == null || barraFlotante == null || mainVertical == null) {
             if (imgFondoBlurGlass != null) imgFondoBlurGlass.setVisibility(View.GONE);
-            if (vistaBrilloEspecularGlass != null) vistaBrilloEspecularGlass.setVisibility(View.GONE);
             return;
         }
-        if (contenedorBarraFlotante.getVisibility() != View.VISIBLE || traduccionBarraY >= dp(70)) return;
+        if (contenedorBarraFlotante.getVisibility() != View.VISIBLE || barraOcultaActualmente) return;
 
         long ahora = System.currentTimeMillis();
-        if (ahora - ultimoRenderGlassMs < 65) return;
+        if (ahora - ultimoRenderGlassMs < 75) return;
         ultimoRenderGlassMs = ahora;
 
-        int barW = contenedorBarraFlotante.getWidth();
-        int barH = contenedorBarraFlotante.getHeight();
+        int barW = barraFlotante.getWidth();
+        int barH = barraFlotante.getHeight();
         if (barW <= 0 || barH <= 0) return;
 
         try {
-            int scale = 8;
-            int wSmall = Math.max(18, barW / scale);
-            int hSmall = Math.max(10, barH / scale);
+            int scale = 6;
+            int wSmall = Math.max(16, barW / scale);
+            int hSmall = Math.max(8, barH / scale);
 
             Bitmap bmpSmall = Bitmap.createBitmap(wSmall, hSmall, Bitmap.Config.ARGB_8888);
             Canvas cSmall = new Canvas(bmpSmall);
             cSmall.scale(1f / scale, 1f / scale);
-            float realTop = contenedorBarraFlotante.getTop() + traduccionBarraY;
-            cSmall.translate(-contenedorBarraFlotante.getLeft(), -realTop);
+            cSmall.translate(-contenedorBarraFlotante.getLeft(), -contenedorBarraFlotante.getTop());
             mainVertical.draw(cSmall);
 
-            Bitmap blurred = desenfocarBitmapRapido(bmpSmall, 5);
+            Bitmap blurred = desenfocarBitmapRapido(bmpSmall, 4);
             Canvas cFrost = new Canvas(blurred);
-            cFrost.drawColor(Color.parseColor(temaActual == 2 ? "#88F8FAFC" : "#68242936"));
-            Paint pSheen = new Paint(Paint.ANTI_ALIAS_FLAG);
-            pSheen.setShader(new LinearGradient(0, 0, wSmall, hSmall,
-                    new int[]{Color.parseColor("#42FFFFFF"), Color.parseColor("#12FFFFFF"), Color.parseColor("#28FFFFFF")},
-                    new float[]{0f, 0.5f, 1f}, Shader.TileMode.CLAMP));
-            cFrost.drawRect(0, 0, wSmall, hSmall, pSheen);
+            cFrost.drawColor(Color.parseColor(temaActual == 2 ? "#CCF1F5F9" : "#B814161E"));
 
-            Bitmap finalGlass = crearBitmapRedondeado(blurred, barW, barH, dp(24));
+            Bitmap finalGlass = crearBitmapRedondeado(blurred, barW, barH, dp(22));
+            ViewGroup.LayoutParams lpBlur = imgFondoBlurGlass.getLayoutParams();
+            if (lpBlur.width != barW || lpBlur.height != barH) {
+                lpBlur.width = barW;
+                lpBlur.height = barH;
+                imgFondoBlurGlass.setLayoutParams(lpBlur);
+            }
             imgFondoBlurGlass.setVisibility(View.VISIBLE);
             imgFondoBlurGlass.setImageBitmap(finalGlass);
-            if (vistaBrilloEspecularGlass != null) {
-                vistaBrilloEspecularGlass.setVisibility(View.VISIBLE);
-            }
         } catch (Throwable ignored) {}
     }
 
@@ -2016,7 +1992,7 @@ public class MainActivity extends Activity {
             for (int y = 0; y < h; y++) {
                 for (int x = 0; x < w; x++) {
                     int r = 0, g = 0, b = 0, count = 0;
-                    for (int dx = -3; dx <= 3; dx++) {
+                    for (int dx = -2; dx <= 2; dx++) {
                         int nx = Math.min(w - 1, Math.max(0, x + dx));
                         int c = pix[y * w + nx];
                         r += (c >> 16) & 0xFF;
@@ -2030,7 +2006,7 @@ public class MainActivity extends Activity {
             for (int y = 0; y < h; y++) {
                 for (int x = 0; x < w; x++) {
                     int r = 0, g = 0, b = 0, count = 0;
-                    for (int dy = -3; dy <= 3; dy++) {
+                    for (int dy = -2; dy <= 2; dy++) {
                         int ny = Math.min(h - 1, Math.max(0, y + dy));
                         int c = tmp[ny * w + x];
                         r += (c >> 16) & 0xFF;
@@ -2059,47 +2035,75 @@ public class MainActivity extends Activity {
         return out;
     }
 
+    /**
+     * Detector de velocidad de Scroll igual al video:
+     * - Si bajas rápido o brusco: oculta la barra suavemente hacia abajo.
+     * - Si bajas suave/lento: NO la oculta.
+     * - Si subes: reaparece de inmediato en su sitio.
+     */
+    private void mostrarUOCultarBarraFlotante(boolean ocultar) {
+        if (contenedorBarraFlotante == null || loginClienteOverlay.getVisibility() == View.VISIBLE) return;
+        if (barraOcultaActualmente == ocultar) return;
+        barraOcultaActualmente = ocultar;
+
+        contenedorBarraFlotante.animate().cancel();
+        if (ocultar) {
+            contenedorBarraFlotante.animate()
+                    .translationY(dp(78))
+                    .alpha(0f)
+                    .setDuration(220)
+                    .setInterpolator(new DecelerateInterpolator())
+                    .start();
+        } else {
+            contenedorBarraFlotante.animate()
+                    .translationY(0f)
+                    .alpha(1f)
+                    .setDuration(200)
+                    .setInterpolator(new DecelerateInterpolator())
+                    .withEndAction(this::actualizarEfectoBlurBarraGlass)
+                    .start();
+        }
+    }
+
     private void conectarAutoOcultadoBarraEnScroll(final ScrollView sv) {
         if (sv == null) return;
         sv.getViewTreeObserver().addOnScrollChangedListener(() -> {
             if (contenedorBarraFlotante == null || loginClienteOverlay.getVisibility() == View.VISIBLE) return;
+            long ahora = System.currentTimeMillis();
             Object tagObj = sv.getTag();
             int oldY = (tagObj instanceof Integer) ? (Integer) tagObj : sv.getScrollY();
             int newY = sv.getScrollY();
             int dy = newY - oldY;
             sv.setTag(newY);
 
-            if (Math.abs(dy) > dp(120)) return;
+            long dt = Math.max(1L, ahora - ultimoCambioTiempoScrollMs);
+            ultimoCambioTiempoScrollMs = ahora;
 
-            float maxHidePx = dp(76);
-            if (newY <= dp(12)) {
-                acumuladorBajandoScroll = 0f;
-                aplicarTraduccionProgresivaBarra(0f);
+            if (Math.abs(dy) > dp(160)) return;
+
+            float densidad = getResources().getDisplayMetrics().density;
+            float dyDp = dy / Math.max(1f, densidad);
+            float velInstantaneaDpSeg = (dyDp * 1000f) / (float) dt;
+            velocidadScrollSuavizada = (velocidadScrollSuavizada * 0.45f) + (velInstantaneaDpSeg * 0.55f);
+
+            if (newY <= dp(14)) {
+                mostrarUOCultarBarraFlotante(false);
             } else if (dy > 0) {
-                acumuladorBajandoScroll += dy;
-                if (acumuladorBajandoScroll > dp(20)) {
-                    float nuevaT = Math.min(maxHidePx, traduccionBarraY + (dy * 0.85f));
-                    aplicarTraduccionProgresivaBarra(nuevaT);
+                // Solo se oculta si bajas rápido o brusco (más de 420 dp/s o tirón rápido)
+                if (newY > dp(32) && (velocidadScrollSuavizada > 420f || dyDp > 13f)) {
+                    mostrarUOCultarBarraFlotante(true);
                 }
             } else if (dy < 0) {
-                acumuladorBajandoScroll = 0f;
-                float nuevaT = Math.max(0f, traduccionBarraY + (dy * 1.35f));
-                aplicarTraduccionProgresivaBarra(nuevaT);
+                // Al subir con el dedo reaparece enseguida
+                if (dyDp < -3.5f || velocidadScrollSuavizada < -140f) {
+                    mostrarUOCultarBarraFlotante(false);
+                }
             }
 
-            if (barraGlassActiva && traduccionBarraY < maxHidePx) {
+            if (barraGlassActiva && !barraOcultaActualmente) {
                 actualizarEfectoBlurBarraGlass();
             }
         });
-    }
-
-    private void aplicarTraduccionProgresivaBarra(float nuevaTraduccionY) {
-        if (contenedorBarraFlotante == null) return;
-        traduccionBarraY = nuevaTraduccionY;
-        float maxHidePx = dp(76);
-        float progresoOculto = Math.min(1f, Math.max(0f, traduccionBarraY / maxHidePx));
-        contenedorBarraFlotante.setTranslationY(traduccionBarraY);
-        contenedorBarraFlotante.setAlpha(1f - (progresoOculto * 0.95f));
     }
 
     private ScrollView obtenerVistaPestana(int idx) {
@@ -2453,6 +2457,8 @@ public class MainActivity extends Activity {
                 if (action == MotionEvent.ACTION_DOWN) {
                     touchStartX = ev.getRawX();
                     touchStartY = ev.getRawY();
+                    ultimoTouchYScroll = touchStartY;
+                    ultimoTouchTimeScroll = System.currentTimeMillis();
                     deslizandoPestanaHorizontal = false;
                     gestoDescartado = false;
                     pestanaVecinaSwipe = -1;
@@ -2899,7 +2905,7 @@ public class MainActivity extends Activity {
         LinearLayout colTxtGlass = new LinearLayout(this);
         colTxtGlass.setOrientation(LinearLayout.VERTICAL);
         lblItemBarraGlass = crearTexto("Barra Glass", "#F4F4F5", 13.5f, true);
-        lblDescItemBarraGlass = crearTexto("Efecto cristal translúcido tipo iPhone con fondo difuminado en la barra inferior.", "#A1A1AA", 10.5f, false);
+        lblDescItemBarraGlass = crearTexto("Efecto cristal oscuro translúcido con fondo difuminado en la barra inferior.", "#A1A1AA", 10.5f, false);
         lblDescItemBarraGlass.setPadding(0, dp(2), dp(8), 0);
         colTxtGlass.addView(lblItemBarraGlass);
         colTxtGlass.addView(lblDescItemBarraGlass);
@@ -3312,6 +3318,7 @@ public class MainActivity extends Activity {
 
         frameRoot.addView(mainVertical);
 
+        // Barra flotante compacta con medidas exactas (289dp x 42dp) sin desbordarse a los lados
         contenedorBarraFlotante = new FrameLayout(this);
         contenedorBarraFlotante.setVisibility(View.GONE);
         contenedorBarraFlotante.setLayerType(View.LAYER_TYPE_HARDWARE, null);
@@ -3320,12 +3327,7 @@ public class MainActivity extends Activity {
         imgFondoBlurGlass.setScaleType(ImageView.ScaleType.FIT_XY);
         imgFondoBlurGlass.setVisibility(View.GONE);
         contenedorBarraFlotante.addView(imgFondoBlurGlass, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-
-        vistaBrilloEspecularGlass = new View(this);
-        vistaBrilloEspecularGlass.setVisibility(View.GONE);
-        contenedorBarraFlotante.addView(vistaBrilloEspecularGlass, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(2)));
+                dp(289), dp(42), Gravity.CENTER));
 
         barraFlotante = new LinearLayout(this);
         barraFlotante.setOrientation(LinearLayout.HORIZONTAL);
@@ -3335,7 +3337,8 @@ public class MainActivity extends Activity {
 
         indicadorDeslizanteBarra = new View(this);
         FrameLayout.LayoutParams lpInd = new FrameLayout.LayoutParams(dp(68), dp(36));
-        lpInd.gravity = Gravity.CENTER_VERTICAL;
+        lpInd.gravity = Gravity.CENTER_VERTICAL | Gravity.START;
+        lpInd.leftMargin = dp(4);
         indicadorDeslizanteBarra.setLayoutParams(lpInd);
         contenedorBarraFlotante.addView(indicadorDeslizanteBarra);
 
@@ -3400,11 +3403,10 @@ public class MainActivity extends Activity {
         barraFlotante.addView(navBtnPerfil, new LinearLayout.LayoutParams(dp(68), dp(36)));
 
         contenedorBarraFlotante.addView(barraFlotante, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+                dp(289), dp(42), Gravity.CENTER));
 
         FrameLayout.LayoutParams lpFloating = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+                dp(289), dp(42), Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
         lpFloating.setMargins(0, 0, 0, dp(10));
         frameRoot.addView(contenedorBarraFlotante, lpFloating);
 
@@ -3929,8 +3931,8 @@ public class MainActivity extends Activity {
 
     private void cambiarPestanaInferior(int nuevaPestana) {
         pestanaInferiorActual = Math.max(0, Math.min(3, nuevaPestana));
-        acumuladorBajandoScroll = 0f;
-        aplicarTraduccionProgresivaBarra(0f);
+        velocidadScrollSuavizada = 0f;
+        mostrarUOCultarBarraFlotante(false);
 
         if (vistaCuentasScroll != null) {
             vistaCuentasScroll.setTranslationX(0f);
@@ -3968,7 +3970,7 @@ public class MainActivity extends Activity {
         String bgCard = colFondoTarjeta();
         String borderCard = colBordeTarjeta();
         String txtInact = barraGlassActiva
-                ? (temaActual == 2 ? "#1E293B" : "#E2E8F0")
+                ? (temaActual == 2 ? "#334155" : "#CBD5E1")
                 : colTextoSecundario();
         String acento = colAcentoTema();
 
@@ -3981,21 +3983,13 @@ public class MainActivity extends Activity {
             if (barraGlassActiva) {
                 barraFlotante.setBackground(fondoCristalIphone(temaActual == 2));
                 if (imgFondoBlurGlass != null) imgFondoBlurGlass.setVisibility(View.VISIBLE);
-                if (vistaBrilloEspecularGlass != null) {
-                    vistaBrilloEspecularGlass.setVisibility(View.VISIBLE);
-                    vistaBrilloEspecularGlass.setBackground(fondoRedondeado("#AAFFFFFF", 20));
-                }
             } else {
                 barraFlotante.setBackground(fondoRedondeadoConBorde(bgCard, borderCard, 22, 1));
                 if (imgFondoBlurGlass != null) imgFondoBlurGlass.setVisibility(View.GONE);
-                if (vistaBrilloEspecularGlass != null) vistaBrilloEspecularGlass.setVisibility(View.GONE);
             }
         }
 
         if (indicadorDeslizanteBarra != null) {
-            FrameLayout.LayoutParams lpInd = (FrameLayout.LayoutParams) indicadorDeslizanteBarra.getLayoutParams();
-            lpInd.leftMargin = dp(4);
-            indicadorDeslizanteBarra.setLayoutParams(lpInd);
             indicadorDeslizanteBarra.setBackground(barraGlassActiva
                     ? fondoCapsulaActivaGlass(temaActual == 2)
                     : fondoRedondeado(acento, 16));
@@ -5372,7 +5366,7 @@ public class MainActivity extends Activity {
                 ArrayList<SesionBot> reg = obtenerSesionesRegistradas();
                 for (SesionBot s : reg) actualizarVisualTarjeta(s);
                 actualizarResumenYBotonesGlobales();
-                if (barraGlassActiva && traduccionBarraY < dp(70)) actualizarEfectoBlurBarraGlass();
+                if (barraGlassActiva && !barraOcultaActualmente) actualizarEfectoBlurBarraGlass();
 
                 long ahoraCiclo = System.currentTimeMillis();
                 if (ahoraCiclo - ultimaVerificacionNubeMs > 30000) {
