@@ -1548,6 +1548,12 @@ public class MainActivity extends Activity {
         );
     }
 
+    private int dp(float val) {
+        return Math.round(TypedValue.applyDimension(
+                TypedValue.COMPLEX_UNIT_DIP, val, getResources().getDisplayMetrics()
+        ));
+    }
+
     private GradientDrawable fondoRedondeado(String colorHex, int radioDp) {
         GradientDrawable gd = new GradientDrawable();
         gd.setColor(Color.parseColor(colorHex));
@@ -1571,10 +1577,6 @@ public class MainActivity extends Activity {
         return gd;
     }
 
-    /**
-     * Acabado Cristal Esmerilado (iOS Frosted Blur) idéntico a las carpetas de iPhone:
-     * Superficie lechosa translúcida con borde especular brillante arriba.
-     */
     private GradientDrawable fondoCristalIphone(boolean esTemaClaro) {
         GradientDrawable gd = new GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
@@ -1677,9 +1679,6 @@ public class MainActivity extends Activity {
         return "#E4E4E7";
     }
 
-    // =========================================================================================
-    // VIBRACIÓN REGULABLE CON BARRITA CORTA (0% APAGADO A 100% MÁXIMO) + SONIDOS
-    // =========================================================================================
     private String textoNivelVibracion(int nivel) {
         if (nivel <= 0) return "Apagado (0%)";
         if (nivel <= 30) return "Bajo (" + nivel + "%)";
@@ -1909,10 +1908,6 @@ public class MainActivity extends Activity {
         return bmp;
     }
 
-    /**
-     * Dibujo miniatura de vista previa estilo iOS Glass (con manchas de color difuminadas
-     * detrás del cristal esmerilado y borde especular luminoso).
-     */
     private Bitmap crearImagenPreviewBarraGlass(boolean activa) {
         int w = dp(78);
         int h = dp(52);
@@ -1924,7 +1919,6 @@ public class MainActivity extends Activity {
         p.setColor(Color.parseColor("#0D1017"));
         c.drawRoundRect(new RectF(0, 0, w, h), dp(12), dp(12), p);
 
-        // Esferas de color suaves detrás del cristal (como en la foto de iOS)
         RadialGradient gRojo = new RadialGradient(w * 0.35f, h * 0.62f, dp(22),
                 new int[]{Color.parseColor("#CCEF4444"), Color.TRANSPARENT}, null, Shader.TileMode.CLAMP);
         p.setShader(gRojo);
@@ -1949,7 +1943,7 @@ public class MainActivity extends Activity {
         p.setColor(Color.parseColor("#66FFFFFF"));
         c.drawRoundRect(new RectF(dp(9), dp(19), dp(26), h - dp(9)), dp(10), dp(10), p);
 
-        float[] posX = {dp(17.5f), dp(32), dp(46), dp(60)};
+        float[] posX = {dp(18), dp(32), dp(46), dp(60)};
         for (int i = 0; i < 4; i++) {
             p.setColor(i == 0 ? Color.WHITE : Color.parseColor("#F1F5F9"));
             p.setAlpha(i == 0 ? 255 : 190);
@@ -1965,11 +1959,6 @@ public class MainActivity extends Activity {
         return bmp;
     }
 
-    /**
-     * Motor de desenfoque esmerilado profundo tipo iOS (Frosted Glass):
-     * Captura lo que pasa por detrás de la barra, aplica desenfoque de radio amplio,
-     * mezcla una capa lechosa translúcida y dibuja el reflejo especular en el borde.
-     */
     private void actualizarEfectoBlurBarraGlass() {
         if (!barraGlassActiva || imgFondoBlurGlass == null || contenedorBarraFlotante == null || mainVertical == null) {
             if (imgFondoBlurGlass != null) imgFondoBlurGlass.setVisibility(View.GONE);
@@ -1987,7 +1976,7 @@ public class MainActivity extends Activity {
         if (barW <= 0 || barH <= 0) return;
 
         try {
-            int scale = 8; // Mayor factor de reducción para lograr el difuminado cremoso de iPhone
+            int scale = 8;
             int wSmall = Math.max(18, barW / scale);
             int hSmall = Math.max(10, barH / scale);
 
@@ -2000,7 +1989,6 @@ public class MainActivity extends Activity {
 
             Bitmap blurred = desenfocarBitmapRapido(bmpSmall, 5);
             Canvas cFrost = new Canvas(blurred);
-            // Capa esmerilada estilo iOS (lechosa suave que deja pasar los tonos de luz de atrás)
             cFrost.drawColor(Color.parseColor(temaActual == 2 ? "#88F8FAFC" : "#68242936"));
             Paint pSheen = new Paint(Paint.ANTI_ALIAS_FLAG);
             pSheen.setShader(new LinearGradient(0, 0, wSmall, hSmall,
@@ -2071,10 +2059,6 @@ public class MainActivity extends Activity {
         return out;
     }
 
-    /**
-     * Ocultado progresivo al bajar con el dedo y reaparición inmediata al subir:
-     * Funciona tanto con la Barra Glass activada como desactivada.
-     */
     private void conectarAutoOcultadoBarraEnScroll(final ScrollView sv) {
         if (sv == null) return;
         sv.getViewTreeObserver().addOnScrollChangedListener(() -> {
@@ -2085,7 +2069,7 @@ public class MainActivity extends Activity {
             int dy = newY - oldY;
             sv.setTag(newY);
 
-            if (Math.abs(dy) > dp(120)) return; // Ignora saltos bruscos de layout
+            if (Math.abs(dy) > dp(120)) return;
 
             float maxHidePx = dp(76);
             if (newY <= dp(12)) {
@@ -2093,7 +2077,6 @@ public class MainActivity extends Activity {
                 aplicarTraduccionProgresivaBarra(0f);
             } else if (dy > 0) {
                 acumuladorBajandoScroll += dy;
-                // Espera un pequeño margen de 20dp antes de empezar a ocultarla poco a poco
                 if (acumuladorBajandoScroll > dp(20)) {
                     float nuevaT = Math.min(maxHidePx, traduccionBarraY + (dy * 0.85f));
                     aplicarTraduccionProgresivaBarra(nuevaT);
@@ -2132,7 +2115,7 @@ public class MainActivity extends Activity {
     private void actualizarPosicionIndicadorBarra(float posicionContinua) {
         if (indicadorDeslizanteBarra == null) return;
         float clamped = Math.max(0f, Math.min(3f, posicionContinua));
-        float pasoPx = dp(71); // 68dp de botón + 3dp de separación
+        float pasoPx = dp(71);
         indicadorDeslizanteBarra.setTranslationX(clamped * pasoPx);
     }
 
@@ -2400,9 +2383,6 @@ public class MainActivity extends Activity {
         return bmp;
     }
 
-    // =========================================================================================
-    // CONSTRUCCIÓN DE LA INTERFAZ CON GESTOS SWIPE ENTRE PESTAÑAS Y BARRA GLASS iOS
-    // =========================================================================================
     @SuppressLint({"SetJavaScriptEnabled", "ClickableViewAccessibility"})
     private void construirInterfazCompleta() {
         frameRoot = new FrameLayout(this);
@@ -2465,7 +2445,6 @@ public class MainActivity extends Activity {
         topBar.addView(badgeEstadoGlobal);
         mainVertical.addView(topBar);
 
-        // Contenedor de páginas con soporte de arrastre horizontal en vivo (Swipe izquierda/derecha)
         final int touchSlop = ViewConfiguration.get(this).getScaledTouchSlop();
         contenedorPaginasSwipe = new FrameLayout(this) {
             @Override
@@ -3059,7 +3038,6 @@ public class MainActivity extends Activity {
         panelItemCompra.addView(btnToggleCompra, new LinearLayout.LayoutParams(dp(96), dp(34)));
         cardAlertasAjustes.addView(panelItemCompra, lpSubPanel);
 
-        // Panel de Vibración del Dispositivo con Barrita Corta regulable (0% a 100%)
         panelItemVib = new LinearLayout(this);
         panelItemVib.setOrientation(LinearLayout.VERTICAL);
         panelItemVib.setPadding(dp(14), dp(12), dp(12), dp(12));
@@ -3105,7 +3083,6 @@ public class MainActivity extends Activity {
         panelItemVib.addView(seekBarVibracion, lpSeekVib);
         cardAlertasAjustes.addView(panelItemVib, lpSubPanel);
 
-        // Botón desplegable "Configuración avanzada" en modo oscuro
         btnTextoConfigAvanzada = crearTexto("▼ Configuración avanzada", "#E4E4E7", 12.5f, true);
         btnTextoConfigAvanzada.setGravity(Gravity.CENTER);
         btnTextoConfigAvanzada.setPadding(dp(12), dp(10), dp(12), dp(10));
@@ -3187,7 +3164,6 @@ public class MainActivity extends Activity {
         panelAdvIntervencion.addView(btnToggleAdvIntervencion, new LinearLayout.LayoutParams(dp(96), dp(34)));
         contenedorConfigAvanzada.addView(panelAdvIntervencion, lpSubPanel);
 
-        // Recuadro nuevo: Proxy personalizado por cuenta (Abre panel por cuenta)
         panelAdvPorCuenta = new LinearLayout(this);
         panelAdvPorCuenta.setOrientation(LinearLayout.HORIZONTAL);
         panelAdvPorCuenta.setGravity(Gravity.CENTER_VERTICAL);
@@ -3212,285 +3188,10 @@ public class MainActivity extends Activity {
         cardAlertasAjustes.addView(contenedorConfigAvanzada);
         contenidoAjustes.addView(cardAlertasAjustes, lpCardAj);
         vistaAjustesScroll.addView(contenidoAjustes);
-        mainVertical.addView(vistaAjustesScroll, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
-
-        vistaPerfilScroll = new ScrollView(this);
-        vistaPerfilScroll.setFillViewport(true);
-        vistaPerfilScroll.setVerticalScrollBarEnabled(false);
-        vistaPerfilScroll.setVisibility(View.GONE);
-        conectarAutoOcultadoBarraEnScroll(vistaPerfilScroll);
-
-        LinearLayout contenidoPerfil = new LinearLayout(this);
-        contenidoPerfil.setOrientation(LinearLayout.VERTICAL);
-        contenidoPerfil.setGravity(Gravity.CENTER_HORIZONTAL);
-        contenidoPerfil.setPadding(dp(16), dp(12), dp(16), dp(90));
-
-        cardPerfilPrincipal = new LinearLayout(this);
-        cardPerfilPrincipal.setOrientation(LinearLayout.VERTICAL);
-        cardPerfilPrincipal.setGravity(Gravity.CENTER_HORIZONTAL);
-        cardPerfilPrincipal.setPadding(dp(18), dp(24), dp(18), dp(20));
-        cardPerfilPrincipal.setBackground(fondoRedondeadoConBorde("#18181B", "#27272A", 18, 1));
-
-        imgAvatarPerfil = new ImageView(this);
-        imgAvatarPerfil.setImageBitmap(crearAvatarCircularPerfil());
-        LinearLayout.LayoutParams lpAv = new LinearLayout.LayoutParams(dp(88), dp(88));
-        lpAv.setMargins(0, 0, 0, dp(10));
-        cardPerfilPrincipal.addView(imgAvatarPerfil, lpAv);
-
-        lblNombrePerfil = crearTexto("geonaldiaz1", "#F8FAFC", 20f, true);
-        lblNombrePerfil.setGravity(Gravity.CENTER);
-        cardPerfilPrincipal.addView(lblNombrePerfil);
-
-        TextView badgeVerificadoPerfil = crearTexto("Licencia Verificada", "#4ADE80", 10.5f, true);
-        badgeVerificadoPerfil.setPadding(dp(10), dp(3), dp(10), dp(3));
-        badgeVerificadoPerfil.setBackground(fondoRedondeado("#14532D", 10));
-        LinearLayout.LayoutParams lpBadgeVer = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lpBadgeVer.setMargins(0, dp(6), 0, dp(20));
-        cardPerfilPrincipal.addView(badgeVerificadoPerfil, lpBadgeVer);
-
-        LinearLayout.LayoutParams lpBoxPerf = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lpBoxPerf.setMargins(0, 0, 0, dp(10));
-
-        boxPerfilDevice = new LinearLayout(this);
-        boxPerfilDevice.setOrientation(LinearLayout.HORIZONTAL);
-        boxPerfilDevice.setGravity(Gravity.CENTER_VERTICAL);
-        boxPerfilDevice.setPadding(dp(14), dp(12), dp(14), dp(12));
-        boxPerfilDevice.setBackground(fondoRedondeadoConBorde("#202227", "#27272A", 12, 1));
-        TextView lblTitDevPerf = crearTexto("ID del dispositivo:", "#94A3B8", 12f, true);
-        lblValorDevicePerfil = crearTexto(obtenerDeviceIdUnico(), "#38BDF8", 12.5f, true);
-        lblValorDevicePerfil.setGravity(Gravity.END);
-        boxPerfilDevice.addView(lblTitDevPerf, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        boxPerfilDevice.addView(lblValorDevicePerfil);
-        cardPerfilPrincipal.addView(boxPerfilDevice, lpBoxPerf);
-
-        boxPerfilCuentas = new LinearLayout(this);
-        boxPerfilCuentas.setOrientation(LinearLayout.HORIZONTAL);
-        boxPerfilCuentas.setGravity(Gravity.CENTER_VERTICAL);
-        boxPerfilCuentas.setPadding(dp(14), dp(12), dp(14), dp(12));
-        boxPerfilCuentas.setBackground(fondoRedondeadoConBorde("#202227", "#27272A", 12, 1));
-        TextView lblTitCtasPerf = crearTexto("Cuentas agregadas:", "#94A3B8", 12f, true);
-        lblValorCuentasPerfil = crearTexto("0 / 4 cuentas", "#4ADE80", 12.5f, true);
-        lblValorCuentasPerfil.setGravity(Gravity.END);
-        boxPerfilCuentas.addView(lblTitCtasPerf, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        boxPerfilCuentas.addView(lblValorCuentasPerfil);
-        cardPerfilPrincipal.addView(boxPerfilCuentas, lpBoxPerf);
-
-        boxPerfilClave = new LinearLayout(this);
-        boxPerfilClave.setOrientation(LinearLayout.HORIZONTAL);
-        boxPerfilClave.setGravity(Gravity.CENTER_VERTICAL);
-        boxPerfilClave.setPadding(dp(14), dp(10), dp(12), dp(10));
-        boxPerfilClave.setBackground(fondoRedondeadoConBorde("#202227", "#27272A", 12, 1));
-
-        TextView lblTitClvPerf = crearTexto("Clave:  ", "#94A3B8", 12f, true);
-        lblValorClavePerfil = crearTexto("••••••••", "#F8FAFC", 13.5f, true);
-
-        btnMantenerMostrarClave = crearTexto("Mostrar clave", "#38BDF8", 10.5f, true);
-        btnMantenerMostrarClave.setPadding(dp(10), dp(5), dp(10), dp(5));
-        btnMantenerMostrarClave.setBackground(fondoRedondeadoConBorde("#1E293B", "#334155", 8, 1));
-
-        View.OnTouchListener listenerMantenerClave = (v, event) -> {
-            String clvReal = prefs.getString("clv_licencia_activa_v3", LICENCIA_CLAVE_CLIENTE);
-            if (event.getAction() == MotionEvent.ACTION_DOWN) {
-                lblValorClavePerfil.setText(clvReal);
-                lblValorClavePerfil.setTextColor(Color.parseColor("#4ADE80"));
-                btnMantenerMostrarClave.setText("Mostrando...");
-                return true;
-            } else if (event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL) {
-                lblValorClavePerfil.setText("••••••••");
-                lblValorClavePerfil.setTextColor(Color.parseColor(colTextoPrimario()));
-                btnMantenerMostrarClave.setText("Mostrar clave");
-                return true;
-            }
-            return false;
-        };
-        lblValorClavePerfil.setOnTouchListener(listenerMantenerClave);
-        btnMantenerMostrarClave.setOnTouchListener(listenerMantenerClave);
-
-        boxPerfilClave.addView(lblTitClvPerf);
-        boxPerfilClave.addView(lblValorClavePerfil, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-        boxPerfilClave.addView(btnMantenerMostrarClave);
-        cardPerfilPrincipal.addView(boxPerfilClave, lpBoxPerf);
-
-        btnCerrarSesionPerfil = crearBotonConIcono("LOGOUT", "Cerrar sesión", "#7F1D1D", "#FCA5A5", 12, this::cerrarSesionDeLicenciaActual);
-        LinearLayout.LayoutParams lpBtnOutPerf = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(40));
-        lpBtnOutPerf.setMargins(0, dp(8), 0, dp(14));
-        cardPerfilPrincipal.addView(btnCerrarSesionPerfil, lpBtnOutPerf);
-
-        lblPieLicenciaPerfil = crearTexto("Licencia activa", "#71717A", 10.5f, false);
-        lblPieLicenciaPerfil.setGravity(Gravity.CENTER);
-        lblPieLicenciaPerfil.setPadding(dp(6), dp(6), dp(6), 0);
-        cardPerfilPrincipal.addView(lblPieLicenciaPerfil);
-
-        contenidoPerfil.addView(cardPerfilPrincipal, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        vistaPerfilScroll.addView(contenidoPerfil);
-        mainVertical.addView(vistaPerfilScroll, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
-
-        frameRoot.addView(mainVertical);
-
-        // Barra flotante con soporte de Efecto Glass iPhone iOS Real
-        contenedorBarraFlotante = new FrameLayout(this);
-        contenedorBarraFlotante.setVisibility(View.GONE);
-        contenedorBarraFlotante.setLayerType(View.LAYER_TYPE_HARDWARE, null);
-
-        imgFondoBlurGlass = new ImageView(this);
-        imgFondoBlurGlass.setScaleType(ImageView.ScaleType.FIT_XY);
-        imgFondoBlurGlass.setVisibility(View.GONE);
-        contenedorBarraFlotante.addView(imgFondoBlurGlass, new FrameLayout.LayoutParams(
+        contenedorPaginasSwipe.addView(vistaAjustesScroll, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        vistaBrilloEspecularGlass = new View(this);
-        vistaBrilloEspecularGlass.setVisibility(View.GONE);
-        contenedorBarraFlotante.addView(vistaBrilloEspecularGlass, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(1.5f)));
-
-        barraFlotante = new LinearLayout(this);
-        barraFlotante.setOrientation(LinearLayout.HORIZONTAL);
-        barraFlotante.setGravity(Gravity.CENTER);
-        barraFlotante.setPadding(dp(4), dp(3), dp(4), dp(3));
-        barraFlotante.setBackground(fondoRedondeadoConBorde("#18181B", "#2E323B", 22, 1));
-
-        indicadorDeslizanteBarra = new View(this);
-        FrameLayout.LayoutParams lpInd = new FrameLayout.LayoutParams(dp(68), dp(36));
-        lpInd.gravity = Gravity.CENTER_VERTICAL;
-        indicadorDeslizanteBarra.setLayoutParams(lpInd);
-        contenedorBarraFlotante.addView(indicadorDeslizanteBarra);
-
-        navBtnCuentas = new LinearLayout(this);
-        navBtnCuentas.setOrientation(LinearLayout.VERTICAL);
-        navBtnCuentas.setGravity(Gravity.CENTER);
-        navBtnCuentas.setPadding(dp(3), dp(2), dp(3), dp(2));
-        navIconCuentas = new ImageView(this);
-        navTxtCuentas = crearTexto("Cuentas", "#FFFFFF", 9.5f, true);
-        navTxtCuentas.setSingleLine(true);
-        navTxtCuentas.setGravity(Gravity.CENTER);
-        navBtnCuentas.addView(navIconCuentas, new LinearLayout.LayoutParams(dp(15), dp(15)));
-        navBtnCuentas.addView(navTxtCuentas, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        navBtnCuentas.setOnClickListener(v -> cambiarPestanaInferior(0));
-
-        navBtnHistorial = new LinearLayout(this);
-        navBtnHistorial.setOrientation(LinearLayout.VERTICAL);
-        navBtnHistorial.setGravity(Gravity.CENTER);
-        navBtnHistorial.setPadding(dp(3), dp(2), dp(3), dp(2));
-        navIconHistorial = new ImageView(this);
-        navTxtHistorial = crearTexto("Historial", "#A1A1AA", 9.5f, true);
-        navTxtHistorial.setSingleLine(true);
-        navTxtHistorial.setGravity(Gravity.CENTER);
-        navBtnHistorial.addView(navIconHistorial, new LinearLayout.LayoutParams(dp(15), dp(15)));
-        navBtnHistorial.addView(navTxtHistorial, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        navBtnHistorial.setOnClickListener(v -> cambiarPestanaInferior(1));
-
-        navBtnAjustes = new LinearLayout(this);
-        navBtnAjustes.setOrientation(LinearLayout.VERTICAL);
-        navBtnAjustes.setGravity(Gravity.CENTER);
-        navBtnAjustes.setPadding(dp(3), dp(2), dp(3), dp(2));
-        navIconAjustes = new ImageView(this);
-        navTxtAjustes = crearTexto("Ajustes", "#A1A1AA", 9.5f, true);
-        navTxtAjustes.setSingleLine(true);
-        navTxtAjustes.setGravity(Gravity.CENTER);
-        navBtnAjustes.addView(navIconAjustes, new LinearLayout.LayoutParams(dp(15), dp(15)));
-        navBtnAjustes.addView(navTxtAjustes, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        navBtnAjustes.setOnClickListener(v -> cambiarPestanaInferior(2));
-
-        navBtnPerfil = new LinearLayout(this);
-        navBtnPerfil.setOrientation(LinearLayout.VERTICAL);
-        navBtnPerfil.setGravity(Gravity.CENTER);
-        navBtnPerfil.setPadding(dp(3), dp(2), dp(3), dp(2));
-        navIconPerfil = new ImageView(this);
-        navTxtPerfil = crearTexto("Perfil", "#A1A1AA", 9.5f, true);
-        navTxtPerfil.setSingleLine(true);
-        navTxtPerfil.setGravity(Gravity.CENTER);
-        navBtnPerfil.addView(navIconPerfil, new LinearLayout.LayoutParams(dp(15), dp(15)));
-        navBtnPerfil.addView(navTxtPerfil, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-        navBtnPerfil.setOnClickListener(v -> cambiarPestanaInferior(3));
-
-        barraFlotante.addView(navBtnCuentas, new LinearLayout.LayoutParams(dp(68), dp(36)));
-        barraFlotante.addView(new View(this), new LinearLayout.LayoutParams(dp(3), dp(1)));
-        barraFlotante.addView(navBtnHistorial, new LinearLayout.LayoutParams(dp(68), dp(36)));
-        barraFlotante.addView(new View(this), new LinearLayout.LayoutParams(dp(3), dp(1)));
-        barraFlotante.addView(navBtnAjustes, new LinearLayout.LayoutParams(dp(68), dp(36)));
-        barraFlotante.addView(new View(this), new LinearLayout.LayoutParams(dp(3), dp(1)));
-        barraFlotante.addView(navBtnPerfil, new LinearLayout.LayoutParams(dp(68), dp(36)));
-
-        contenedorBarraFlotante.addView(barraFlotante, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
-        FrameLayout.LayoutParams lpFloating = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-                Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
-        lpFloating.setMargins(0, 0, 0, dp(10));
-        frameRoot.addView(contenedorBarraFlotante, lpFloating);
-
-        loginClienteOverlay = construirOverlayLoginCliente();
-        frameRoot.addView(loginClienteOverlay);
-
-        LinearLayout splashOverlay = new LinearLayout(this);
-        splashOverlay.setOrientation(LinearLayout.VERTICAL);
-        splashOverlay.setGravity(Gravity.CENTER);
-        splashOverlay.setBackgroundColor(Color.parseColor("#18181B"));
-        splashOverlay.setClickable(true);
-        splashOverlay.setElevation(dp(100));
-        splashOverlay.setLayoutParams(new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-
-        WebView splashWebView = new WebView(this);
-        splashWebView.setBackgroundColor(Color.parseColor("#18181B"));
-        splashWebView.setVerticalScrollBarEnabled(false);
-        splashWebView.setHorizontalScrollBarEnabled(false);
-        splashWebView.getSettings().setJavaScriptEnabled(true);
-        splashWebView.getSettings().setLoadsImagesAutomatically(true);
-
-        String htmlSplash = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1.0'>" +
-                "<style>" +
-                "html,body{margin:0;padding:0;width:100%;height:100%;display:flex;justify-content:center;align-items:center;background:#18181B;overflow:hidden;}" +
-                "#wrap{position:relative;width:170px;height:170px;display:flex;justify-content:center;align-items:center;}" +
-                "svg{width:145px;height:145px;}" +
-                "@keyframes draw{0%{stroke-dashoffset:360;}50%{stroke-dashoffset:0;}100%{stroke-dashoffset:-360;}}" +
-                ".p1{fill:none;stroke:#0095DB;stroke-width:4.5;stroke-linecap:round;stroke-dasharray:360;animation:draw 2.1s infinite ease-in-out;}" +
-                ".p2{fill:none;stroke:#F9B218;stroke-width:4.5;stroke-linecap:round;stroke-dasharray:360;animation:draw 2.1s infinite ease-in-out 0.2s;}" +
-                ".p3{fill:none;stroke:#E41E25;stroke-width:4.5;stroke-linecap:round;stroke-dasharray:360;animation:draw 2.1s infinite ease-in-out 0.4s;}" +
-                "</style></head><body>" +
-                "<div id='wrap'>" +
-                "<svg id='fb' viewBox='0 0 256 256'>" +
-                "<rect class='p2' x='98' y='42' width='140' height='86' rx='43' transform='rotate(-6 168 85)'/>" +
-                "<path class='p1' d='M58,68 L134,64 A42,42 0 0,1 176,106 L176,192 A44,44 0 0,1 88,192 L88,150 L58,152 A42,42 0 0,1 16,110 A42,42 0 0,1 58,68 Z'/>" +
-                "<rect class='p3' x='98' y='64' width='78' height='64' rx='30'/>" +
-                "</svg>" +
-                "</div></body></html>";
-
-        splashWebView.loadDataWithBaseURL("https://tesoroenlinea.bt.com.ve/", htmlSplash, "text/html", "UTF-8", null);
-        splashOverlay.addView(splashWebView, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-
-        frameRoot.addView(splashOverlay);
-        setContentView(frameRoot);
-
-        handler.postDelayed(() -> {
-            splashOverlay.animate()
-                    .alpha(0f)
-                    .setDuration(400)
-                    .withEndAction(() -> {
-                        splashOverlay.setVisibility(View.GONE);
-                        splashWebView.destroy();
-                        if (loginClienteOverlay.getVisibility() != View.VISIBLE) {
-                            contenedorBarraFlotante.setVisibility(View.VISIBLE);
-                            handler.postDelayed(this::actualizarEfectoBlurBarraGlass, 100);
-                        }
-                    })
-                    .start();
-        }, 2000);
-    }
-
-    /**
+        /**
      * Regla exclusiva para los 5 botones de Configuración avanzada:
      * Solo permite tener 1 opción activa a la vez. Si activas "Proxy personalizado por cuenta",
      * abre el panel oscuro con las cuentas registradas.
